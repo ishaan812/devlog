@@ -163,15 +163,12 @@ func cleanSQL(response string) string {
 	if len(matches) > 1 {
 		return strings.TrimSpace(matches[1])
 	}
-
 	// Remove any leading/trailing whitespace and newlines
 	sql := strings.TrimSpace(response)
-
 	// Remove any "SQL:" or similar prefixes
 	prefixes := []string{"SQL:", "Query:", "sql:", "query:"}
 	for _, prefix := range prefixes {
 		sql = strings.TrimPrefix(sql, prefix)
 	}
-
 	return strings.TrimSpace(sql)
 }

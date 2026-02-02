@@ -198,23 +198,19 @@ func ingestGitHistory(absPath string, cfg *config.Config) error {
 	successColor := color.New(color.FgHiGreen)
 	dimColor := color.New(color.FgHiBlack)
 	infoColor := color.New(color.FgHiWhite)
-
 	titleColor.Printf("  Git History\n")
-
 	// Open repository
 	VerboseLog("Opening repository at %s", absPath)
 	repo, err := git.OpenRepo(absPath)
 	if err != nil {
 		return fmt.Errorf("failed to open repository: %w", err)
 	}
-
 	// Initialize database
 	VerboseLog("Initializing database")
 	database, err := db.GetDB()
 	if err != nil {
 		return fmt.Errorf("failed to initialize database: %w", err)
 	}
-
 	// Get or create codebase record
 	codebase, err := db.GetCodebaseByPath(database, absPath)
 	if err != nil {

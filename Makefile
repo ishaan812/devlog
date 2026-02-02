@@ -1,13 +1,25 @@
-.PHONY: build install clean test run-ingest run-ask run-worklog run-onboard
+.PHONY: build install install-local clean test run-ingest run-ask run-worklog run-onboard
 
 BINARY_NAME=devlog
 BUILD_DIR=./bin
+INSTALL_DIR=/usr/local/bin
 
 build:
 	go build -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/devlog
 
+# Install to $GOPATH/bin (usually ~/go/bin)
 install:
 	go install ./cmd/devlog
+
+# Install to /usr/local/bin (requires sudo)
+install-local: build
+	sudo cp $(BUILD_DIR)/$(BINARY_NAME) $(INSTALL_DIR)/$(BINARY_NAME)
+	@echo "Installed to $(INSTALL_DIR)/$(BINARY_NAME)"
+
+# Uninstall from /usr/local/bin
+uninstall:
+	sudo rm -f $(INSTALL_DIR)/$(BINARY_NAME)
+	@echo "Removed $(INSTALL_DIR)/$(BINARY_NAME)"
 
 clean:
 	rm -rf $(BUILD_DIR)

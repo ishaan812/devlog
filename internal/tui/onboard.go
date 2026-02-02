@@ -52,6 +52,7 @@ type step int
 
 const (
 	stepWelcome step = iota
+	stepExistingProfiles // NEW: show existing profiles
 	stepProfileName
 	stepProfileDesc
 	stepProvider
@@ -90,6 +91,10 @@ type Model struct {
 	width         int
 	height        int
 	animationTick int
+
+	// Existing profiles
+	existingProfiles []string
+	useExisting      bool
 }
 
 // Messages
@@ -110,11 +115,21 @@ func NewModel() Model {
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("86"))
 
+	// Load existing config to check for profiles
+	existingCfg, _ := config.Load()
+	var existingProfiles []string
+	if existingCfg != nil && existingCfg.Profiles != nil {
+		for name := range existingCfg.Profiles {
+			existingProfiles = append(existingProfiles, name)
+		}
+	}
+
 	return Model{
-		step:      stepWelcome,
-		config:    &config.Config{},
-		textInput: ti,
-		spinner:   s,
+		step:             stepWelcome,
+		config:           &config.Config{},
+		textInput:        ti,
+		spinner:          s,
+		existingProfiles: existingProfiles,
 	}
 }
 
@@ -193,9 +208,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "up", "k":
 			if m.step == stepProvider && m.selectedIdx > 0 {
 				m.selectedIdx--
+			} else if m.step == stepExistingProfiles && m.selectedIdx > 0 {
+				m.selectedIdx--
 			}
 		case "down", "j":
 			if m.step == stepProvider && m.selectedIdx < len(providers)-1 {
+				m.selectedIdx++
+			} else if m.step == stepExistingProfiles && m.selectedIdx < len(m.existingProfiles) {
+				// +1 for "create new" option
 				m.selectedIdx++
 			}
 		case "esc":
@@ -243,8 +263,35 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) handleEnter() (tea.Model, tea.Cmd) {
 	switch m.step {
 	case stepWelcome:
-		m.step = stepProfileName
-		m.prepareStep()
+		// Check if there are existing profiles
+		if len(m.existingProfiles) > 0 {
+			m.step = stepExistingProfiles
+			m.selectedIdx = 0
+		} else {
+			m.step = stepProfileName
+			m.prepareStep()
+		}
+		return m, nil
+
+	case stepExistingProfiles:
+		// selectedIdx: 0 = create new, 1+ = existing profiles
+		if m.selectedIdx == 0 {
+			// Create new profile
+			m.useExisting = false
+			m.step = stepProfileName
+			m.prepareStep()
+		} else {
+			// Use existing profile
+			m.useExisting = true
+			m.profileName = m.existingProfiles[m.selectedIdx-1]
+			// Load existing config
+			existingCfg, _ := config.Load()
+			if existingCfg != nil {
+				m.config = existingCfg
+				m.config.ActiveProfile = m.profileName
+			}
+			m.step = stepProvider
+		}
 		return m, nil
 
 	case stepProfileName:
@@ -352,10 +399,15 @@ func (m *Model) prepareStep() {
 }
 
 func (m Model) finishOnboarding() (tea.Model, tea.Cmd) {
-	// Create the profile
-	if err := m.config.CreateProfile(m.profileName, m.profileDesc); err != nil {
-		m.err = err
-		return m, nil
+	// Only create profile if not using existing
+	if !m.useExisting {
+		if err := m.config.CreateProfile(m.profileName, m.profileDesc); err != nil {
+			// Profile might already exist, that's ok
+			if !strings.Contains(err.Error(), "already exists") {
+				m.err = err
+				return m, nil
+			}
+		}
 	}
 
 	// Set as active profile
@@ -378,6 +430,8 @@ func (m Model) View() string {
 	switch m.step {
 	case stepWelcome:
 		s.WriteString(m.viewWelcome())
+	case stepExistingProfiles:
+		s.WriteString(m.viewExistingProfiles())
 	case stepProfileName:
 		s.WriteString(m.viewProfileName())
 	case stepProfileDesc:
@@ -426,6 +480,45 @@ func (m Model) viewWelcome() string {
 	s.WriteString(dimStyle.Render(" or q to quit"))
 	s.WriteString("\n")
 
+	return s.String()
+}
+
+func (m Model) viewExistingProfiles() string {
+	var s strings.Builder
+	s.WriteString("\n")
+	s.WriteString(titleStyle.Render("Existing Profiles Found"))
+	s.WriteString("\n\n")
+	s.WriteString(normalStyle.Render("You have existing profiles. Select one or create a new one."))
+	s.WriteString("\n\n")
+
+	// Create new option
+	cursor := "  "
+	if m.selectedIdx == 0 {
+		cursor = "> "
+		s.WriteString(selectedStyle.Render(fmt.Sprintf("%s+ Create new profile", cursor)))
+	} else {
+		s.WriteString(normalStyle.Render(fmt.Sprintf("%s+ Create new profile", cursor)))
+	}
+	s.WriteString("\n\n")
+
+	s.WriteString(dimStyle.Render("  Existing profiles:"))
+	s.WriteString("\n")
+
+	// List existing profiles
+	for i, name := range m.existingProfiles {
+		cursor = "  "
+		if m.selectedIdx == i+1 {
+			cursor = "> "
+			s.WriteString(selectedStyle.Render(fmt.Sprintf("%s%s", cursor, name)))
+		} else {
+			s.WriteString(normalStyle.Render(fmt.Sprintf("%s%s", cursor, name)))
+		}
+		s.WriteString("\n")
+	}
+
+	s.WriteString("\n")
+	s.WriteString(dimStyle.Render("↑/↓: navigate • enter: select"))
+	s.WriteString("\n")
 	return s.String()
 }
 
@@ -614,7 +707,8 @@ func (m Model) viewSuccess() string {
 
 // RunOnboard runs the onboarding TUI and returns the resulting config
 func RunOnboard() (*config.Config, error) {
-	p := tea.NewProgram(NewModel(), tea.WithAltScreen())
+	// Don't use alternate screen - stay in same terminal
+	p := tea.NewProgram(NewModel())
 	finalModel, err := p.Run()
 	if err != nil {
 		return nil, err
