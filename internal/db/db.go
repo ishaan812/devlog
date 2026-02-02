@@ -1,168 +1,145 @@
 package db
 
 import (
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
+	_ "github.com/marcboeker/go-duckdb"
+
+	"github.com/ishaan812/devlog/internal/config"
 )
 
 var (
-	dbManager     *DBManager
-	dbManagerOnce sync.Once
+	connections   = make(map[string]*sql.DB)
+	activeProfile = "default"
+	mu            sync.RWMutex
 )
 
-// DBManager manages database connections per profile
-type DBManager struct {
-	connections   map[string]*gorm.DB
-	activeProfile string
-	mu            sync.RWMutex
-}
-
-// getDBManager returns the singleton DBManager instance
-func getDBManager() *DBManager {
-	dbManagerOnce.Do(func() {
-		dbManager = &DBManager{
-			connections:   make(map[string]*gorm.DB),
-			activeProfile: "default",
-		}
-	})
-	return dbManager
-}
-
 // SetActiveProfile sets the active profile for database operations
-func SetActiveProfile(name string) {
-	m := getDBManager()
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.activeProfile = name
+func SetActiveProfile(profile string) {
+	mu.Lock()
+	defer mu.Unlock()
+	activeProfile = profile
 }
 
-// GetActiveProfile returns the active profile name
+// GetActiveProfile returns the current active profile
 func GetActiveProfile() string {
-	m := getDBManager()
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.activeProfile
+	mu.RLock()
+	defer mu.RUnlock()
+	return activeProfile
 }
 
 // GetDB returns the database connection for the active profile
-func GetDB() (*gorm.DB, error) {
-	m := getDBManager()
-	m.mu.RLock()
-	profile := m.activeProfile
-	m.mu.RUnlock()
+func GetDB() (*sql.DB, error) {
+	mu.RLock()
+	profile := activeProfile
+	mu.RUnlock()
 	return GetDBForProfile(profile)
 }
 
-// GetDBForProfile returns the database connection for a specific profile
-func GetDBForProfile(profile string) (*gorm.DB, error) {
-	m := getDBManager()
+// GetDBForProfile returns a database connection for a specific profile
+func GetDBForProfile(profile string) (*sql.DB, error) {
+	mu.Lock()
+	defer mu.Unlock()
 
-	m.mu.RLock()
-	if db, ok := m.connections[profile]; ok {
-		m.mu.RUnlock()
-		return db, nil
-	}
-	m.mu.RUnlock()
-
-	// Need to create connection
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	// Double-check after acquiring write lock
-	if db, ok := m.connections[profile]; ok {
-		return db, nil
+	// Check if connection already exists
+	if db, ok := connections[profile]; ok {
+		// Verify connection is still alive
+		if err := db.Ping(); err == nil {
+			return db, nil
+		}
+		// Connection is dead, close and recreate
+		db.Close()
+		delete(connections, profile)
 	}
 
-	// Create database directory
-	dbPath := getProfileDBPath(profile)
-	dbDir := filepath.Dir(dbPath)
-	if err := os.MkdirAll(dbDir, 0755); err != nil {
+	// Get database path
+	dbPath := config.GetProfileDBPath(profile)
+
+	// Ensure directory exists
+	dir := filepath.Dir(dbPath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create database directory: %w", err)
 	}
 
-	// Open database connection with GORM
-	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Silent),
-	})
+	// Open DuckDB connection with access mode setting
+	// Using read_write mode with access_mode=automatic
+	connStr := fmt.Sprintf("%s?access_mode=read_write", dbPath)
+	db, err := sql.Open("duckdb", connStr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
-	// Enable foreign keys and WAL mode for SQLite
-	db.Exec("PRAGMA foreign_keys = ON")
-	db.Exec("PRAGMA journal_mode = WAL")
+	// Configure connection pool
+	db.SetMaxOpenConns(1) // DuckDB works best with single connection
+	db.SetMaxIdleConns(1)
 
-	// Run auto-migration
-	if err := autoMigrate(db); err != nil {
-		return nil, fmt.Errorf("failed to migrate database: %w", err)
+	// Force checkpoint to reduce WAL usage
+	db.Exec("CHECKPOINT")
+
+	// Initialize schema
+	if err := initializeSchema(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to initialize schema: %w", err)
 	}
 
-	m.connections[profile] = db
+	// Cache connection
+	connections[profile] = db
+
 	return db, nil
 }
 
-// getProfileDBPath returns the database path for a profile
-func getProfileDBPath(profile string) string {
-	homeDir, _ := os.UserHomeDir()
-	return filepath.Join(homeDir, ".devlog", "profiles", profile, "devlog.db")
+// initializeSchema creates all tables if they don't exist
+func initializeSchema(db *sql.DB) error {
+	_, err := db.Exec(Schema)
+	return err
 }
 
-// autoMigrate runs GORM auto-migration for all models
-func autoMigrate(db *gorm.DB) error {
-	return db.AutoMigrate(
-		&Developer{},
-		&Codebase{},
-		&Branch{},
-		&Commit{},
-		&FileChange{},
-		&Folder{},
-		&FileIndex{},
-		&IngestCursor{},
-		&FileDependency{},
-		&DeveloperCollaboration{},
-	)
-}
+// CloseDB closes the database connection for a specific profile
+func CloseDB(profile string) {
+	mu.Lock()
+	defer mu.Unlock()
 
-// CloseDB closes the database connection for a profile
-func CloseDB(profile string) error {
-	m := getDBManager()
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if db, ok := m.connections[profile]; ok {
-		sqlDB, err := db.DB()
-		if err != nil {
-			return err
-		}
-		if err := sqlDB.Close(); err != nil {
-			return err
-		}
-		delete(m.connections, profile)
+	if db, ok := connections[profile]; ok {
+		db.Close()
+		delete(connections, profile)
 	}
-	return nil
 }
 
-// Close closes all database connections
-func Close() error {
-	m := getDBManager()
-	m.mu.Lock()
-	defer m.mu.Unlock()
+// CloseAllDBs closes all database connections
+func CloseAllDBs() {
+	mu.Lock()
+	defer mu.Unlock()
 
-	for profile, db := range m.connections {
-		sqlDB, err := db.DB()
-		if err != nil {
-			continue
-		}
-		sqlDB.Close()
-		delete(m.connections, profile)
+	for profile, db := range connections {
+		db.Close()
+		delete(connections, profile)
 	}
-	return nil
+}
+
+// Transaction executes a function within a transaction
+func Transaction(db *sql.DB, fn func(tx *sql.Tx) error) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+
+	defer func() {
+		if p := recover(); p != nil {
+			tx.Rollback()
+			panic(p)
+		}
+	}()
+
+	if err := fn(tx); err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	return tx.Commit()
 }
 
 // GetSchemaDescription returns a description of the database schema
@@ -175,7 +152,7 @@ func GetSchemaDescription() string {
 2. codebases(id, path, name, summary, tech_stack, default_branch, indexed_at)
    - Stores repository metadata
 
-3. branches(id, codebase_id, name, is_default, summary, status, commit_count, ...)
+3. branches(id, codebase_id, name, is_default, summary, story, status, commit_count, ...)
    - Stores branch information with stories/descriptions
 
 4. commits(id, hash, codebase_id, branch_id, author_email, message, summary, is_user_commit, ...)

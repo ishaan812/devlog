@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,7 +15,6 @@ import (
 	"github.com/ishaan812/devlog/internal/db"
 	"github.com/ishaan812/devlog/internal/llm"
 	"github.com/spf13/cobra"
-	"gorm.io/gorm"
 )
 
 var (
@@ -42,12 +42,13 @@ Grouping Options:
   branch  - Group commits by branch with stories
 
 Examples:
-  devlog worklog --days 7                    # Last 7 days to stdout
-  devlog worklog --days 30 --output log.md   # Last 30 days to file
-  devlog worklog --days 14 --no-llm          # Without LLM summaries
-  devlog worklog --group-by branch           # Group by branch
-  devlog worklog --branch feature/auth       # Single branch worklog
-  devlog worklog --all                       # Include all commits (not just yours)`,
+  devlog worklog                              # Writes worklog_<start>_<end>.md
+  devlog worklog --days 30                    # Last 30 days
+  devlog worklog --days 14 --output log.md    # Custom output filename
+  devlog worklog --no-llm                     # Without LLM summaries
+  devlog worklog --group-by branch            # Group by branch
+  devlog worklog --branch feature/auth        # Single branch worklog
+  devlog worklog --all                        # Include all commits (not just yours)`,
 	RunE: runWorklog,
 }
 
@@ -55,7 +56,7 @@ func init() {
 	rootCmd.AddCommand(worklogCmd)
 
 	worklogCmd.Flags().IntVar(&worklogDays, "days", 7, "Number of days to include")
-	worklogCmd.Flags().StringVarP(&worklogOutput, "output", "o", "", "Output file path (default: stdout)")
+	worklogCmd.Flags().StringVarP(&worklogOutput, "output", "o", "", "Output file path (default: worklog_<start>_<end>.md)")
 	worklogCmd.Flags().StringVar(&worklogProvider, "provider", "", "LLM provider for summaries")
 	worklogCmd.Flags().StringVar(&worklogModel, "model", "", "LLM model to use")
 	worklogCmd.Flags().BoolVar(&worklogNoLLM, "no-llm", false, "Skip LLM summaries")
@@ -67,6 +68,7 @@ func init() {
 type commitData struct {
 	Hash        string
 	Message     string
+	Summary     string // LLM-generated summary from ingest
 	AuthorEmail string
 	CommittedAt time.Time
 	Additions   int
@@ -156,35 +158,49 @@ func runWorklog(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to generate markdown: %w", err)
 	}
 
-	// Output
-	if worklogOutput != "" {
-		dir := filepath.Dir(worklogOutput)
-		if dir != "." {
-			os.MkdirAll(dir, 0755)
-		}
-		if err := os.WriteFile(worklogOutput, []byte(markdown), 0644); err != nil {
-			return fmt.Errorf("failed to write file: %w", err)
-		}
-		fmt.Printf("Work log written to %s\n", worklogOutput)
-	} else {
-		fmt.Println(markdown)
+	// Output - default to file in current directory
+	outputPath := worklogOutput
+	if outputPath == "" {
+		// Generate default filename with date range
+		endDate := time.Now()
+		startDate := endDate.AddDate(0, 0, -worklogDays)
+		outputPath = fmt.Sprintf("worklog_%s_%s.md", startDate.Format("2006-01-02"), endDate.Format("2006-01-02"))
 	}
+
+	dir := filepath.Dir(outputPath)
+	if dir != "." && dir != "" {
+		os.MkdirAll(dir, 0755)
+	}
+	if err := os.WriteFile(outputPath, []byte(markdown), 0644); err != nil {
+		return fmt.Errorf("failed to write file: %w", err)
+	}
+	fmt.Printf("Work log written to %s\n", outputPath)
 
 	return nil
 }
 
-func queryCommitsForWorklog(database *gorm.DB, codebase *db.Codebase, startDate, endDate time.Time, cfg *config.Config) ([]commitData, error) {
-	tx := database.Model(&db.Commit{}).
-		Where("committed_at >= ? AND committed_at <= ?", startDate, endDate)
+func queryCommitsForWorklog(database *sql.DB, codebase *db.Codebase, startDate, endDate time.Time, cfg *config.Config) ([]commitData, error) {
+	// Build query with JOIN to get branch name in a single query
+	queryStr := `
+		SELECT c.id, c.hash, c.codebase_id, c.branch_id, c.author_email, c.message, c.summary, c.committed_at,
+			b.name as branch_name
+		FROM commits c
+		LEFT JOIN branches b ON c.branch_id = b.id
+		WHERE c.committed_at >= $1 AND c.committed_at <= $2
+	`
+	args := []interface{}{startDate, endDate}
+	argIdx := 3
 
 	// Filter by codebase if available
 	if codebase != nil {
-		tx = tx.Where("codebase_id = ?", codebase.ID)
+		queryStr += fmt.Sprintf(" AND c.codebase_id = $%d", argIdx)
+		args = append(args, codebase.ID)
+		argIdx++
 	}
 
 	// Filter by user commits unless --all
 	if !worklogAll {
-		tx = tx.Where("is_user_commit = ?", true)
+		queryStr += " AND c.is_user_commit = TRUE"
 	}
 
 	// Filter by branch if specified
@@ -193,44 +209,62 @@ func queryCommitsForWorklog(database *gorm.DB, codebase *db.Codebase, startDate,
 		if err != nil || branch == nil {
 			return nil, fmt.Errorf("branch '%s' not found", worklogBranch)
 		}
-		tx = tx.Where("branch_id = ?", branch.ID)
+		queryStr += fmt.Sprintf(" AND c.branch_id = $%d", argIdx)
+		args = append(args, branch.ID)
+		argIdx++
 	}
 
-	var dbCommits []db.Commit
-	err := tx.Order("committed_at DESC").Find(&dbCommits).Error
+	queryStr += " ORDER BY c.committed_at DESC"
+
+	rows, err := database.Query(queryStr, args...)
 	if err != nil {
 		return nil, err
 	}
+	defer rows.Close()
 
-	// Build commit data with branch info
-	branchCache := make(map[string]*db.Branch)
+	// First, collect all commits without nested queries (DuckDB doesn't support concurrent queries)
+	type rawCommit struct {
+		ID          string
+		Hash        string
+		CodebaseID  string
+		BranchID    sql.NullString
+		AuthorEmail string
+		Message     string
+		Summary     sql.NullString
+		CommittedAt time.Time
+		BranchName  sql.NullString
+	}
+	var rawCommits []rawCommit
+
+	for rows.Next() {
+		var c rawCommit
+		if err := rows.Scan(&c.ID, &c.Hash, &c.CodebaseID, &c.BranchID, &c.AuthorEmail, &c.Message, &c.Summary, &c.CommittedAt, &c.BranchName); err != nil {
+			return nil, err
+		}
+		rawCommits = append(rawCommits, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Close rows before doing file change lookups
+	rows.Close()
+
+	// Now build commit data with file changes
 	var commits []commitData
-	for _, c := range dbCommits {
+	for _, c := range rawCommits {
 		cd := commitData{
 			Hash:        c.Hash,
 			Message:     c.Message,
+			Summary:     c.Summary.String,
 			AuthorEmail: c.AuthorEmail,
 			CommittedAt: c.CommittedAt,
-			BranchID:    c.BranchID,
-		}
-
-		// Get branch name
-		if c.BranchID != "" {
-			if branch, ok := branchCache[c.BranchID]; ok {
-				cd.BranchName = branch.Name
-			} else {
-				branch, _ := db.GetBranchByID(database, c.BranchID)
-				if branch != nil {
-					branchCache[c.BranchID] = branch
-					cd.BranchName = branch.Name
-				}
-			}
+			BranchID:    c.BranchID.String,
+			BranchName:  c.BranchName.String,
 		}
 
 		// Get file changes for this commit
-		var fileChanges []db.FileChange
-		database.Where("commit_id = ?", c.ID).Find(&fileChanges)
-
+		fileChanges, _ := db.GetFileChangesByCommit(database, c.ID)
 		for _, fc := range fileChanges {
 			cd.Additions += fc.Additions
 			cd.Deletions += fc.Deletions
@@ -268,7 +302,7 @@ func groupByDate(commits []commitData) []dayGroup {
 	return groups
 }
 
-func groupByBranch(database *gorm.DB, commits []commitData) []branchGroup {
+func groupByBranch(database *sql.DB, commits []commitData) []branchGroup {
 	branchMap := make(map[string]*branchGroup)
 	branchOrder := []string{}
 
@@ -338,6 +372,9 @@ func generateWorklogMarkdown(groups []dayGroup, client llm.LLMClient, cfg *confi
 	// Header
 	userName := cfg.UserName
 	if userName == "" {
+		userName = cfg.GitHubUsername
+	}
+	if userName == "" {
 		userName = "Developer"
 	}
 
@@ -379,15 +416,24 @@ func generateWorklogMarkdown(groups []dayGroup, client llm.LLMClient, cfg *confi
 
 		sb.WriteString(fmt.Sprintf("**%d commits** | +%d / -%d lines\n\n", len(group.Commits), totalAdditions, totalDeletions))
 
-		// Generate day summary with LLM
-		if client != nil {
-			daySummary, err := generateDaySummary(group, client)
-			if err == nil && daySummary != "" {
+		// For multiple commits, show day summary
+		// For single commit, just show the commit with its summary
+		showDaySummary := len(group.Commits) > 1
+		if showDaySummary {
+			daySummary := getDaySummaryFromCommits(group.Commits)
+			if daySummary == "" && client != nil {
+				var err error
+				daySummary, err = generateDaySummary(group, client)
+				if err != nil {
+					daySummary = ""
+				}
+			}
+			if daySummary != "" {
 				sb.WriteString(fmt.Sprintf("> %s\n\n", daySummary))
 			}
 		}
 
-		// List commits
+		// List commits with their summaries
 		for _, c := range group.Commits {
 			commitTime := c.CommittedAt.Format("15:04")
 			message := strings.Split(strings.TrimSpace(c.Message), "\n")[0] // First line only
@@ -402,6 +448,11 @@ func generateWorklogMarkdown(groups []dayGroup, client llm.LLMClient, cfg *confi
 				sb.WriteString(fmt.Sprintf(" [%s]", c.BranchName))
 			}
 			sb.WriteString("\n")
+
+			// Add stored summary if available
+			if c.Summary != "" {
+				sb.WriteString(fmt.Sprintf("  > %s\n", c.Summary))
+			}
 		}
 		sb.WriteString("\n")
 	}
@@ -418,6 +469,9 @@ func generateBranchWorklogMarkdown(groups []branchGroup, client llm.LLMClient, c
 
 	// Header
 	userName := cfg.UserName
+	if userName == "" {
+		userName = cfg.GitHubUsername
+	}
 	if userName == "" {
 		userName = "Developer"
 	}
@@ -541,4 +595,25 @@ Commits:
 	defer cancel()
 
 	return client.Complete(ctx, prompt)
+}
+
+// getDaySummaryFromCommits combines stored commit summaries into a day summary
+func getDaySummaryFromCommits(commits []commitData) string {
+	var summaries []string
+	for _, c := range commits {
+		if c.Summary != "" {
+			summaries = append(summaries, c.Summary)
+		}
+	}
+
+	if len(summaries) == 0 {
+		return ""
+	}
+
+	if len(summaries) == 1 {
+		return summaries[0]
+	}
+
+	// Combine multiple summaries
+	return strings.Join(summaries, " ")
 }

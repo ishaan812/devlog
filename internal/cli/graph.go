@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,7 +10,6 @@ import (
 	"github.com/fatih/color"
 	"github.com/ishaan812/devlog/internal/db"
 	"github.com/spf13/cobra"
-	"gorm.io/gorm"
 )
 
 var (
@@ -120,7 +120,7 @@ func runGraph(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func generateStructureGraph(database *gorm.DB, codebasePath string, maxNodes int) (string, error) {
+func generateStructureGraph(database *sql.DB, codebasePath string, maxNodes int) (string, error) {
 	// Get codebase
 	if codebasePath == "" {
 		codebasePath, _ = filepath.Abs(".")
@@ -252,21 +252,34 @@ func generateStructureGraph(database *gorm.DB, codebasePath string, maxNodes int
 	return sb.String(), nil
 }
 
-func generateCommitsGraph(database *gorm.DB, maxNodes int) (string, error) {
-	// Query recent commits grouped by author using GORM
+func generateCommitsGraph(database *sql.DB, maxNodes int) (string, error) {
+	// Query recent commits grouped by author
 	type AuthorStats struct {
 		AuthorEmail string
 		CommitCount int
 	}
 
-	var authors []AuthorStats
-	err := database.Model(&db.Commit{}).
-		Select("author_email, COUNT(*) as commit_count").
-		Group("author_email").
-		Order("commit_count DESC").
-		Limit(maxNodes).
-		Scan(&authors).Error
+	rows, err := database.Query(`
+		SELECT author_email, COUNT(*) as commit_count
+		FROM commits
+		GROUP BY author_email
+		ORDER BY commit_count DESC
+		LIMIT $1
+	`, maxNodes)
 	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+
+	var authors []AuthorStats
+	for rows.Next() {
+		var a AuthorStats
+		if err := rows.Scan(&a.AuthorEmail, &a.CommitCount); err != nil {
+			return "", err
+		}
+		authors = append(authors, a)
+	}
+	if err := rows.Err(); err != nil {
 		return "", err
 	}
 
@@ -298,21 +311,34 @@ func generateCommitsGraph(database *gorm.DB, maxNodes int) (string, error) {
 	return sb.String(), nil
 }
 
-func generateFilesGraph(database *gorm.DB, maxNodes int) (string, error) {
-	// Query most changed files using GORM
+func generateFilesGraph(database *sql.DB, maxNodes int) (string, error) {
+	// Query most changed files
 	type FileStats struct {
 		FilePath    string
 		ChangeCount int
 	}
 
-	var fileStats []FileStats
-	err := database.Model(&db.FileChange{}).
-		Select("file_path, COUNT(*) as change_count").
-		Group("file_path").
-		Order("change_count DESC").
-		Limit(maxNodes).
-		Scan(&fileStats).Error
+	rows, err := database.Query(`
+		SELECT file_path, COUNT(*) as change_count
+		FROM file_changes
+		GROUP BY file_path
+		ORDER BY change_count DESC
+		LIMIT $1
+	`, maxNodes)
 	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+
+	var fileStats []FileStats
+	for rows.Next() {
+		var fs FileStats
+		if err := rows.Scan(&fs.FilePath, &fs.ChangeCount); err != nil {
+			return "", err
+		}
+		fileStats = append(fileStats, fs)
+	}
+	if err := rows.Err(); err != nil {
 		return "", err
 	}
 
@@ -344,16 +370,15 @@ func generateFilesGraph(database *gorm.DB, maxNodes int) (string, error) {
 	return sb.String(), nil
 }
 
-func generateCollabGraph(database *gorm.DB, maxNodes int) (string, error) {
-	// This query is complex, so we use raw SQL through GORM
+func generateCollabGraph(database *sql.DB, maxNodes int) (string, error) {
+	// Query collaboration edges between developers
 	type CollabEdge struct {
 		Dev1        string
 		Dev2        string
 		SharedFiles int
 	}
 
-	var edges []CollabEdge
-	err := database.Raw(`
+	rows, err := database.Query(`
 		WITH file_authors AS (
 			SELECT DISTINCT fc.file_path, c.author_email
 			FROM file_changes fc
@@ -366,11 +391,24 @@ func generateCollabGraph(database *gorm.DB, maxNodes int) (string, error) {
 		FROM file_authors a1
 		JOIN file_authors a2 ON a1.file_path = a2.file_path AND a1.author_email < a2.author_email
 		GROUP BY a1.author_email, a2.author_email
-		HAVING shared_files > 1
+		HAVING COUNT(DISTINCT a1.file_path) > 1
 		ORDER BY shared_files DESC
-		LIMIT ?
-	`, maxNodes).Scan(&edges).Error
+		LIMIT $1
+	`, maxNodes)
 	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+
+	var edges []CollabEdge
+	for rows.Next() {
+		var e CollabEdge
+		if err := rows.Scan(&e.Dev1, &e.Dev2, &e.SharedFiles); err != nil {
+			return "", err
+		}
+		edges = append(edges, e)
+	}
+	if err := rows.Err(); err != nil {
 		return "", err
 	}
 

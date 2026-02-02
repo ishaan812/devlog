@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -12,7 +13,6 @@ import (
 	"github.com/ishaan812/devlog/internal/db"
 	"github.com/ishaan812/devlog/internal/llm"
 	"github.com/spf13/cobra"
-	"gorm.io/gorm"
 )
 
 var (
@@ -147,7 +147,7 @@ func runSearch(cmd *cobra.Command, args []string) error {
 	}
 }
 
-func searchFiles(database *gorm.DB, codebase *db.Codebase, query string,
+func searchFiles(database *sql.DB, codebase *db.Codebase, query string,
 	titleColor, pathColor, summaryColor, dimColor, purposeColor, semanticColor *color.Color) error {
 
 	var files []db.FileIndex
@@ -270,20 +270,27 @@ func searchFiles(database *gorm.DB, codebase *db.Codebase, query string,
 	return nil
 }
 
-func searchCommits(database *gorm.DB, codebase *db.Codebase, query string,
+func searchCommits(database *sql.DB, codebase *db.Codebase, query string,
 	titleColor, commitColor, dimColor *color.Color) error {
 
 	titleColor.Println("  Commits")
 	fmt.Println()
 
-	// Build query conditions
-	var commits []db.Commit
-	tx := database.Model(&db.Commit{}).Where("codebase_id = ?", codebase.ID)
+	// Build query with filters
+	queryStr := `
+		SELECT id, hash, codebase_id, branch_id, author_email, message, summary,
+			committed_at, stats, is_user_commit, is_on_default_branch
+		FROM commits WHERE codebase_id = $1
+	`
+	args := []interface{}{codebase.ID}
+	argIdx := 2
 
 	// Apply query filter
 	if query != "" {
 		queryPattern := "%" + query + "%"
-		tx = tx.Where("message LIKE ? OR summary LIKE ?", queryPattern, queryPattern)
+		queryStr += fmt.Sprintf(" AND (message ILIKE $%d OR summary ILIKE $%d)", argIdx, argIdx)
+		args = append(args, queryPattern)
+		argIdx++
 	}
 
 	// Apply branch filter
@@ -293,19 +300,42 @@ func searchCommits(database *gorm.DB, codebase *db.Codebase, query string,
 			dimColor.Printf("  Branch '%s' not found\n", searchBranch)
 			return nil
 		}
-		tx = tx.Where("branch_id = ?", branch.ID)
+		queryStr += fmt.Sprintf(" AND branch_id = $%d", argIdx)
+		args = append(args, branch.ID)
+		argIdx++
 	}
 
 	// Apply date filter
 	if searchDays > 0 {
 		since := time.Now().AddDate(0, 0, -searchDays)
-		tx = tx.Where("committed_at >= ?", since)
+		queryStr += fmt.Sprintf(" AND committed_at >= $%d", argIdx)
+		args = append(args, since)
+		argIdx++
 	}
 
-	// Execute query
-	err := tx.Order("committed_at DESC").Limit(searchLimit).Find(&commits).Error
+	queryStr += fmt.Sprintf(" ORDER BY committed_at DESC LIMIT $%d", argIdx)
+	args = append(args, searchLimit)
+
+	rows, err := database.Query(queryStr, args...)
 	if err != nil {
 		return fmt.Errorf("failed to search commits: %w", err)
+	}
+	defer rows.Close()
+
+	var commits []db.Commit
+	for rows.Next() {
+		c := db.Commit{}
+		var branchID, summary, stats sql.NullString
+
+		if err := rows.Scan(&c.ID, &c.Hash, &c.CodebaseID, &branchID, &c.AuthorEmail, &c.Message, &summary,
+			&c.CommittedAt, &stats, &c.IsUserCommit, &c.IsOnDefaultBranch); err != nil {
+			return err
+		}
+
+		c.BranchID = branchID.String
+		c.Summary = summary.String
+		c.Stats = db.FromJSON(stats.String)
+		commits = append(commits, c)
 	}
 
 	if len(commits) == 0 {
@@ -337,20 +367,29 @@ func searchCommits(database *gorm.DB, codebase *db.Codebase, query string,
 	return nil
 }
 
-func searchFilesWithFilters(database *gorm.DB, codebaseID, query string) ([]db.FileIndex, error) {
-	var files []db.FileIndex
-	tx := database.Model(&db.FileIndex{}).Where("codebase_id = ?", codebaseID)
+func searchFilesWithFilters(database *sql.DB, codebaseID, query string) ([]db.FileIndex, error) {
+	// Build query with filters
+	queryStr := `
+		SELECT id, codebase_id, folder_id, path, name, extension, language,
+			size_bytes, line_count, summary, purpose, key_exports, dependencies, content_hash, indexed_at
+		FROM file_indexes WHERE codebase_id = $1
+	`
+	args := []interface{}{codebaseID}
+	argIdx := 2
 
 	// Apply query filter
 	if query != "" {
 		searchPattern := "%" + query + "%"
-		tx = tx.Where("(summary LIKE ? OR purpose LIKE ? OR name LIKE ?)",
-			searchPattern, searchPattern, searchPattern)
+		queryStr += fmt.Sprintf(" AND (summary ILIKE $%d OR purpose ILIKE $%d OR name ILIKE $%d)", argIdx, argIdx, argIdx)
+		args = append(args, searchPattern)
+		argIdx++
 	}
 
 	// Apply language filter
 	if searchLanguage != "" {
-		tx = tx.Where("LOWER(language) = LOWER(?)", searchLanguage)
+		queryStr += fmt.Sprintf(" AND LOWER(language) = LOWER($%d)", argIdx)
+		args = append(args, searchLanguage)
+		argIdx++
 	}
 
 	// Apply extension filter
@@ -359,17 +398,54 @@ func searchFilesWithFilters(database *gorm.DB, codebaseID, query string) ([]db.F
 		if !strings.HasPrefix(ext, ".") {
 			ext = "." + ext
 		}
-		tx = tx.Where("extension = ?", ext)
+		queryStr += fmt.Sprintf(" AND extension = $%d", argIdx)
+		args = append(args, ext)
+		argIdx++
 	}
 
 	// Apply path filter
 	if searchPath != "" {
 		pathPattern := "%" + searchPath + "%"
-		tx = tx.Where("path LIKE ?", pathPattern)
+		queryStr += fmt.Sprintf(" AND path ILIKE $%d", argIdx)
+		args = append(args, pathPattern)
+		argIdx++
 	}
 
-	err := tx.Order("path").Limit(searchLimit * 2).Find(&files).Error
-	return files, err
+	queryStr += fmt.Sprintf(" ORDER BY path LIMIT $%d", argIdx)
+	args = append(args, searchLimit*2)
+
+	rows, err := database.Query(queryStr, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var files []db.FileIndex
+	for rows.Next() {
+		f := db.FileIndex{}
+		var folderID, extension, language, summary, purpose, keyExports, deps, contentHash sql.NullString
+		var indexedAt sql.NullTime
+
+		if err := rows.Scan(&f.ID, &f.CodebaseID, &folderID, &f.Path, &f.Name, &extension, &language,
+			&f.SizeBytes, &f.LineCount, &summary, &purpose, &keyExports, &deps, &contentHash, &indexedAt); err != nil {
+			return nil, err
+		}
+
+		f.FolderID = folderID.String
+		f.Extension = extension.String
+		f.Language = language.String
+		f.Summary = summary.String
+		f.Purpose = purpose.String
+		f.KeyExports = db.FromJSONStringSlice(keyExports.String)
+		f.Dependencies = db.FromJSONStringSlice(deps.String)
+		f.ContentHash = contentHash.String
+		if indexedAt.Valid {
+			f.IndexedAt = indexedAt.Time
+		}
+		files = append(files, f)
+	}
+
+	return files, rows.Err()
 }
 
 func applyFileFilters(files []db.FileIndex) []db.FileIndex {

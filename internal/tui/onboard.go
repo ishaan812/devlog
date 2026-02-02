@@ -56,7 +56,7 @@ const (
 	stepProfileDesc
 	stepProvider
 	stepProviderConfig
-	stepUserName
+	stepGitHubUsername
 	stepUserEmail
 	stepSuccess
 )
@@ -233,7 +233,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// Update text input
 	if m.step == stepProfileName || m.step == stepProfileDesc ||
-		m.step == stepProviderConfig || m.step == stepUserName || m.step == stepUserEmail {
+		m.step == stepProviderConfig || m.step == stepGitHubUsername || m.step == stepUserEmail {
 		m.textInput, cmd = m.textInput.Update(msg)
 	}
 
@@ -292,8 +292,8 @@ func (m Model) handleEnter() (tea.Model, tea.Cmd) {
 			testProvider(m.config.DefaultProvider, value, m.config.OllamaBaseURL),
 		)
 
-	case stepUserName:
-		m.config.UserName = strings.TrimSpace(m.textInput.Value())
+	case stepGitHubUsername:
+		m.config.GitHubUsername = strings.TrimSpace(m.textInput.Value())
 		m.step = stepUserEmail
 		m.prepareStep()
 		return m, nil
@@ -312,7 +312,7 @@ func (m Model) handleEnter() (tea.Model, tea.Cmd) {
 func (m Model) advanceStep() (tea.Model, tea.Cmd) {
 	switch m.step {
 	case stepProviderConfig:
-		m.step = stepUserName
+		m.step = stepGitHubUsername
 		m.prepareStep()
 	}
 	return m, nil
@@ -343,8 +343,8 @@ func (m *Model) prepareStep() {
 		case "bedrock":
 			m.textInput.Placeholder = "AWS Access Key ID"
 		}
-	case stepUserName:
-		m.textInput.Placeholder = "Your Name (optional)"
+	case stepGitHubUsername:
+		m.textInput.Placeholder = "your-github-username"
 		m.textInput.EchoMode = textinput.EchoNormal
 	case stepUserEmail:
 		m.textInput.Placeholder = "you@example.com (optional)"
@@ -386,8 +386,8 @@ func (m Model) View() string {
 		s.WriteString(m.viewProvider())
 	case stepProviderConfig:
 		s.WriteString(m.viewProviderConfig())
-	case stepUserName:
-		s.WriteString(m.viewUserName())
+	case stepGitHubUsername:
+		s.WriteString(m.viewGitHubUsername())
 	case stepUserEmail:
 		s.WriteString(m.viewUserEmail())
 	case stepSuccess:
@@ -536,18 +536,20 @@ func (m Model) viewProviderConfig() string {
 	return s.String()
 }
 
-func (m Model) viewUserName() string {
+func (m Model) viewGitHubUsername() string {
 	var s strings.Builder
 	s.WriteString("\n")
-	s.WriteString(titleStyle.Render("Step 4: Your Info (Optional)"))
+	s.WriteString(titleStyle.Render("Step 4: GitHub Username"))
 	s.WriteString("\n\n")
-	s.WriteString(normalStyle.Render("This helps personalize your experience."))
+	s.WriteString(normalStyle.Render("This is used to identify your commits in git history."))
+	s.WriteString("\n")
+	s.WriteString(dimStyle.Render("(Matches commits with emails like username@users.noreply.github.com)"))
 	s.WriteString("\n\n")
-	s.WriteString(dimStyle.Render("Your name:"))
+	s.WriteString(dimStyle.Render("GitHub username:"))
 	s.WriteString("\n")
 	s.WriteString(inputStyle.Render(m.textInput.View()))
 	s.WriteString("\n\n")
-	s.WriteString(dimStyle.Render("Press Enter to continue (or leave empty to skip)"))
+	s.WriteString(dimStyle.Render("Press Enter to continue"))
 	s.WriteString("\n")
 	return s.String()
 }
@@ -555,13 +557,13 @@ func (m Model) viewUserName() string {
 func (m Model) viewUserEmail() string {
 	var s strings.Builder
 	s.WriteString("\n")
-	s.WriteString(titleStyle.Render("Step 4: Your Info (Optional)"))
+	s.WriteString(titleStyle.Render("Step 4: Your Info"))
 	s.WriteString("\n\n")
-	if m.config.UserName != "" {
-		s.WriteString(dimStyle.Render(fmt.Sprintf("Name: %s", m.config.UserName)))
+	if m.config.GitHubUsername != "" {
+		s.WriteString(dimStyle.Render(fmt.Sprintf("GitHub: %s", m.config.GitHubUsername)))
 		s.WriteString("\n\n")
 	}
-	s.WriteString(dimStyle.Render("Your email (for git author matching):"))
+	s.WriteString(dimStyle.Render("Your email (optional, for additional git matching):"))
 	s.WriteString("\n")
 	s.WriteString(inputStyle.Render(m.textInput.View()))
 	s.WriteString("\n\n")

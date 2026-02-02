@@ -1,386 +1,630 @@
 package db
 
 import (
+	"database/sql"
 	"fmt"
 	"time"
-
-	"github.com/google/uuid"
-	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 // ==================== Developer Repository ====================
 
 // UpsertDeveloper creates or updates a developer
-func UpsertDeveloper(db *gorm.DB, dev *Developer) error {
-	return db.Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "email"}},
-		DoUpdates: clause.AssignmentColumns([]string{"name", "is_current_user"}),
-	}).Create(dev).Error
+func UpsertDeveloper(db *sql.DB, dev *Developer) error {
+	// Delete existing record first (DuckDB ON CONFLICT has limitations)
+	db.Exec(`DELETE FROM developers WHERE email = $1`, dev.Email)
+
+	_, err := db.Exec(`
+		INSERT INTO developers (id, name, email, is_current_user)
+		VALUES ($1, $2, $3, $4)
+	`, dev.ID, dev.Name, dev.Email, dev.IsCurrentUser)
+	return err
 }
 
 // GetDeveloperByEmail retrieves a developer by email
-func GetDeveloperByEmail(db *gorm.DB, email string) (*Developer, error) {
-	var dev Developer
-	err := db.Where("email = ?", email).First(&dev).Error
-	if err == gorm.ErrRecordNotFound {
+func GetDeveloperByEmail(db *sql.DB, email string) (*Developer, error) {
+	row := db.QueryRow(`SELECT id, name, email, is_current_user FROM developers WHERE email = $1`, email)
+	dev := &Developer{}
+	err := row.Scan(&dev.ID, &dev.Name, &dev.Email, &dev.IsCurrentUser)
+	if err == sql.ErrNoRows {
 		return nil, nil
 	}
-	return &dev, err
+	return dev, err
 }
 
 // SetCurrentUser marks a developer as the current user
-func SetCurrentUser(db *gorm.DB, email string) error {
-	// Unset all current users
-	if err := db.Model(&Developer{}).Where("is_current_user = ?", true).Update("is_current_user", false).Error; err != nil {
+func SetCurrentUser(db *sql.DB, email string) error {
+	_, err := db.Exec(`UPDATE developers SET is_current_user = FALSE WHERE is_current_user = TRUE`)
+	if err != nil {
 		return err
 	}
-	// Set the specified user
-	return db.Model(&Developer{}).Where("email = ?", email).Update("is_current_user", true).Error
+	_, err = db.Exec(`UPDATE developers SET is_current_user = TRUE WHERE email = $1`, email)
+	return err
 }
 
 // GetCurrentUser retrieves the current user
-func GetCurrentUser(db *gorm.DB) (*Developer, error) {
-	var dev Developer
-	err := db.Where("is_current_user = ?", true).First(&dev).Error
-	if err == gorm.ErrRecordNotFound {
+func GetCurrentUser(db *sql.DB) (*Developer, error) {
+	row := db.QueryRow(`SELECT id, name, email, is_current_user FROM developers WHERE is_current_user = TRUE`)
+	dev := &Developer{}
+	err := row.Scan(&dev.ID, &dev.Name, &dev.Email, &dev.IsCurrentUser)
+	if err == sql.ErrNoRows {
 		return nil, nil
 	}
-	return &dev, err
+	return dev, err
 }
 
 // ==================== Codebase Repository ====================
 
 // UpsertCodebase creates or updates a codebase
-func UpsertCodebase(db *gorm.DB, codebase *Codebase) error {
-	return db.Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "path"}},
-		DoUpdates: clause.AssignmentColumns([]string{"name", "summary", "tech_stack", "default_branch", "indexed_at"}),
-	}).Create(codebase).Error
+func UpsertCodebase(db *sql.DB, codebase *Codebase) error {
+	_, err := db.Exec(`
+		INSERT INTO codebases (id, path, name, summary, tech_stack, default_branch, indexed_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		ON CONFLICT (path) DO UPDATE SET
+			name = EXCLUDED.name,
+			summary = EXCLUDED.summary,
+			tech_stack = EXCLUDED.tech_stack,
+			default_branch = EXCLUDED.default_branch,
+			indexed_at = EXCLUDED.indexed_at
+	`, codebase.ID, codebase.Path, codebase.Name, NullString(codebase.Summary),
+		ToJSON(codebase.TechStack), NullString(codebase.DefaultBranch), NullTime(codebase.IndexedAt))
+	return err
 }
 
 // GetCodebaseByPath retrieves a codebase by path
-func GetCodebaseByPath(db *gorm.DB, path string) (*Codebase, error) {
-	var codebase Codebase
-	err := db.Where("path = ?", path).First(&codebase).Error
-	if err == gorm.ErrRecordNotFound {
-		return nil, nil
-	}
-	return &codebase, err
+func GetCodebaseByPath(db *sql.DB, path string) (*Codebase, error) {
+	row := db.QueryRow(`
+		SELECT id, path, name, summary, tech_stack, default_branch, indexed_at
+		FROM codebases WHERE path = $1
+	`, path)
+	return scanCodebase(row)
 }
 
 // GetCodebaseByID retrieves a codebase by ID
-func GetCodebaseByID(db *gorm.DB, id string) (*Codebase, error) {
-	var codebase Codebase
-	err := db.First(&codebase, "id = ?", id).Error
-	if err == gorm.ErrRecordNotFound {
+func GetCodebaseByID(db *sql.DB, id string) (*Codebase, error) {
+	row := db.QueryRow(`
+		SELECT id, path, name, summary, tech_stack, default_branch, indexed_at
+		FROM codebases WHERE id = $1
+	`, id)
+	return scanCodebase(row)
+}
+
+func scanCodebase(row *sql.Row) (*Codebase, error) {
+	c := &Codebase{}
+	var summary, defaultBranch sql.NullString
+	var techStack interface{}
+	var indexedAt sql.NullTime
+
+	err := row.Scan(&c.ID, &c.Path, &c.Name, &summary, &techStack, &defaultBranch, &indexedAt)
+	if err == sql.ErrNoRows {
 		return nil, nil
 	}
-	return &codebase, err
+	if err != nil {
+		return nil, err
+	}
+
+	c.Summary = summary.String
+	c.DefaultBranch = defaultBranch.String
+	if indexedAt.Valid {
+		c.IndexedAt = indexedAt.Time
+	}
+
+	// Handle tech_stack - DuckDB returns JSON as native Go types
+	c.TechStack = convertToIntMap(techStack)
+
+	return c, nil
 }
 
 // GetAllCodebases retrieves all codebases
-func GetAllCodebases(db *gorm.DB) ([]Codebase, error) {
+func GetAllCodebases(db *sql.DB) ([]Codebase, error) {
+	rows, err := db.Query(`SELECT id, path, name, summary, tech_stack, default_branch, indexed_at FROM codebases ORDER BY name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
 	var codebases []Codebase
-	err := db.Order("name").Find(&codebases).Error
-	return codebases, err
+	for rows.Next() {
+		c := Codebase{}
+		var summary, defaultBranch sql.NullString
+		var techStack interface{}
+		var indexedAt sql.NullTime
+
+		if err := rows.Scan(&c.ID, &c.Path, &c.Name, &summary, &techStack, &defaultBranch, &indexedAt); err != nil {
+			return nil, err
+		}
+
+		c.Summary = summary.String
+		c.DefaultBranch = defaultBranch.String
+		if indexedAt.Valid {
+			c.IndexedAt = indexedAt.Time
+		}
+		c.TechStack = convertToIntMap(techStack)
+		codebases = append(codebases, c)
+	}
+	return codebases, rows.Err()
 }
 
 // ==================== Branch Repository ====================
 
 // UpsertBranch creates or updates a branch
-func UpsertBranch(db *gorm.DB, branch *Branch) error {
-	// Check for existing branch
-	var existing Branch
-	err := db.Where("codebase_id = ? AND name = ?", branch.CodebaseID, branch.Name).First(&existing).Error
-	if err == gorm.ErrRecordNotFound {
-		// Create new
-		if branch.ID == "" {
-			branch.ID = uuid.New().String()
-		}
-		return db.Create(branch).Error
-	}
-	if err != nil {
-		return err
-	}
-	// Update existing
-	branch.ID = existing.ID
-	branch.CreatedAt = existing.CreatedAt
-	return db.Save(branch).Error
+func UpsertBranch(db *sql.DB, branch *Branch) error {
+	// Delete existing record first (DuckDB ON CONFLICT has limitations)
+	db.Exec(`DELETE FROM branches WHERE codebase_id = $1 AND name = $2`, branch.CodebaseID, branch.Name)
+
+	_, err := db.Exec(`
+		INSERT INTO branches (id, codebase_id, name, is_default, base_branch, summary, story, status,
+			first_commit_hash, last_commit_hash, commit_count, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+	`, branch.ID, branch.CodebaseID, branch.Name, branch.IsDefault, NullString(branch.BaseBranch),
+		NullString(branch.Summary), NullString(branch.Story), NullString(branch.Status),
+		NullString(branch.FirstCommitHash), NullString(branch.LastCommitHash), branch.CommitCount,
+		NullTime(branch.CreatedAt), NullTime(branch.UpdatedAt))
+	return err
 }
 
 // GetBranch retrieves a branch by codebase and name
-func GetBranch(db *gorm.DB, codebaseID, name string) (*Branch, error) {
-	var branch Branch
-	err := db.Where("codebase_id = ? AND name = ?", codebaseID, name).First(&branch).Error
-	if err == gorm.ErrRecordNotFound {
-		return nil, nil
-	}
-	return &branch, err
+func GetBranch(db *sql.DB, codebaseID, name string) (*Branch, error) {
+	row := db.QueryRow(`
+		SELECT id, codebase_id, name, is_default, base_branch, summary, story, status,
+			first_commit_hash, last_commit_hash, commit_count, created_at, updated_at
+		FROM branches WHERE codebase_id = $1 AND name = $2
+	`, codebaseID, name)
+	return scanBranch(row)
 }
 
 // GetBranchByID retrieves a branch by ID
-func GetBranchByID(db *gorm.DB, id string) (*Branch, error) {
-	var branch Branch
-	err := db.First(&branch, "id = ?", id).Error
-	if err == gorm.ErrRecordNotFound {
+func GetBranchByID(db *sql.DB, id string) (*Branch, error) {
+	row := db.QueryRow(`
+		SELECT id, codebase_id, name, is_default, base_branch, summary, story, status,
+			first_commit_hash, last_commit_hash, commit_count, created_at, updated_at
+		FROM branches WHERE id = $1
+	`, id)
+	return scanBranch(row)
+}
+
+func scanBranch(row *sql.Row) (*Branch, error) {
+	b := &Branch{}
+	var baseBranch, summary, story, status, firstHash, lastHash sql.NullString
+	var createdAt, updatedAt sql.NullTime
+
+	err := row.Scan(&b.ID, &b.CodebaseID, &b.Name, &b.IsDefault, &baseBranch, &summary, &story,
+		&status, &firstHash, &lastHash, &b.CommitCount, &createdAt, &updatedAt)
+	if err == sql.ErrNoRows {
 		return nil, nil
 	}
-	return &branch, err
+	if err != nil {
+		return nil, err
+	}
+
+	b.BaseBranch = baseBranch.String
+	b.Summary = summary.String
+	b.Story = story.String
+	b.Status = status.String
+	b.FirstCommitHash = firstHash.String
+	b.LastCommitHash = lastHash.String
+	if createdAt.Valid {
+		b.CreatedAt = createdAt.Time
+	}
+	if updatedAt.Valid {
+		b.UpdatedAt = updatedAt.Time
+	}
+
+	return b, nil
 }
 
 // GetBranchesByCodebase retrieves all branches for a codebase
-func GetBranchesByCodebase(db *gorm.DB, codebaseID string) ([]Branch, error) {
-	var branches []Branch
-	err := db.Where("codebase_id = ?", codebaseID).
-		Order("is_default DESC, updated_at DESC").
-		Find(&branches).Error
-	return branches, err
-}
+func GetBranchesByCodebase(db *sql.DB, codebaseID string) ([]Branch, error) {
+	rows, err := db.Query(`
+		SELECT id, codebase_id, name, is_default, base_branch, summary, story, status,
+			first_commit_hash, last_commit_hash, commit_count, created_at, updated_at
+		FROM branches WHERE codebase_id = $1 ORDER BY is_default DESC, updated_at DESC
+	`, codebaseID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
 
-// GetActiveBranches retrieves active branches for a codebase
-func GetActiveBranches(db *gorm.DB, codebaseID string) ([]Branch, error) {
 	var branches []Branch
-	err := db.Where("codebase_id = ? AND status = ?", codebaseID, "active").
-		Order("is_default DESC, updated_at DESC").
-		Find(&branches).Error
-	return branches, err
-}
+	for rows.Next() {
+		b := Branch{}
+		var baseBranch, summary, story, status, firstHash, lastHash sql.NullString
+		var createdAt, updatedAt sql.NullTime
 
-// UpdateBranchSummary updates the summary for a branch
-func UpdateBranchSummary(db *gorm.DB, branchID, summary string) error {
-	return db.Model(&Branch{}).Where("id = ?", branchID).
-		Updates(map[string]interface{}{"summary": summary, "updated_at": time.Now()}).Error
+		if err := rows.Scan(&b.ID, &b.CodebaseID, &b.Name, &b.IsDefault, &baseBranch, &summary, &story,
+			&status, &firstHash, &lastHash, &b.CommitCount, &createdAt, &updatedAt); err != nil {
+			return nil, err
+		}
+
+		b.BaseBranch = baseBranch.String
+		b.Summary = summary.String
+		b.Story = story.String
+		b.Status = status.String
+		b.FirstCommitHash = firstHash.String
+		b.LastCommitHash = lastHash.String
+		if createdAt.Valid {
+			b.CreatedAt = createdAt.Time
+		}
+		if updatedAt.Valid {
+			b.UpdatedAt = updatedAt.Time
+		}
+		branches = append(branches, b)
+	}
+	return branches, rows.Err()
 }
 
 // GetBranchCommits retrieves recent commits for a branch
-func GetBranchCommits(db *gorm.DB, branchID string, limit int) ([]Commit, error) {
-	var commits []Commit
-	err := db.Where("branch_id = ?", branchID).
-		Order("committed_at DESC").
-		Limit(limit).
-		Find(&commits).Error
-	return commits, err
+func GetBranchCommits(db *sql.DB, branchID string, limit int) ([]Commit, error) {
+	rows, err := db.Query(`
+		SELECT id, hash, codebase_id, branch_id, author_email, message, summary,
+			committed_at, stats, is_user_commit, is_on_default_branch
+		FROM commits WHERE branch_id = $1 ORDER BY committed_at DESC LIMIT $2
+	`, branchID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return scanCommits(rows)
 }
 
 // ClearDefaultBranch clears the default flag on all branches for a codebase
-func ClearDefaultBranch(db *gorm.DB, codebaseID string) error {
-	return db.Model(&Branch{}).Where("codebase_id = ?", codebaseID).
-		Update("is_default", false).Error
+func ClearDefaultBranch(db *sql.DB, codebaseID string) error {
+	_, err := db.Exec(`UPDATE branches SET is_default = FALSE WHERE codebase_id = $1`, codebaseID)
+	return err
 }
 
 // ==================== Commit Repository ====================
 
 // UpsertCommit creates or updates a commit
-func UpsertCommit(db *gorm.DB, commit *Commit) error {
-	return db.Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "codebase_id"}, {Name: "hash"}},
-		DoUpdates: clause.AssignmentColumns([]string{"branch_id", "summary", "is_user_commit", "is_on_default_branch"}),
-	}).Create(commit).Error
-}
+func UpsertCommit(db *sql.DB, commit *Commit) error {
+	// Delete existing record first (DuckDB ON CONFLICT has limitations with indexed columns)
+	db.Exec(`DELETE FROM commits WHERE codebase_id = $1 AND hash = $2`, commit.CodebaseID, commit.Hash)
 
-// GetCommitByHash retrieves a commit by codebase and hash
-func GetCommitByHash(db *gorm.DB, codebaseID, hash string) (*Commit, error) {
-	var commit Commit
-	err := db.Where("codebase_id = ? AND hash = ?", codebaseID, hash).First(&commit).Error
-	if err == gorm.ErrRecordNotFound {
-		return nil, nil
-	}
-	return &commit, err
+	_, err := db.Exec(`
+		INSERT INTO commits (id, hash, codebase_id, branch_id, author_email, message, summary,
+			committed_at, stats, is_user_commit, is_on_default_branch)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+	`, commit.ID, commit.Hash, commit.CodebaseID, NullString(commit.BranchID), commit.AuthorEmail,
+		commit.Message, NullString(commit.Summary), commit.CommittedAt, ToJSON(commit.Stats),
+		commit.IsUserCommit, commit.IsOnDefaultBranch)
+	return err
 }
 
 // CommitExists checks if a commit exists
-func CommitExists(db *gorm.DB, codebaseID, hash string) (bool, error) {
-	var count int64
-	err := db.Model(&Commit{}).Where("codebase_id = ? AND hash = ?", codebaseID, hash).Count(&count).Error
+func CommitExists(db *sql.DB, codebaseID, hash string) (bool, error) {
+	var count int
+	err := db.QueryRow(`SELECT COUNT(*) FROM commits WHERE codebase_id = $1 AND hash = $2`, codebaseID, hash).Scan(&count)
 	return count > 0, err
 }
 
-// GetCommitsByBranch retrieves all commits for a branch
-func GetCommitsByBranch(db *gorm.DB, branchID string) ([]Commit, error) {
-	var commits []Commit
-	err := db.Where("branch_id = ?", branchID).Order("committed_at DESC").Find(&commits).Error
-	return commits, err
-}
+// GetCommitByHash retrieves a commit by hash
+func GetCommitByHash(db *sql.DB, codebaseID, hash string) (*Commit, error) {
+	row := db.QueryRow(`
+		SELECT id, hash, codebase_id, branch_id, author_email, message, summary,
+			committed_at, stats, is_user_commit, is_on_default_branch
+		FROM commits WHERE codebase_id = $1 AND hash = $2
+	`, codebaseID, hash)
 
-// GetUserCommits retrieves commits by the current user within a date range
-func GetUserCommits(db *gorm.DB, codebaseID string, since time.Time) ([]Commit, error) {
-	var commits []Commit
-	err := db.Where("codebase_id = ? AND is_user_commit = ? AND committed_at >= ?", codebaseID, true, since).
-		Order("committed_at DESC").Find(&commits).Error
-	return commits, err
-}
+	c := &Commit{}
+	var branchID, summary sql.NullString
+	var stats interface{}
 
-// GetUserCommitsByBranch retrieves user commits grouped by branch
-func GetUserCommitsByBranch(db *gorm.DB, codebaseID string, since time.Time) (map[string][]Commit, error) {
-	commits, err := GetUserCommits(db, codebaseID, since)
+	err := row.Scan(&c.ID, &c.Hash, &c.CodebaseID, &branchID, &c.AuthorEmail, &c.Message, &summary,
+		&c.CommittedAt, &stats, &c.IsUserCommit, &c.IsOnDefaultBranch)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}
-	result := make(map[string][]Commit)
-	for _, c := range commits {
-		result[c.BranchID] = append(result[c.BranchID], c)
-	}
-	return result, nil
+
+	c.BranchID = branchID.String
+	c.Summary = summary.String
+	c.Stats = convertToMap(stats)
+
+	return c, nil
 }
 
-// GetAllUserCommits retrieves all commits by the current user across codebases
-func GetAllUserCommits(db *gorm.DB, since time.Time) ([]Commit, error) {
+func scanCommits(rows *sql.Rows) ([]Commit, error) {
 	var commits []Commit
-	err := db.Where("is_user_commit = ? AND committed_at >= ?", true, since).
-		Order("committed_at DESC").Find(&commits).Error
-	return commits, err
+	for rows.Next() {
+		c := Commit{}
+		var branchID, summary sql.NullString
+		var stats interface{}
+
+		if err := rows.Scan(&c.ID, &c.Hash, &c.CodebaseID, &branchID, &c.AuthorEmail, &c.Message, &summary,
+			&c.CommittedAt, &stats, &c.IsUserCommit, &c.IsOnDefaultBranch); err != nil {
+			return nil, err
+		}
+
+		c.BranchID = branchID.String
+		c.Summary = summary.String
+		c.Stats = convertToMap(stats)
+		commits = append(commits, c)
+	}
+	return commits, rows.Err()
 }
 
-// UpdateCommitSummary updates the summary for a commit
-func UpdateCommitSummary(db *gorm.DB, commitID, summary string) error {
-	return db.Model(&Commit{}).Where("id = ?", commitID).Update("summary", summary).Error
+// GetUserCommits retrieves commits by the current user within a date range
+func GetUserCommits(db *sql.DB, codebaseID string, since time.Time) ([]Commit, error) {
+	rows, err := db.Query(`
+		SELECT id, hash, codebase_id, branch_id, author_email, message, summary,
+			committed_at, stats, is_user_commit, is_on_default_branch
+		FROM commits WHERE codebase_id = $1 AND is_user_commit = TRUE AND committed_at >= $2
+		ORDER BY committed_at DESC
+	`, codebaseID, since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return scanCommits(rows)
 }
 
 // GetCommitCount returns the number of commits for a codebase
-func GetCommitCount(db *gorm.DB, codebaseID string) (int64, error) {
+func GetCommitCount(db *sql.DB, codebaseID string) (int64, error) {
 	var count int64
-	err := db.Model(&Commit{}).Where("codebase_id = ?", codebaseID).Count(&count).Error
+	err := db.QueryRow(`SELECT COUNT(*) FROM commits WHERE codebase_id = $1`, codebaseID).Scan(&count)
 	return count, err
 }
 
 // GetCommitCountByPath returns the number of commits for a codebase by path
-func GetCommitCountByPath(db *gorm.DB, repoPath string) (int64, error) {
-	var codebase Codebase
-	if err := db.Where("path = ?", repoPath).First(&codebase).Error; err != nil {
-		if err == gorm.ErrRecordNotFound {
-			return 0, nil
-		}
-		return 0, err
-	}
-	return GetCommitCount(db, codebase.ID)
+func GetCommitCountByPath(db *sql.DB, repoPath string) (int64, error) {
+	var count int64
+	err := db.QueryRow(`
+		SELECT COUNT(*) FROM commits c
+		JOIN codebases cb ON c.codebase_id = cb.id
+		WHERE cb.path = $1
+	`, repoPath).Scan(&count)
+	return count, err
 }
 
 // ==================== FileChange Repository ====================
 
 // CreateFileChange creates a file change
-func CreateFileChange(db *gorm.DB, fc *FileChange) error {
-	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(fc).Error
+func CreateFileChange(db *sql.DB, fc *FileChange) error {
+	_, err := db.Exec(`
+		INSERT INTO file_changes (id, commit_id, file_path, change_type, additions, deletions, patch)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		ON CONFLICT DO NOTHING
+	`, fc.ID, fc.CommitID, fc.FilePath, fc.ChangeType, fc.Additions, fc.Deletions, NullString(fc.Patch))
+	return err
 }
 
 // GetFileChangesByCommit retrieves file changes for a commit
-func GetFileChangesByCommit(db *gorm.DB, commitID string) ([]FileChange, error) {
+func GetFileChangesByCommit(db *sql.DB, commitID string) ([]FileChange, error) {
+	rows, err := db.Query(`
+		SELECT id, commit_id, file_path, change_type, additions, deletions, patch
+		FROM file_changes WHERE commit_id = $1
+	`, commitID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
 	var changes []FileChange
-	err := db.Where("commit_id = ?", commitID).Find(&changes).Error
-	return changes, err
+	for rows.Next() {
+		fc := FileChange{}
+		var patch sql.NullString
+		if err := rows.Scan(&fc.ID, &fc.CommitID, &fc.FilePath, &fc.ChangeType, &fc.Additions, &fc.Deletions, &patch); err != nil {
+			return nil, err
+		}
+		fc.Patch = patch.String
+		changes = append(changes, fc)
+	}
+	return changes, rows.Err()
 }
 
 // GetFileChangeCount returns the number of file changes for a codebase
-func GetFileChangeCount(db *gorm.DB, codebaseID string) (int64, error) {
+func GetFileChangeCount(db *sql.DB, codebaseID string) (int64, error) {
 	var count int64
-	err := db.Model(&FileChange{}).
-		Joins("JOIN commits ON file_changes.commit_id = commits.id").
-		Where("commits.codebase_id = ?", codebaseID).
-		Count(&count).Error
+	err := db.QueryRow(`
+		SELECT COUNT(*) FROM file_changes fc
+		JOIN commits c ON fc.commit_id = c.id
+		WHERE c.codebase_id = $1
+	`, codebaseID).Scan(&count)
 	return count, err
-}
-
-// GetFileChangeCountByPath returns the number of file changes by repo path
-func GetFileChangeCountByPath(db *gorm.DB, repoPath string) (int64, error) {
-	var codebase Codebase
-	if err := db.Where("path = ?", repoPath).First(&codebase).Error; err != nil {
-		if err == gorm.ErrRecordNotFound {
-			return 0, nil
-		}
-		return 0, err
-	}
-	return GetFileChangeCount(db, codebase.ID)
 }
 
 // ==================== IngestCursor Repository ====================
 
 // GetBranchCursor retrieves the last scanned hash for a branch
-func GetBranchCursor(db *gorm.DB, codebaseID, branchName string) (string, error) {
-	var cursor IngestCursor
-	err := db.Where("codebase_id = ? AND branch_name = ?", codebaseID, branchName).First(&cursor).Error
-	if err == gorm.ErrRecordNotFound {
+func GetBranchCursor(db *sql.DB, codebaseID, branchName string) (string, error) {
+	var hash sql.NullString
+	err := db.QueryRow(`
+		SELECT last_commit_hash FROM ingest_cursors
+		WHERE codebase_id = $1 AND branch_name = $2
+	`, codebaseID, branchName).Scan(&hash)
+	if err == sql.ErrNoRows {
 		return "", nil
 	}
-	if err != nil {
-		return "", err
-	}
-	return cursor.LastCommitHash, nil
+	return hash.String, err
 }
 
 // UpdateBranchCursor updates the last scanned hash for a branch
-func UpdateBranchCursor(db *gorm.DB, codebaseID, branchName, hash string) error {
-	cursor := IngestCursor{
-		ID:             fmt.Sprintf("%s:%s", codebaseID, branchName),
-		CodebaseID:     codebaseID,
-		BranchName:     branchName,
-		LastCommitHash: hash,
-		UpdatedAt:      time.Now(),
-	}
-	return db.Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "id"}},
-		DoUpdates: clause.AssignmentColumns([]string{"last_commit_hash", "updated_at"}),
-	}).Create(&cursor).Error
+func UpdateBranchCursor(db *sql.DB, codebaseID, branchName, hash string) error {
+	id := fmt.Sprintf("%s:%s", codebaseID, branchName)
+
+	// Delete existing record first (DuckDB ON CONFLICT has limitations)
+	db.Exec(`DELETE FROM ingest_cursors WHERE codebase_id = $1 AND branch_name = $2`, codebaseID, branchName)
+
+	_, err := db.Exec(`
+		INSERT INTO ingest_cursors (id, codebase_id, branch_name, last_commit_hash, updated_at)
+		VALUES ($1, $2, $3, $4, $5)
+	`, id, codebaseID, branchName, hash, time.Now())
+	return err
 }
 
 // ==================== Folder Repository ====================
 
 // UpsertFolder creates or updates a folder
-func UpsertFolder(db *gorm.DB, folder *Folder) error {
-	return db.Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "codebase_id"}, {Name: "path"}},
-		DoUpdates: clause.AssignmentColumns([]string{"name", "depth", "parent_path", "summary", "purpose", "file_count", "indexed_at"}),
-	}).Create(folder).Error
+func UpsertFolder(db *sql.DB, folder *Folder) error {
+	// Delete existing record first (DuckDB ON CONFLICT has limitations)
+	db.Exec(`DELETE FROM folders WHERE codebase_id = $1 AND path = $2`, folder.CodebaseID, folder.Path)
+
+	_, err := db.Exec(`
+		INSERT INTO folders (id, codebase_id, path, name, depth, parent_path, summary, purpose, file_count, indexed_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+	`, folder.ID, folder.CodebaseID, folder.Path, folder.Name, folder.Depth, NullString(folder.ParentPath),
+		NullString(folder.Summary), NullString(folder.Purpose), folder.FileCount, NullTime(folder.IndexedAt))
+	return err
 }
 
 // GetFoldersByCodebase retrieves all folders for a codebase
-func GetFoldersByCodebase(db *gorm.DB, codebaseID string) ([]Folder, error) {
+func GetFoldersByCodebase(db *sql.DB, codebaseID string) ([]Folder, error) {
+	rows, err := db.Query(`
+		SELECT id, codebase_id, path, name, depth, parent_path, summary, purpose, file_count, indexed_at
+		FROM folders WHERE codebase_id = $1 ORDER BY depth, path
+	`, codebaseID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
 	var folders []Folder
-	err := db.Where("codebase_id = ?", codebaseID).Order("depth, path").Find(&folders).Error
-	return folders, err
+	for rows.Next() {
+		f := Folder{}
+		var parentPath, summary, purpose sql.NullString
+		var indexedAt sql.NullTime
+
+		if err := rows.Scan(&f.ID, &f.CodebaseID, &f.Path, &f.Name, &f.Depth, &parentPath,
+			&summary, &purpose, &f.FileCount, &indexedAt); err != nil {
+			return nil, err
+		}
+
+		f.ParentPath = parentPath.String
+		f.Summary = summary.String
+		f.Purpose = purpose.String
+		if indexedAt.Valid {
+			f.IndexedAt = indexedAt.Time
+		}
+		folders = append(folders, f)
+	}
+	return folders, rows.Err()
 }
 
 // GetFolderByPath retrieves a folder by path
-func GetFolderByPath(db *gorm.DB, codebaseID, path string) (*Folder, error) {
-	var folder Folder
-	err := db.Where("codebase_id = ? AND path = ?", codebaseID, path).First(&folder).Error
-	if err == gorm.ErrRecordNotFound {
+func GetFolderByPath(db *sql.DB, codebaseID, path string) (*Folder, error) {
+	row := db.QueryRow(`
+		SELECT id, codebase_id, path, name, depth, parent_path, summary, purpose, file_count, indexed_at
+		FROM folders WHERE codebase_id = $1 AND path = $2
+	`, codebaseID, path)
+
+	f := &Folder{}
+	var parentPath, summary, purpose sql.NullString
+	var indexedAt sql.NullTime
+
+	err := row.Scan(&f.ID, &f.CodebaseID, &f.Path, &f.Name, &f.Depth, &parentPath,
+		&summary, &purpose, &f.FileCount, &indexedAt)
+	if err == sql.ErrNoRows {
 		return nil, nil
 	}
-	return &folder, err
+	if err != nil {
+		return nil, err
+	}
+
+	f.ParentPath = parentPath.String
+	f.Summary = summary.String
+	f.Purpose = purpose.String
+	if indexedAt.Valid {
+		f.IndexedAt = indexedAt.Time
+	}
+
+	return f, nil
 }
 
 // ==================== FileIndex Repository ====================
 
 // UpsertFileIndex creates or updates a file index
-func UpsertFileIndex(db *gorm.DB, file *FileIndex) error {
-	return db.Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "codebase_id"}, {Name: "path"}},
-		DoUpdates: clause.AssignmentColumns([]string{"name", "extension", "language", "size_bytes", "line_count", "summary", "purpose", "key_exports", "dependencies", "content_hash", "indexed_at"}),
-	}).Create(file).Error
+func UpsertFileIndex(db *sql.DB, file *FileIndex) error {
+	// Delete existing record first (DuckDB ON CONFLICT has limitations)
+	db.Exec(`DELETE FROM file_indexes WHERE codebase_id = $1 AND path = $2`, file.CodebaseID, file.Path)
+
+	_, err := db.Exec(`
+		INSERT INTO file_indexes (id, codebase_id, folder_id, path, name, extension, language,
+			size_bytes, line_count, summary, purpose, key_exports, dependencies, content_hash, indexed_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+	`, file.ID, file.CodebaseID, NullString(file.FolderID), file.Path, file.Name, NullString(file.Extension),
+		NullString(file.Language), file.SizeBytes, file.LineCount, NullString(file.Summary), NullString(file.Purpose),
+		ToJSON(file.KeyExports), ToJSON(file.Dependencies), NullString(file.ContentHash), NullTime(file.IndexedAt))
+	return err
 }
 
 // GetFilesByCodebase retrieves all files for a codebase
-func GetFilesByCodebase(db *gorm.DB, codebaseID string) ([]FileIndex, error) {
-	var files []FileIndex
-	err := db.Where("codebase_id = ?", codebaseID).Order("path").Find(&files).Error
-	return files, err
+func GetFilesByCodebase(db *sql.DB, codebaseID string) ([]FileIndex, error) {
+	rows, err := db.Query(`
+		SELECT id, codebase_id, folder_id, path, name, extension, language,
+			size_bytes, line_count, summary, purpose, key_exports, dependencies, content_hash, indexed_at
+		FROM file_indexes WHERE codebase_id = $1 ORDER BY path
+	`, codebaseID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return scanFileIndexes(rows)
 }
 
 // GetFilesByFolder retrieves all files in a folder
-func GetFilesByFolder(db *gorm.DB, folderID string) ([]FileIndex, error) {
+func GetFilesByFolder(db *sql.DB, folderID string) ([]FileIndex, error) {
+	rows, err := db.Query(`
+		SELECT id, codebase_id, folder_id, path, name, extension, language,
+			size_bytes, line_count, summary, purpose, key_exports, dependencies, content_hash, indexed_at
+		FROM file_indexes WHERE folder_id = $1 ORDER BY name
+	`, folderID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return scanFileIndexes(rows)
+}
+
+func scanFileIndexes(rows *sql.Rows) ([]FileIndex, error) {
 	var files []FileIndex
-	err := db.Where("folder_id = ?", folderID).Order("name").Find(&files).Error
-	return files, err
+	for rows.Next() {
+		f := FileIndex{}
+		var folderID, extension, language, summary, purpose, contentHash sql.NullString
+		var keyExports, deps interface{}
+		var indexedAt sql.NullTime
+
+		if err := rows.Scan(&f.ID, &f.CodebaseID, &folderID, &f.Path, &f.Name, &extension, &language,
+			&f.SizeBytes, &f.LineCount, &summary, &purpose, &keyExports, &deps, &contentHash, &indexedAt); err != nil {
+			return nil, err
+		}
+
+		f.FolderID = folderID.String
+		f.Extension = extension.String
+		f.Language = language.String
+		f.Summary = summary.String
+		f.Purpose = purpose.String
+		f.KeyExports = convertToStringSlice(keyExports)
+		f.Dependencies = convertToStringSlice(deps)
+		f.ContentHash = contentHash.String
+		if indexedAt.Valid {
+			f.IndexedAt = indexedAt.Time
+		}
+		files = append(files, f)
+	}
+	return files, rows.Err()
 }
 
 // SearchFilesBySummary searches files by summary text
-func SearchFilesBySummary(db *gorm.DB, codebaseID, query string) ([]FileIndex, error) {
-	var files []FileIndex
+func SearchFilesBySummary(db *sql.DB, codebaseID, query string) ([]FileIndex, error) {
 	searchPattern := "%" + query + "%"
-	err := db.Where("codebase_id = ? AND (summary LIKE ? OR purpose LIKE ? OR name LIKE ?)",
-		codebaseID, searchPattern, searchPattern, searchPattern).
-		Order("path").Limit(20).Find(&files).Error
-	return files, err
+	rows, err := db.Query(`
+		SELECT id, codebase_id, folder_id, path, name, extension, language,
+			size_bytes, line_count, summary, purpose, key_exports, dependencies, content_hash, indexed_at
+		FROM file_indexes
+		WHERE codebase_id = $1 AND (summary ILIKE $2 OR purpose ILIKE $2 OR name ILIKE $2)
+		ORDER BY path LIMIT 20
+	`, codebaseID, searchPattern)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return scanFileIndexes(rows)
 }
 
 // ==================== Statistics ====================
@@ -395,36 +639,36 @@ type CodebaseStats struct {
 }
 
 // GetCodebaseStats returns statistics about an indexed codebase
-func GetCodebaseStats(db *gorm.DB, codebaseID string) (*CodebaseStats, error) {
+func GetCodebaseStats(db *sql.DB, codebaseID string) (*CodebaseStats, error) {
 	stats := &CodebaseStats{
 		Languages: make(map[string]int),
 	}
 
-	db.Model(&Folder{}).Where("codebase_id = ?", codebaseID).Count(&stats.FolderCount)
+	// Folder count
+	db.QueryRow(`SELECT COUNT(*) FROM folders WHERE codebase_id = $1`, codebaseID).Scan(&stats.FolderCount)
 
-	var fileStats struct {
-		Count      int64
-		TotalSize  int64
-		TotalLines int64
-	}
-	db.Model(&FileIndex{}).Select("COUNT(*) as count, COALESCE(SUM(size_bytes), 0) as total_size, COALESCE(SUM(line_count), 0) as total_lines").
-		Where("codebase_id = ?", codebaseID).Scan(&fileStats)
-
-	stats.FileCount = fileStats.Count
-	stats.TotalSize = fileStats.TotalSize
-	stats.TotalLines = fileStats.TotalLines
+	// File stats
+	db.QueryRow(`
+		SELECT COALESCE(COUNT(*), 0), COALESCE(SUM(size_bytes), 0), COALESCE(SUM(line_count), 0)
+		FROM file_indexes WHERE codebase_id = $1
+	`, codebaseID).Scan(&stats.FileCount, &stats.TotalSize, &stats.TotalLines)
 
 	// Language breakdown
-	var langCounts []struct {
-		Language string
-		Count    int
-	}
-	db.Model(&FileIndex{}).Select("language, COUNT(*) as count").
-		Where("codebase_id = ? AND language IS NOT NULL AND language != ''", codebaseID).
-		Group("language").Order("count DESC").Scan(&langCounts)
-
-	for _, lc := range langCounts {
-		stats.Languages[lc.Language] = lc.Count
+	rows, err := db.Query(`
+		SELECT language, COUNT(*) as count
+		FROM file_indexes
+		WHERE codebase_id = $1 AND language IS NOT NULL AND language != ''
+		GROUP BY language ORDER BY count DESC
+	`, codebaseID)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var lang string
+			var count int
+			if rows.Scan(&lang, &count) == nil {
+				stats.Languages[lang] = count
+			}
+		}
 	}
 
 	return stats, nil
@@ -433,34 +677,58 @@ func GetCodebaseStats(db *gorm.DB, codebaseID string) (*CodebaseStats, error) {
 // ==================== Semantic Search ====================
 
 // HasEmbeddings checks if the codebase has any embeddings stored
-// Note: SQLite doesn't support native vector operations, so this always returns false
-func HasEmbeddings(db *gorm.DB, codebaseID string) bool {
-	// In the future, we could add vector search using sqlite-vss or similar
-	// For now, return false to fall back to keyword search
+// DuckDB can be extended with vector support via extensions
+func HasEmbeddings(db *sql.DB, codebaseID string) bool {
+	// For now, return false - can be extended later with DuckDB vector extension
 	return false
 }
 
 // SemanticSearchFiles searches files using vector similarity
-// Note: SQLite doesn't support native vector operations, falls back to text search
-func SemanticSearchFiles(db *gorm.DB, codebaseID string, queryEmbedding []float32, limit int) ([]FileIndex, error) {
-	// Without vector support, return empty results
-	// The search.go will fall back to keyword search
+// Falls back to text search without vector support
+func SemanticSearchFiles(db *sql.DB, codebaseID string, queryEmbedding []float32, limit int) ([]FileIndex, error) {
+	// Without vector support, return empty - caller will fall back to keyword search
 	return nil, nil
 }
 
 // SemanticSearchFolders searches folders using vector similarity
-// Note: SQLite doesn't support native vector operations, falls back to text search
-func SemanticSearchFolders(db *gorm.DB, codebaseID string, queryEmbedding []float32, limit int) ([]Folder, error) {
-	// Without vector support, return empty results
-	// The search.go will fall back to keyword search
+func SemanticSearchFolders(db *sql.DB, codebaseID string, queryEmbedding []float32, limit int) ([]Folder, error) {
+	// Without vector support, return empty - caller will fall back to keyword search
 	return nil, nil
 }
 
 // ==================== Raw Query Support ====================
 
 // ExecuteQuery executes a raw SQL query and returns results as maps
-func ExecuteQuery(db *gorm.DB, query string) ([]map[string]interface{}, error) {
+func ExecuteQuery(db *sql.DB, query string) ([]map[string]interface{}, error) {
+	rows, err := db.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	columns, err := rows.Columns()
+	if err != nil {
+		return nil, err
+	}
+
 	var results []map[string]interface{}
-	err := db.Raw(query).Scan(&results).Error
-	return results, err
+	for rows.Next() {
+		values := make([]interface{}, len(columns))
+		valuePtrs := make([]interface{}, len(columns))
+		for i := range values {
+			valuePtrs[i] = &values[i]
+		}
+
+		if err := rows.Scan(valuePtrs...); err != nil {
+			return nil, err
+		}
+
+		row := make(map[string]interface{})
+		for i, col := range columns {
+			row[col] = values[i]
+		}
+		results = append(results, row)
+	}
+
+	return results, rows.Err()
 }

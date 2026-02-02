@@ -34,8 +34,9 @@ type Config struct {
 	OllamaModel   string `json:"ollama_model,omitempty"`
 
 	// User info
-	UserName  string `json:"user_name,omitempty"`
-	UserEmail string `json:"user_email,omitempty"`
+	UserName       string `json:"user_name,omitempty"`
+	UserEmail      string `json:"user_email,omitempty"`
+	GitHubUsername string `json:"github_username,omitempty"`
 
 	// Onboarding
 	OnboardingComplete bool `json:"onboarding_complete"`

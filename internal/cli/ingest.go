@@ -2,8 +2,10 @@ package cli
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -15,10 +17,31 @@ import (
 	"github.com/ishaan812/devlog/internal/git"
 	"github.com/ishaan812/devlog/internal/indexer"
 	"github.com/ishaan812/devlog/internal/llm"
-	"github.com/manifoldco/promptui"
+	"github.com/ishaan812/devlog/internal/tui"
 	"github.com/spf13/cobra"
-	"gorm.io/gorm"
 )
+
+// Regex to extract GitHub username from noreply emails
+// Matches: username@users.noreply.github.com or 12345+username@users.noreply.github.com
+var githubNoReplyRegex = regexp.MustCompile(`^(?:\d+\+)?([^@]+)@users\.noreply\.github\.com$`)
+
+// extractGitHubUsername extracts the GitHub username from an email if it's a GitHub noreply email
+func extractGitHubUsername(email string) string {
+	matches := githubNoReplyRegex.FindStringSubmatch(strings.ToLower(email))
+	if len(matches) >= 2 {
+		return matches[1]
+	}
+	return ""
+}
+
+// isUserCommitByGitHub checks if a commit author matches the configured GitHub username
+func isUserCommitByGitHub(authorEmail string, githubUsername string) bool {
+	if githubUsername == "" {
+		return false
+	}
+	extractedUsername := extractGitHubUsername(authorEmail)
+	return strings.EqualFold(extractedUsername, githubUsername)
+}
 
 var (
 	// Git history flags
@@ -36,8 +59,9 @@ var (
 	ingestMaxFiles       int
 
 	// Mode flags
-	ingestGitOnly   bool
-	ingestIndexOnly bool
+	ingestGitOnly        bool
+	ingestIndexOnly      bool
+	ingestSkipCommitSums bool
 )
 
 var ingestCmd = &cobra.Command{
@@ -88,6 +112,7 @@ func init() {
 	// Mode flags
 	ingestCmd.Flags().BoolVar(&ingestGitOnly, "git-only", false, "Only ingest git history")
 	ingestCmd.Flags().BoolVar(&ingestIndexOnly, "index-only", false, "Only index codebase")
+	ingestCmd.Flags().BoolVar(&ingestSkipCommitSums, "skip-commit-summaries", false, "Skip LLM-generated commit summaries")
 }
 
 func runIngest(cmd *cobra.Command, args []string) error {
@@ -211,11 +236,12 @@ func ingestGitHistory(absPath string, cfg *config.Config) error {
 		}
 	}
 
-	// Get user email for marking user commits
+	// Get user identifiers for marking user commits
 	userEmail := cfg.UserEmail
 	if userEmail == "" {
 		userEmail, _ = repo.GetUserEmail()
 	}
+	githubUsername := cfg.GitHubUsername
 
 	// Create/update developer record for current user
 	if userEmail != "" {
@@ -276,6 +302,17 @@ func ingestGitHistory(absPath string, cfg *config.Config) error {
 	// Track totals
 	var totalCommits, totalFiles int
 
+	// Create LLM client for commit summaries (if not skipped)
+	var llmClient llm.LLMClient
+	if !ingestSkipCommitSums && !ingestSkipSummaries {
+		var err error
+		llmClient, err = createLLMClient(cfg)
+		if err != nil {
+			dimColor.Printf("  Note: LLM not available, skipping commit summaries\n")
+			VerboseLog("LLM error: %v", err)
+		}
+	}
+
 	// Create a map of selected branches for quick lookup
 	selectedMap := make(map[string]bool)
 	for _, b := range selection.SelectedBranches {
@@ -294,7 +331,7 @@ func ingestGitHistory(absPath string, cfg *config.Config) error {
 		// Mark as default
 		branchInfo.IsDefault = true
 
-		commits, files, err := ingestBranch(database, repo, codebase, branchInfo, "", sinceDate, userEmail)
+		commits, files, err := ingestBranch(database, repo, codebase, branchInfo, "", sinceDate, userEmail, githubUsername, llmClient)
 		if err != nil {
 			VerboseLog("Warning: failed to ingest branch %s: %v", branchInfo.Name, err)
 			continue
@@ -319,7 +356,7 @@ func ingestGitHistory(absPath string, cfg *config.Config) error {
 			continue
 		}
 
-		commits, files, err := ingestBranch(database, repo, codebase, branchInfo, selection.MainBranch, sinceDate, userEmail)
+		commits, files, err := ingestBranch(database, repo, codebase, branchInfo, selection.MainBranch, sinceDate, userEmail, githubUsername, llmClient)
 		if err != nil {
 			VerboseLog("Warning: failed to ingest branch %s: %v", branchInfo.Name, err)
 			continue
@@ -349,7 +386,6 @@ func ingestGitHistory(absPath string, cfg *config.Config) error {
 }
 
 func selectBranches(branches []git.BranchInfo, detectedDefault string) (*BranchSelection, error) {
-	titleColor := color.New(color.FgHiCyan)
 	dimColor := color.New(color.FgHiBlack)
 
 	// If branches specified via flag, use them
@@ -377,142 +413,24 @@ func selectBranches(branches []git.BranchInfo, detectedDefault string) (*BranchS
 		}, nil
 	}
 
-	// Interactive selection
+	// Interactive selection using Bubbletea TUI
 	fmt.Println()
-	titleColor.Println("  Branch Selection")
-	dimColor.Println("  " + strings.Repeat("─", 40))
-	fmt.Println()
-
-	// Build branch name list
-	var branchNames []string
-	for _, b := range branches {
-		branchNames = append(branchNames, b.Name)
-	}
-
-	// Step 1: Select main/default branch
-	dimColor.Println("  Select the main branch (commits from other branches will be")
-	dimColor.Println("  compared against this to avoid duplicates):")
-	fmt.Println()
-
-	// Find default index
-	defaultIndex := 0
-	for i, name := range branchNames {
-		if name == detectedDefault {
-			defaultIndex = i
-			break
-		}
-	}
-
-	mainPrompt := promptui.Select{
-		Label: "Main Branch",
-		Items: branchNames,
-		Size:  10,
-		Templates: &promptui.SelectTemplates{
-			Label:    "{{ . }}",
-			Active:   "▸ {{ . | cyan }}",
-			Inactive: "  {{ . }}",
-			Selected: "  ✓ Main branch: {{ . | green }}",
-		},
-		CursorPos: defaultIndex,
-	}
-
-	_, mainBranch, err := mainPrompt.Run()
+	selection, err := tui.RunBranchSelection(branches, detectedDefault)
 	if err != nil {
-		return nil, fmt.Errorf("main branch selection cancelled: %w", err)
-	}
-
-	// Step 2: Select additional branches to ingest
-	fmt.Println()
-	dimColor.Println("  Select additional branches to ingest (space to select, enter to confirm):")
-	dimColor.Println("  Only commits unique to each branch will be ingested.")
-	fmt.Println()
-
-	// For multi-select, we'll use a different approach
-	// Create a list of checkable items
-	selectedBranches := []string{mainBranch}
-
-	// Filter out main branch from selection
-	var otherBranches []string
-	for _, name := range branchNames {
-		if name != mainBranch {
-			otherBranches = append(otherBranches, name)
-		}
-	}
-
-	if len(otherBranches) > 0 {
-		// Ask if user wants to select additional branches
-		confirmPrompt := promptui.Select{
-			Label: "Ingest additional branches?",
-			Items: []string{"Yes, let me select", "No, only main branch", "Yes, all branches"},
-			Templates: &promptui.SelectTemplates{
-				Label:    "{{ . }}",
-				Active:   "▸ {{ . | cyan }}",
-				Inactive: "  {{ . }}",
-				Selected: "  {{ . | green }}",
-			},
-		}
-
-		idx, _, err := confirmPrompt.Run()
-		if err != nil {
-			return nil, fmt.Errorf("selection cancelled: %w", err)
-		}
-
-		switch idx {
-		case 0: // Yes, let me select
-			selectedBranches = append(selectedBranches, selectMultipleBranches(otherBranches)...)
-		case 1: // No, only main branch
-			// Keep only main branch
-		case 2: // Yes, all branches
-			selectedBranches = append(selectedBranches, otherBranches...)
-		}
+		return nil, err
 	}
 
 	fmt.Println()
-	dimColor.Printf("  Selected %d branch(es): %s\n", len(selectedBranches), strings.Join(selectedBranches, ", "))
+	dimColor.Printf("  Selected %d branch(es): %s\n", len(selection.SelectedBranches), strings.Join(selection.SelectedBranches, ", "))
 	fmt.Println()
 
 	return &BranchSelection{
-		MainBranch:       mainBranch,
-		SelectedBranches: selectedBranches,
+		MainBranch:       selection.MainBranch,
+		SelectedBranches: selection.SelectedBranches,
 	}, nil
 }
 
-func selectMultipleBranches(branches []string) []string {
-	if len(branches) == 0 {
-		return nil
-	}
-
-	var selected []string
-
-	// Use individual prompts for each branch
-	for _, branch := range branches {
-		prompt := promptui.Select{
-			Label: fmt.Sprintf("Include '%s'?", branch),
-			Items: []string{"Yes", "No"},
-			Templates: &promptui.SelectTemplates{
-				Label:    "{{ . }}",
-				Active:   "▸ {{ . | cyan }}",
-				Inactive: "  {{ . }}",
-				Selected: "",
-			},
-			HideSelected: true,
-		}
-
-		idx, _, err := prompt.Run()
-		if err != nil {
-			continue
-		}
-
-		if idx == 0 { // Yes
-			selected = append(selected, branch)
-			fmt.Printf("  ✓ %s\n", branch)
-		}
-	}
-
-	return selected
-}
-
-func ingestBranch(database *gorm.DB, repo *git.Repository, codebase *db.Codebase, branchInfo git.BranchInfo, baseBranch string, sinceDate time.Time, userEmail string) (int, int, error) {
+func ingestBranch(database *sql.DB, repo *git.Repository, codebase *db.Codebase, branchInfo git.BranchInfo, baseBranch string, sinceDate time.Time, userEmail string, githubUsername string, llmClient llm.LLMClient) (int, int, error) {
 	// Get or create branch record
 	branch, err := db.GetBranch(database, codebase.ID, branchInfo.Name)
 	if err != nil {
@@ -532,6 +450,10 @@ func ingestBranch(database *gorm.DB, repo *git.Repository, codebase *db.Codebase
 			CreatedAt:  time.Now(),
 			UpdatedAt:  time.Now(),
 		}
+		// Save branch first so commits can reference it
+		if err := db.UpsertBranch(database, branch); err != nil {
+			VerboseLog("Warning: failed to create branch %s: %v", branchInfo.Name, err)
+		}
 	}
 
 	// Get cursor for incremental updates
@@ -547,8 +469,10 @@ func ingestBranch(database *gorm.DB, repo *git.Repository, codebase *db.Codebase
 		commitHashes, err = repo.GetCommitsOnBranch(branchInfo.Name, baseBranch)
 	}
 	if err != nil {
+		VerboseLog("Error getting commits for branch %s: %v", branchInfo.Name, err)
 		return 0, 0, err
 	}
+	VerboseLog("Found %d commits for branch %s", len(commitHashes), branchInfo.Name)
 
 	// Track counts
 	var commitCount, fileCount int
@@ -557,17 +481,20 @@ func ingestBranch(database *gorm.DB, repo *git.Repository, codebase *db.Codebase
 	for _, hash := range commitHashes {
 		// Stop at last processed hash
 		if hash == lastHash {
+			VerboseLog("Stopping at last processed hash: %s", lastHash)
 			break
 		}
 
 		// Get commit details
 		gitCommit, err := repo.GetCommit(hash)
 		if err != nil {
+			VerboseLog("Error getting commit %s: %v", hash, err)
 			continue
 		}
 
 		// Check date filter
 		if !sinceDate.IsZero() && gitCommit.Author.When.Before(sinceDate) {
+			VerboseLog("Skipping commit %s: before date filter (commit: %v, filter: %v)", hash[:8], gitCommit.Author.When, sinceDate)
 			continue
 		}
 
@@ -593,10 +520,27 @@ func ingestBranch(database *gorm.DB, repo *git.Repository, codebase *db.Codebase
 		db.UpsertDeveloper(database, dev)
 
 		// Determine if this is a user commit
-		isUserCommit := userEmail != "" && strings.EqualFold(author.Email, userEmail)
+		// Match by email or by GitHub username extracted from noreply email
+		isUserCommit := false
+		if userEmail != "" && strings.EqualFold(author.Email, userEmail) {
+			isUserCommit = true
+		} else if isUserCommitByGitHub(author.Email, githubUsername) {
+			isUserCommit = true
+		}
 
 		// Get commit stats
 		stats, fileChanges := getCommitStats(repo, gitCommit)
+
+		// Generate commit summary for user commits
+		var commitSummary string
+		if isUserCommit && llmClient != nil && len(fileChanges) > 0 {
+			summary, err := generateCommitSummary(llmClient, gitCommit.Message, fileChanges)
+			if err != nil {
+				VerboseLog("Warning: failed to generate commit summary: %v", err)
+			} else {
+				commitSummary = summary
+			}
+		}
 
 		// Create commit record
 		commit := &db.Commit{
@@ -606,6 +550,7 @@ func ingestBranch(database *gorm.DB, repo *git.Repository, codebase *db.Codebase
 			BranchID:          branch.ID,
 			AuthorEmail:       author.Email,
 			Message:           strings.TrimSpace(gitCommit.Message),
+			Summary:           commitSummary,
 			CommittedAt:       author.When,
 			Stats:             stats,
 			IsUserCommit:      isUserCommit,
@@ -1025,4 +970,68 @@ func formatBytes(b int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGTPE"[exp])
+}
+
+// generateCommitSummary generates a meaningful summary for a commit using file changes
+func generateCommitSummary(client llm.LLMClient, commitMessage string, fileChanges []*db.FileChange) (string, error) {
+	// Build context from file changes
+	var sb strings.Builder
+	sb.WriteString("Commit message: ")
+	sb.WriteString(commitMessage)
+	sb.WriteString("\n\nFiles changed:\n")
+
+	totalAdditions := 0
+	totalDeletions := 0
+
+	for i, fc := range fileChanges {
+		if i >= 20 {
+			sb.WriteString(fmt.Sprintf("... and %d more files\n", len(fileChanges)-20))
+			break
+		}
+
+		sb.WriteString(fmt.Sprintf("- %s (%s): +%d/-%d\n", fc.FilePath, fc.ChangeType, fc.Additions, fc.Deletions))
+		totalAdditions += fc.Additions
+		totalDeletions += fc.Deletions
+
+		// Include patch snippet for context (first 500 chars)
+		if fc.Patch != "" && len(fc.Patch) > 0 {
+			patchPreview := fc.Patch
+			if len(patchPreview) > 500 {
+				patchPreview = patchPreview[:500] + "..."
+			}
+			// Only include actual code changes, not headers
+			lines := strings.Split(patchPreview, "\n")
+			var codeLines []string
+			for _, line := range lines {
+				if strings.HasPrefix(line, "+") || strings.HasPrefix(line, "-") {
+					if !strings.HasPrefix(line, "+++") && !strings.HasPrefix(line, "---") {
+						codeLines = append(codeLines, line)
+					}
+				}
+			}
+			if len(codeLines) > 0 {
+				sb.WriteString("  Changes:\n")
+				for j, line := range codeLines {
+					if j >= 10 {
+						break
+					}
+					sb.WriteString(fmt.Sprintf("    %s\n", line))
+				}
+			}
+		}
+	}
+
+	sb.WriteString(fmt.Sprintf("\nTotal: +%d/-%d lines across %d files\n", totalAdditions, totalDeletions, len(fileChanges)))
+
+	prompt := fmt.Sprintf(`Analyze this git commit and write a clear, technical summary of what was accomplished.
+Focus on the WHAT and WHY, not just listing files. Be specific about functionality added/changed.
+Keep it to 1-2 sentences, max 100 words. Be professional and technical.
+Do NOT include any preamble like "Here is a summary" - just write the summary directly.
+
+%s`, sb.String())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	return client.Complete(ctx, prompt)
 }

@@ -1,270 +1,244 @@
 package db
 
 import (
-	"database/sql/driver"
+	"database/sql"
 	"encoding/json"
-	"errors"
 	"time"
-
-	"gorm.io/gorm"
 )
-
-// JSON type for storing JSON data in SQLite
-type JSON map[string]interface{}
-
-func (j JSON) Value() (driver.Value, error) {
-	if j == nil {
-		return nil, nil
-	}
-	return json.Marshal(j)
-}
-
-func (j *JSON) Scan(value interface{}) error {
-	if value == nil {
-		*j = nil
-		return nil
-	}
-	bytes, ok := value.([]byte)
-	if !ok {
-		return errors.New("type assertion to []byte failed")
-	}
-	return json.Unmarshal(bytes, j)
-}
-
-// StringSlice type for storing string arrays in SQLite
-type StringSlice []string
-
-func (s StringSlice) Value() (driver.Value, error) {
-	if s == nil {
-		return nil, nil
-	}
-	return json.Marshal(s)
-}
-
-func (s *StringSlice) Scan(value interface{}) error {
-	if value == nil {
-		*s = nil
-		return nil
-	}
-	bytes, ok := value.([]byte)
-	if !ok {
-		return errors.New("type assertion to []byte failed")
-	}
-	return json.Unmarshal(bytes, s)
-}
-
-// IntMap type for storing map[string]int in SQLite
-type IntMap map[string]int
-
-func (m IntMap) Value() (driver.Value, error) {
-	if m == nil {
-		return nil, nil
-	}
-	return json.Marshal(m)
-}
-
-func (m *IntMap) Scan(value interface{}) error {
-	if value == nil {
-		*m = nil
-		return nil
-	}
-	bytes, ok := value.([]byte)
-	if !ok {
-		return errors.New("type assertion to []byte failed")
-	}
-	return json.Unmarshal(bytes, m)
-}
 
 // Developer represents a git author
 type Developer struct {
-	ID            string `gorm:"primaryKey"`
-	Name          string `gorm:"not null"`
-	Email         string `gorm:"uniqueIndex;not null"`
-	IsCurrentUser bool   `gorm:"default:false"`
-
-	Commits []Commit `gorm:"foreignKey:AuthorEmail;references:Email"`
+	ID            string
+	Name          string
+	Email         string
+	IsCurrentUser bool
 }
 
 // Codebase represents an indexed repository
 type Codebase struct {
-	ID            string `gorm:"primaryKey"`
-	Path          string `gorm:"uniqueIndex;not null"`
-	Name          string `gorm:"not null"`
+	ID            string
+	Path          string
+	Name          string
 	Summary       string
-	TechStack     IntMap `gorm:"type:json"`
+	TechStack     map[string]int
 	DefaultBranch string
 	IndexedAt     time.Time
-
-	Branches      []Branch      `gorm:"foreignKey:CodebaseID"`
-	Commits       []Commit      `gorm:"foreignKey:CodebaseID"`
-	Folders       []Folder      `gorm:"foreignKey:CodebaseID"`
-	Files         []FileIndex   `gorm:"foreignKey:CodebaseID"`
-	IngestCursors []IngestCursor `gorm:"foreignKey:CodebaseID"`
 }
 
 // Branch represents a git branch
 type Branch struct {
-	ID              string `gorm:"primaryKey"`
-	CodebaseID      string `gorm:"index;not null"`
-	Name            string `gorm:"not null"`
-	IsDefault       bool   `gorm:"default:false"`
+	ID              string
+	CodebaseID      string
+	Name            string
+	IsDefault       bool
 	BaseBranch      string
 	Summary         string
-	Story           string // User-provided description of work on this branch
-	Status          string `gorm:"default:'active'"`
+	Story           string
+	Status          string
 	FirstCommitHash string
 	LastCommitHash  string
-	CommitCount     int `gorm:"default:0"`
+	CommitCount     int
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
-
-	Codebase Codebase `gorm:"foreignKey:CodebaseID"`
-	Commits  []Commit `gorm:"foreignKey:BranchID"`
-}
-
-func (Branch) TableName() string {
-	return "branches"
-}
-
-// BeforeCreate sets default values
-func (b *Branch) BeforeCreate(tx *gorm.DB) error {
-	if b.Status == "" {
-		b.Status = "active"
-	}
-	if b.CreatedAt.IsZero() {
-		b.CreatedAt = time.Now()
-	}
-	b.UpdatedAt = time.Now()
-	return nil
 }
 
 // Commit represents a git commit
 type Commit struct {
-	ID                string `gorm:"primaryKey"`
-	Hash              string `gorm:"index;not null"`
-	CodebaseID        string `gorm:"index;not null"`
-	BranchID          string `gorm:"index"`
-	AuthorEmail       string `gorm:"index;not null"`
-	Message           string `gorm:"not null"`
+	ID                string
+	Hash              string
+	CodebaseID        string
+	BranchID          string
+	AuthorEmail       string
+	Message           string
 	Summary           string
-	CommittedAt       time.Time `gorm:"index;not null"`
-	Stats             JSON      `gorm:"type:json"`
-	IsUserCommit      bool      `gorm:"index;default:false"`
-	IsOnDefaultBranch bool      `gorm:"default:false"`
-
-	Codebase    Codebase     `gorm:"foreignKey:CodebaseID"`
-	Branch      Branch       `gorm:"foreignKey:BranchID"`
-	Author      Developer    `gorm:"foreignKey:AuthorEmail;references:Email"`
-	FileChanges []FileChange `gorm:"foreignKey:CommitID"`
-}
-
-func (Commit) TableName() string {
-	return "commits"
+	CommittedAt       time.Time
+	Stats             map[string]interface{}
+	IsUserCommit      bool
+	IsOnDefaultBranch bool
 }
 
 // FileChange represents a file change within a commit
 type FileChange struct {
-	ID         string `gorm:"primaryKey"`
-	CommitID   string `gorm:"index;not null"`
-	FilePath   string `gorm:"index;not null"`
-	ChangeType string `gorm:"not null"`
-	Additions  int    `gorm:"default:0"`
-	Deletions  int    `gorm:"default:0"`
+	ID         string
+	CommitID   string
+	FilePath   string
+	ChangeType string
+	Additions  int
+	Deletions  int
 	Patch      string
-
-	Commit Commit `gorm:"foreignKey:CommitID"`
-}
-
-func (FileChange) TableName() string {
-	return "file_changes"
 }
 
 // Folder represents a folder in the codebase
 type Folder struct {
-	ID         string `gorm:"primaryKey"`
-	CodebaseID string `gorm:"index;not null"`
-	Path       string `gorm:"not null"`
-	Name       string `gorm:"not null"`
-	Depth      int    `gorm:"not null"`
+	ID         string
+	CodebaseID string
+	Path       string
+	Name       string
+	Depth      int
 	ParentPath string
 	Summary    string
 	Purpose    string
-	FileCount  int `gorm:"default:0"`
+	FileCount  int
 	IndexedAt  time.Time
-
-	Codebase Codebase    `gorm:"foreignKey:CodebaseID"`
-	Files    []FileIndex `gorm:"foreignKey:FolderID"`
-}
-
-func (Folder) TableName() string {
-	return "folders"
 }
 
 // FileIndex represents an indexed file
 type FileIndex struct {
-	ID           string `gorm:"primaryKey"`
-	CodebaseID   string `gorm:"index;not null"`
-	FolderID     string `gorm:"index"`
-	Path         string `gorm:"not null"`
-	Name         string `gorm:"not null"`
+	ID           string
+	CodebaseID   string
+	FolderID     string
+	Path         string
+	Name         string
 	Extension    string
-	Language     string `gorm:"index"`
+	Language     string
 	SizeBytes    int64
 	LineCount    int
 	Summary      string
 	Purpose      string
-	KeyExports   StringSlice `gorm:"type:json"`
-	Dependencies StringSlice `gorm:"type:json"`
+	KeyExports   []string
+	Dependencies []string
 	ContentHash  string
 	IndexedAt    time.Time
-
-	Codebase Codebase `gorm:"foreignKey:CodebaseID"`
-	Folder   Folder   `gorm:"foreignKey:FolderID"`
-}
-
-func (FileIndex) TableName() string {
-	return "file_indexes"
 }
 
 // IngestCursor tracks ingestion state per branch
 type IngestCursor struct {
-	ID             string `gorm:"primaryKey"`
-	CodebaseID     string `gorm:"index;not null"`
-	BranchName     string `gorm:"not null"`
-	LastCommitHash string `gorm:"not null"`
+	ID             string
+	CodebaseID     string
+	BranchName     string
+	LastCommitHash string
 	UpdatedAt      time.Time
-
-	Codebase Codebase `gorm:"foreignKey:CodebaseID"`
 }
 
-func (IngestCursor) TableName() string {
-	return "ingest_cursors"
+// JSON is a type alias for map[string]interface{} used for JSON columns
+type JSON = map[string]interface{}
+
+// Helper functions for JSON serialization
+
+// NullString converts a string to sql.NullString
+func NullString(s string) sql.NullString {
+	if s == "" {
+		return sql.NullString{}
+	}
+	return sql.NullString{String: s, Valid: true}
 }
 
-// FileDependency represents a dependency between files
-type FileDependency struct {
-	ID             string `gorm:"primaryKey"`
-	SourceFileID   string `gorm:"index;not null"`
-	TargetFileID   string `gorm:"index;not null"`
-	DependencyType string `gorm:"not null"`
-
-	SourceFile FileIndex `gorm:"foreignKey:SourceFileID"`
-	TargetFile FileIndex `gorm:"foreignKey:TargetFileID"`
+// NullTime converts a time.Time to sql.NullTime
+func NullTime(t time.Time) sql.NullTime {
+	if t.IsZero() {
+		return sql.NullTime{}
+	}
+	return sql.NullTime{Time: t, Valid: true}
 }
 
-func (FileDependency) TableName() string {
-	return "file_dependencies"
+// ToJSON converts a value to JSON string
+func ToJSON(v interface{}) string {
+	if v == nil {
+		return ""
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }
 
-// DeveloperCollaboration tracks collaboration between developers
-type DeveloperCollaboration struct {
-	Developer1Email   string `gorm:"primaryKey"`
-	Developer2Email   string `gorm:"primaryKey"`
-	SharedFiles       int    `gorm:"default:0"`
-	SharedCommits     int    `gorm:"default:0"`
-	LastCollaboration time.Time
+// FromJSON parses a JSON string into a map
+func FromJSON(s string) map[string]interface{} {
+	if s == "" {
+		return nil
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal([]byte(s), &m); err != nil {
+		return nil
+	}
+	return m
 }
 
-func (DeveloperCollaboration) TableName() string {
-	return "developer_collaborations"
+// FromJSONIntMap parses a JSON string into a map[string]int
+func FromJSONIntMap(s string) map[string]int {
+	if s == "" {
+		return nil
+	}
+	var m map[string]int
+	if err := json.Unmarshal([]byte(s), &m); err != nil {
+		return nil
+	}
+	return m
+}
+
+// FromJSONStringSlice parses a JSON string into a []string
+func FromJSONStringSlice(s string) []string {
+	if s == "" {
+		return nil
+	}
+	var slice []string
+	if err := json.Unmarshal([]byte(s), &slice); err != nil {
+		return nil
+	}
+	return slice
+}
+
+// convertToIntMap converts DuckDB JSON (which comes as native Go types) to map[string]int
+func convertToIntMap(v interface{}) map[string]int {
+	if v == nil {
+		return nil
+	}
+
+	// DuckDB returns JSON as map[string]interface{}
+	switch m := v.(type) {
+	case map[string]interface{}:
+		result := make(map[string]int)
+		for k, val := range m {
+			switch n := val.(type) {
+			case float64:
+				result[k] = int(n)
+			case int64:
+				result[k] = int(n)
+			case int:
+				result[k] = n
+			}
+		}
+		return result
+	case string:
+		// Fallback to string parsing
+		return FromJSONIntMap(m)
+	}
+	return nil
+}
+
+// convertToMap converts DuckDB JSON to map[string]interface{}
+func convertToMap(v interface{}) map[string]interface{} {
+	if v == nil {
+		return nil
+	}
+
+	switch m := v.(type) {
+	case map[string]interface{}:
+		return m
+	case string:
+		return FromJSON(m)
+	}
+	return nil
+}
+
+// convertToStringSlice converts DuckDB JSON array to []string
+func convertToStringSlice(v interface{}) []string {
+	if v == nil {
+		return nil
+	}
+
+	switch s := v.(type) {
+	case []interface{}:
+		result := make([]string, 0, len(s))
+		for _, item := range s {
+			if str, ok := item.(string); ok {
+				result = append(result, str)
+			}
+		}
+		return result
+	case string:
+		return FromJSONStringSlice(s)
+	}
+	return nil
 }

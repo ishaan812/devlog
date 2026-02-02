@@ -56,6 +56,7 @@ func categorizeChange(previousAuthors map[string]int, currentAuthor string) stri
 	for email, count := range previousAuthors {
 		totalLines += count
 		if email == currentAuthor {
+			
 			selfLines += count
 		}
 	}
