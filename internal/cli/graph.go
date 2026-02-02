@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,13 +9,14 @@ import (
 	"github.com/fatih/color"
 	"github.com/ishaan812/devlog/internal/db"
 	"github.com/spf13/cobra"
+	"gorm.io/gorm"
 )
 
 var (
-	graphType      string
-	graphOutput    string
-	graphMaxNodes  int
-	graphCodebase  string
+	graphType     string
+	graphOutput   string
+	graphMaxNodes int
+	graphCodebase string
 )
 
 var graphCmd = &cobra.Command{
@@ -120,7 +120,7 @@ func runGraph(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func generateStructureGraph(database *sql.DB, codebasePath string, maxNodes int) (string, error) {
+func generateStructureGraph(database *gorm.DB, codebasePath string, maxNodes int) (string, error) {
 	// Get codebase
 	if codebasePath == "" {
 		codebasePath, _ = filepath.Abs(".")
@@ -252,46 +252,32 @@ func generateStructureGraph(database *sql.DB, codebasePath string, maxNodes int)
 	return sb.String(), nil
 }
 
-func generateCommitsGraph(database *sql.DB, maxNodes int) (string, error) {
-	// Query recent commits grouped by author
-	rows, err := database.Query(`
-		SELECT author_email, COUNT(*) as commit_count, MAX(committed_at) as last_commit
-		FROM commit
-		GROUP BY author_email
-		ORDER BY commit_count DESC
-		LIMIT ?
-	`, maxNodes)
+func generateCommitsGraph(database *gorm.DB, maxNodes int) (string, error) {
+	// Query recent commits grouped by author using GORM
+	type AuthorStats struct {
+		AuthorEmail string
+		CommitCount int
+	}
+
+	var authors []AuthorStats
+	err := database.Model(&db.Commit{}).
+		Select("author_email, COUNT(*) as commit_count").
+		Group("author_email").
+		Order("commit_count DESC").
+		Limit(maxNodes).
+		Scan(&authors).Error
 	if err != nil {
 		return "", err
 	}
-	defer rows.Close()
 
 	var sb strings.Builder
 	sb.WriteString("flowchart LR\n")
 
-	nodeCount := 0
-	var authors []struct {
-		Email       string
-		CommitCount int
-	}
-
-	for rows.Next() {
-		var email string
-		var count int
-		var lastCommit interface{}
-		rows.Scan(&email, &count, &lastCommit)
-		authors = append(authors, struct {
-			Email       string
-			CommitCount int
-		}{email, count})
-	}
-
 	// Add author nodes
 	for i, a := range authors {
 		nodeID := fmt.Sprintf("dev%d", i)
-		name := strings.Split(a.Email, "@")[0]
+		name := strings.Split(a.AuthorEmail, "@")[0]
 		sb.WriteString(fmt.Sprintf("    %s((\"👤 %s\\n%d commits\"))\n", nodeID, name, a.CommitCount))
-		nodeCount++
 	}
 
 	// Add repo node
@@ -312,46 +298,43 @@ func generateCommitsGraph(database *sql.DB, maxNodes int) (string, error) {
 	return sb.String(), nil
 }
 
-func generateFilesGraph(database *sql.DB, maxNodes int) (string, error) {
-	// Query most changed files
-	rows, err := database.Query(`
-		SELECT file_path, COUNT(*) as change_count, SUM(additions) as total_additions
-		FROM file_change
-		GROUP BY file_path
-		ORDER BY change_count DESC
-		LIMIT ?
-	`, maxNodes)
+func generateFilesGraph(database *gorm.DB, maxNodes int) (string, error) {
+	// Query most changed files using GORM
+	type FileStats struct {
+		FilePath    string
+		ChangeCount int
+	}
+
+	var fileStats []FileStats
+	err := database.Model(&db.FileChange{}).
+		Select("file_path, COUNT(*) as change_count").
+		Group("file_path").
+		Order("change_count DESC").
+		Limit(maxNodes).
+		Scan(&fileStats).Error
 	if err != nil {
 		return "", err
 	}
-	defer rows.Close()
 
 	var sb strings.Builder
 	sb.WriteString("flowchart TD\n")
 	sb.WriteString("    subgraph hotspots[\"🔥 Most Changed Files\"]\n")
 
-	nodeCount := 0
-	for rows.Next() {
-		var filePath string
-		var changeCount int
-		var additions interface{}
-		rows.Scan(&filePath, &changeCount, &additions)
-
-		nodeID := fmt.Sprintf("f%d", nodeCount)
-		name := filepath.Base(filePath)
+	for i, fs := range fileStats {
+		nodeID := fmt.Sprintf("f%d", i)
+		name := filepath.Base(fs.FilePath)
 		ext := filepath.Ext(name)
 		icon := getFileIcon(ext, "")
 
 		// Color based on change frequency
 		style := ""
-		if changeCount > 20 {
+		if fs.ChangeCount > 20 {
 			style = ":::hot"
-		} else if changeCount > 10 {
+		} else if fs.ChangeCount > 10 {
 			style = ":::warm"
 		}
 
-		sb.WriteString(fmt.Sprintf("        %s[\"%s %s\\n%d changes\"]%s\n", nodeID, icon, name, changeCount, style))
-		nodeCount++
+		sb.WriteString(fmt.Sprintf("        %s[\"%s %s\\n%d changes\"]%s\n", nodeID, icon, name, fs.ChangeCount, style))
 	}
 
 	sb.WriteString("    end\n")
@@ -361,13 +344,20 @@ func generateFilesGraph(database *sql.DB, maxNodes int) (string, error) {
 	return sb.String(), nil
 }
 
-func generateCollabGraph(database *sql.DB, maxNodes int) (string, error) {
-	// Find developers who changed the same files
-	rows, err := database.Query(`
+func generateCollabGraph(database *gorm.DB, maxNodes int) (string, error) {
+	// This query is complex, so we use raw SQL through GORM
+	type CollabEdge struct {
+		Dev1        string
+		Dev2        string
+		SharedFiles int
+	}
+
+	var edges []CollabEdge
+	err := database.Raw(`
 		WITH file_authors AS (
 			SELECT DISTINCT fc.file_path, c.author_email
-			FROM file_change fc
-			JOIN commit c ON fc.commit_hash = c.hash
+			FROM file_changes fc
+			JOIN commits c ON fc.commit_id = c.id
 		)
 		SELECT
 			a1.author_email as dev1,
@@ -379,11 +369,10 @@ func generateCollabGraph(database *sql.DB, maxNodes int) (string, error) {
 		HAVING shared_files > 1
 		ORDER BY shared_files DESC
 		LIMIT ?
-	`, maxNodes)
+	`, maxNodes).Scan(&edges).Error
 	if err != nil {
 		return "", err
 	}
-	defer rows.Close()
 
 	var sb strings.Builder
 	sb.WriteString("flowchart LR\n")
@@ -392,24 +381,9 @@ func generateCollabGraph(database *sql.DB, maxNodes int) (string, error) {
 	developers := make(map[string]string)
 	nodeCount := 0
 
-	var edges []struct {
-		Dev1        string
-		Dev2        string
-		SharedFiles int
-	}
-
-	for rows.Next() {
-		var dev1, dev2 string
-		var sharedFiles int
-		rows.Scan(&dev1, &dev2, &sharedFiles)
-		edges = append(edges, struct {
-			Dev1        string
-			Dev2        string
-			SharedFiles int
-		}{dev1, dev2, sharedFiles})
-
+	for _, e := range edges {
 		// Add developer nodes
-		for _, dev := range []string{dev1, dev2} {
+		for _, dev := range []string{e.Dev1, e.Dev2} {
 			if _, exists := developers[dev]; !exists {
 				nodeID := fmt.Sprintf("d%d", nodeCount)
 				developers[dev] = nodeID

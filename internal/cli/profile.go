@@ -229,7 +229,7 @@ func runProfileDelete(cmd *cobra.Command, args []string) error {
 	}
 
 	// Close any open database connection for this profile
-	db.CloseProfile(name)
+	db.CloseDB(name)
 
 	if err := cfg.DeleteProfile(name, deleteProfileData); err != nil {
 		return err

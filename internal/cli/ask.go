@@ -61,8 +61,8 @@ func runAsk(cmd *cobra.Command, args []string) error {
 	}
 
 	// Check if we have any data
-	var count int
-	if err := database.QueryRow("SELECT COUNT(*) FROM commit").Scan(&count); err != nil {
+	var count int64
+	if err := database.Model(&db.Commit{}).Count(&count).Error; err != nil {
 		return fmt.Errorf("failed to query database: %w", err)
 	}
 

@@ -10,7 +10,6 @@ import (
 )
 
 var (
-	dbPath      string
 	verbose     bool
 	profileFlag string
 )
@@ -28,12 +27,6 @@ Use 'devlog profile' to manage profiles.`,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		// Skip profile setup for onboard command (it handles its own setup)
 		if cmd.Name() == "onboard" {
-			return nil
-		}
-
-		// If custom DB path is set, use it (legacy behavior)
-		if dbPath != "" {
-			db.SetDBPath(dbPath)
 			return nil
 		}
 
@@ -83,7 +76,6 @@ func Execute() error {
 }
 
 func init() {
-	rootCmd.PersistentFlags().StringVar(&dbPath, "db", "", "Custom database path (overrides profile)")
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Enable verbose output")
 	rootCmd.PersistentFlags().StringVar(&profileFlag, "profile", "", "Use specific profile (overrides active profile)")
 }

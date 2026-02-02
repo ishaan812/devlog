@@ -1,85 +1,70 @@
 package db
 
 import (
-	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 
-	"github.com/ishaan812/devlog/internal/config"
-
-	_ "github.com/marcboeker/go-duckdb"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
-// DBManager manages database connections for multiple profiles
+var (
+	dbManager     *DBManager
+	dbManagerOnce sync.Once
+)
+
+// DBManager manages database connections per profile
 type DBManager struct {
-	connections   map[string]*sql.DB
+	connections   map[string]*gorm.DB
 	activeProfile string
 	mu            sync.RWMutex
 }
 
-var (
-	manager     *DBManager
-	managerOnce sync.Once
-	// Legacy support: custom path override
-	customDBPath string
-)
-
-// getManager returns the singleton DBManager instance
-func getManager() *DBManager {
-	managerOnce.Do(func() {
-		manager = &DBManager{
-			connections:   make(map[string]*sql.DB),
+// getDBManager returns the singleton DBManager instance
+func getDBManager() *DBManager {
+	dbManagerOnce.Do(func() {
+		dbManager = &DBManager{
+			connections:   make(map[string]*gorm.DB),
 			activeProfile: "default",
 		}
 	})
-	return manager
-}
-
-// SetDBPath sets a custom database path (legacy support, overrides profile)
-func SetDBPath(path string) {
-	customDBPath = path
+	return dbManager
 }
 
 // SetActiveProfile sets the active profile for database operations
 func SetActiveProfile(name string) {
-	m := getManager()
+	m := getDBManager()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.activeProfile = name
 }
 
-// GetActiveProfile returns the current active profile name
+// GetActiveProfile returns the active profile name
 func GetActiveProfile() string {
-	m := getManager()
+	m := getDBManager()
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.activeProfile
 }
 
 // GetDB returns the database connection for the active profile
-func GetDB() (*sql.DB, error) {
-	// If custom path is set, use legacy behavior
-	if customDBPath != "" {
-		return GetDBForPath(customDBPath)
-	}
-
-	m := getManager()
+func GetDB() (*gorm.DB, error) {
+	m := getDBManager()
 	m.mu.RLock()
 	profile := m.activeProfile
 	m.mu.RUnlock()
-
 	return GetDBForProfile(profile)
 }
 
 // GetDBForProfile returns the database connection for a specific profile
-func GetDBForProfile(name string) (*sql.DB, error) {
-	m := getManager()
+func GetDBForProfile(profile string) (*gorm.DB, error) {
+	m := getDBManager()
 
-	// Check if already connected
 	m.mu.RLock()
-	if db, exists := m.connections[name]; exists {
+	if db, ok := m.connections[profile]; ok {
 		m.mu.RUnlock()
 		return db, nil
 	}
@@ -90,127 +75,121 @@ func GetDBForProfile(name string) (*sql.DB, error) {
 	defer m.mu.Unlock()
 
 	// Double-check after acquiring write lock
-	if db, exists := m.connections[name]; exists {
+	if db, ok := m.connections[profile]; ok {
 		return db, nil
 	}
 
-	// Get profile DB path
-	dbPath := config.GetProfileDBPath(name)
-
-	// Ensure directory exists
+	// Create database directory
+	dbPath := getProfileDBPath(profile)
 	dbDir := filepath.Dir(dbPath)
-	if err := os.MkdirAll(dbDir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create profile directory: %w", err)
-	}
-
-	// Initialize the database
-	db, err := initDB(dbPath)
-	if err != nil {
-		return nil, err
-	}
-
-	m.connections[name] = db
-	return db, nil
-}
-
-// GetDBForPath returns a database connection for a specific path
-func GetDBForPath(path string) (*sql.DB, error) {
-	m := getManager()
-
-	// Use path as key
-	m.mu.RLock()
-	if db, exists := m.connections[path]; exists {
-		m.mu.RUnlock()
-		return db, nil
-	}
-	m.mu.RUnlock()
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	// Double-check
-	if db, exists := m.connections[path]; exists {
-		return db, nil
-	}
-
-	// Ensure directory exists
-	dbDir := filepath.Dir(path)
 	if err := os.MkdirAll(dbDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create database directory: %w", err)
 	}
 
-	db, err := initDB(path)
+	// Open database connection with GORM
+	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Silent),
+	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
-	m.connections[path] = db
+	// Enable foreign keys and WAL mode for SQLite
+	db.Exec("PRAGMA foreign_keys = ON")
+	db.Exec("PRAGMA journal_mode = WAL")
+
+	// Run auto-migration
+	if err := autoMigrate(db); err != nil {
+		return nil, fmt.Errorf("failed to migrate database: %w", err)
+	}
+
+	m.connections[profile] = db
 	return db, nil
 }
 
-// initDB initializes a DuckDB connection at the given path
-func initDB(path string) (*sql.DB, error) {
-	db, err := sql.Open("duckdb", path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open DuckDB: %w", err)
-	}
-
-	if err := db.Ping(); err != nil {
-		return nil, fmt.Errorf("failed to ping DuckDB: %w", err)
-	}
-
-	// Install and load DuckPGQ extension (optional)
-	if _, err := db.Exec("INSTALL duckpgq FROM community"); err != nil {
-		// Extension might already be installed, continue
-	}
-	if _, err := db.Exec("LOAD duckpgq"); err != nil {
-		// Extension might not be available, continue without it
-	}
-
-	if err := CreateSchema(db); err != nil {
-		return nil, fmt.Errorf("failed to create schema: %w", err)
-	}
-
-	return db, nil
+// getProfileDBPath returns the database path for a profile
+func getProfileDBPath(profile string) string {
+	homeDir, _ := os.UserHomeDir()
+	return filepath.Join(homeDir, ".devlog", "profiles", profile, "devlog.db")
 }
 
-// InitDB initializes a database at the given path (legacy compatibility)
-func InitDB(customPath string) (*sql.DB, error) {
-	path := customPath
-	if path == "" {
-		// Use default profile path
-		path = config.GetProfileDBPath("default")
+// autoMigrate runs GORM auto-migration for all models
+func autoMigrate(db *gorm.DB) error {
+	return db.AutoMigrate(
+		&Developer{},
+		&Codebase{},
+		&Branch{},
+		&Commit{},
+		&FileChange{},
+		&Folder{},
+		&FileIndex{},
+		&IngestCursor{},
+		&FileDependency{},
+		&DeveloperCollaboration{},
+	)
+}
+
+// CloseDB closes the database connection for a profile
+func CloseDB(profile string) error {
+	m := getDBManager()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if db, ok := m.connections[profile]; ok {
+		sqlDB, err := db.DB()
+		if err != nil {
+			return err
+		}
+		if err := sqlDB.Close(); err != nil {
+			return err
+		}
+		delete(m.connections, profile)
 	}
-	return GetDBForPath(path)
+	return nil
 }
 
 // Close closes all database connections
 func Close() error {
-	m := getManager()
+	m := getDBManager()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	var lastErr error
-	for name, db := range m.connections {
-		if err := db.Close(); err != nil {
-			lastErr = err
+	for profile, db := range m.connections {
+		sqlDB, err := db.DB()
+		if err != nil {
+			continue
 		}
-		delete(m.connections, name)
-	}
-
-	return lastErr
-}
-
-// CloseProfile closes the database connection for a specific profile
-func CloseProfile(name string) error {
-	m := getManager()
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if db, exists := m.connections[name]; exists {
-		err := db.Close()
-		delete(m.connections, name)
-		return err
+		sqlDB.Close()
+		delete(m.connections, profile)
 	}
 	return nil
+}
+
+// GetSchemaDescription returns a description of the database schema
+func GetSchemaDescription() string {
+	return `Tables in the database:
+
+1. developers(id, name, email, is_current_user)
+   - Stores developer information, marks current user
+
+2. codebases(id, path, name, summary, tech_stack, default_branch, indexed_at)
+   - Stores repository metadata
+
+3. branches(id, codebase_id, name, is_default, summary, status, commit_count, ...)
+   - Stores branch information with stories/descriptions
+
+4. commits(id, hash, codebase_id, branch_id, author_email, message, summary, is_user_commit, ...)
+   - Stores commits with branch association, user commits get summaries
+
+5. file_changes(id, commit_id, file_path, change_type, additions, deletions, patch)
+   - Stores individual file changes within commits
+
+6. folders(id, codebase_id, path, name, depth, summary, purpose, file_count)
+   - Stores folder summaries
+
+7. file_indexes(id, codebase_id, path, name, language, summary, purpose)
+   - Stores file summaries for semantic search
+
+8. ingest_cursors(id, codebase_id, branch_name, last_commit_hash)
+   - Tracks ingestion state per branch for incremental updates`
 }

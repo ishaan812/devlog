@@ -2,7 +2,6 @@ package chat
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -10,15 +9,16 @@ import (
 
 	"github.com/ishaan812/devlog/internal/db"
 	"github.com/ishaan812/devlog/internal/llm"
+	"gorm.io/gorm"
 )
 
 type Pipeline struct {
 	client   llm.LLMClient
-	database *sql.DB
+	database *gorm.DB
 	verbose  bool
 }
 
-func NewPipeline(client llm.LLMClient, database *sql.DB, verbose bool) *Pipeline {
+func NewPipeline(client llm.LLMClient, database *gorm.DB, verbose bool) *Pipeline {
 	return &Pipeline{
 		client:   client,
 		database: database,
