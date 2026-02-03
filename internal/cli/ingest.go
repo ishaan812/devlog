@@ -62,6 +62,8 @@ var (
 	ingestGitOnly        bool
 	ingestIndexOnly      bool
 	ingestSkipCommitSums bool
+	ingestFillSummaries  bool
+	ingestForceReindex   bool
 )
 
 var ingestCmd = &cobra.Command{
@@ -113,6 +115,8 @@ func init() {
 	ingestCmd.Flags().BoolVar(&ingestGitOnly, "git-only", false, "Only ingest git history")
 	ingestCmd.Flags().BoolVar(&ingestIndexOnly, "index-only", false, "Only index codebase")
 	ingestCmd.Flags().BoolVar(&ingestSkipCommitSums, "skip-commit-summaries", false, "Skip LLM-generated commit summaries")
+	ingestCmd.Flags().BoolVar(&ingestFillSummaries, "fill-summaries", false, "Generate summaries for existing commits that are missing them")
+	ingestCmd.Flags().BoolVar(&ingestForceReindex, "force-reindex", false, "Force re-indexing all files, ignoring content hashes")
 }
 
 func runIngest(cmd *cobra.Command, args []string) error {
@@ -309,6 +313,14 @@ func ingestGitHistory(absPath string, cfg *config.Config) error {
 		}
 	}
 
+	// Batch-fetch existing commit hashes for efficient deduplication
+	existingHashes, err := db.GetExistingCommitHashes(database, codebase.ID)
+	if err != nil {
+		VerboseLog("Warning: failed to get existing hashes, will check individually: %v", err)
+		existingHashes = make(map[string]bool)
+	}
+	VerboseLog("Found %d existing commits in database", len(existingHashes))
+
 	// Create a map of selected branches for quick lookup
 	selectedMap := make(map[string]bool)
 	for _, b := range selection.SelectedBranches {
@@ -327,7 +339,7 @@ func ingestGitHistory(absPath string, cfg *config.Config) error {
 		// Mark as default
 		branchInfo.IsDefault = true
 
-		commits, files, err := ingestBranch(database, repo, codebase, branchInfo, "", sinceDate, userEmail, githubUsername, llmClient)
+		commits, files, err := ingestBranch(database, repo, codebase, branchInfo, "", sinceDate, userEmail, githubUsername, llmClient, existingHashes)
 		if err != nil {
 			VerboseLog("Warning: failed to ingest branch %s: %v", branchInfo.Name, err)
 			continue
@@ -352,7 +364,7 @@ func ingestGitHistory(absPath string, cfg *config.Config) error {
 			continue
 		}
 
-		commits, files, err := ingestBranch(database, repo, codebase, branchInfo, selection.MainBranch, sinceDate, userEmail, githubUsername, llmClient)
+		commits, files, err := ingestBranch(database, repo, codebase, branchInfo, selection.MainBranch, sinceDate, userEmail, githubUsername, llmClient, existingHashes)
 		if err != nil {
 			VerboseLog("Warning: failed to ingest branch %s: %v", branchInfo.Name, err)
 			continue
@@ -362,6 +374,16 @@ func ingestGitHistory(absPath string, cfg *config.Config) error {
 
 		if commits > 0 {
 			infoColor.Printf("    %s: %d commits\n", branchInfo.Name, commits)
+		}
+	}
+
+	// Fill missing summaries if requested
+	if ingestFillSummaries && llmClient != nil {
+		fillCount, err := fillMissingSummaries(database, repo, codebase, llmClient)
+		if err != nil {
+			VerboseLog("Warning: failed to fill missing summaries: %v", err)
+		} else if fillCount > 0 {
+			successColor.Printf("  Generated %d missing commit summaries\n", fillCount)
 		}
 	}
 
@@ -426,7 +448,7 @@ func selectBranches(branches []git.BranchInfo, detectedDefault string) (*BranchS
 	}, nil
 }
 
-func ingestBranch(database *sql.DB, repo *git.Repository, codebase *db.Codebase, branchInfo git.BranchInfo, baseBranch string, sinceDate time.Time, userEmail string, githubUsername string, llmClient llm.LLMClient) (int, int, error) {
+func ingestBranch(database *sql.DB, repo *git.Repository, codebase *db.Codebase, branchInfo git.BranchInfo, baseBranch string, sinceDate time.Time, userEmail string, githubUsername string, llmClient llm.LLMClient, existingHashes map[string]bool) (int, int, error) {
 	// Get or create branch record
 	branch, err := db.GetBranch(database, codebase.ID, branchInfo.Name)
 	if err != nil {
@@ -468,19 +490,29 @@ func ingestBranch(database *sql.DB, repo *git.Repository, codebase *db.Codebase,
 		VerboseLog("Error getting commits for branch %s: %v", branchInfo.Name, err)
 		return 0, 0, err
 	}
-	VerboseLog("Found %d commits for branch %s", len(commitHashes), branchInfo.Name)
+
+	// Filter to only new commits (not in existingHashes and before cursor)
+	var newCommitHashes []string
+	for _, hash := range commitHashes {
+		// Stop at last processed hash (cursor)
+		if hash == lastHash {
+			VerboseLog("Stopping at cursor hash: %s", lastHash)
+			break
+		}
+		// Skip if already exists in database (batch check)
+		if existingHashes[hash] {
+			continue
+		}
+		newCommitHashes = append(newCommitHashes, hash)
+	}
+
+	VerboseLog("Branch %s: %d total commits, %d new to process", branchInfo.Name, len(commitHashes), len(newCommitHashes))
 
 	// Track counts
 	var commitCount, fileCount int
 	var firstHash, latestHash string
 
-	for _, hash := range commitHashes {
-		// Stop at last processed hash
-		if hash == lastHash {
-			VerboseLog("Stopping at last processed hash: %s", lastHash)
-			break
-		}
-
+	for _, hash := range newCommitHashes {
 		// Get commit details
 		gitCommit, err := repo.GetCommit(hash)
 		if err != nil {
@@ -499,12 +531,6 @@ func ingestBranch(database *sql.DB, repo *git.Repository, codebase *db.Codebase,
 			latestHash = hash
 		}
 		firstHash = hash
-
-		// Check if commit already exists
-		exists, _ := db.CommitExists(database, codebase.ID, hash)
-		if exists {
-			continue
-		}
 
 		// Insert developer
 		author := gitCommit.Author
@@ -557,6 +583,9 @@ func ingestBranch(database *sql.DB, repo *git.Repository, codebase *db.Codebase,
 			VerboseLog("Warning: failed to insert commit %s: %v", hash[:8], err)
 			continue
 		}
+
+		// Mark as existing for subsequent branches
+		existingHashes[hash] = true
 
 		// Insert file changes
 		for _, fc := range fileChanges {
@@ -729,6 +758,7 @@ func indexCodebase(absPath string, cfg *config.Config) error {
 
 	// Get or create codebase record
 	codebase, _ := db.GetCodebaseByPath(database, absPath)
+	isFirstIndex := codebase == nil
 	if codebase == nil {
 		codebase = &db.Codebase{
 			ID:   uuid.New().String(),
@@ -753,8 +783,8 @@ func indexCodebase(absPath string, cfg *config.Config) error {
 		}
 	}
 
-	// Generate codebase summary
-	if !ingestSkipSummaries && summarizer != nil {
+	// Generate codebase summary (only on first index or force reindex)
+	if !ingestSkipSummaries && summarizer != nil && (isFirstIndex || ingestForceReindex || codebase.Summary == "") {
 		s.Suffix = " Generating codebase summary..."
 		s.Start()
 		ctx := context.Background()
@@ -773,14 +803,90 @@ func indexCodebase(absPath string, cfg *config.Config) error {
 		return fmt.Errorf("failed to save codebase: %w", err)
 	}
 
-	// Index folders
+	// === INCREMENTAL INDEXING: Fetch existing data for comparison ===
+	existingFiles, err := db.GetExistingFileHashes(database, codebase.ID)
+	if err != nil {
+		VerboseLog("Warning: couldn't fetch existing files, will re-index all: %v", err)
+		existingFiles = make(map[string]db.ExistingFileInfo)
+	}
+
+	existingFolders, err := db.GetExistingFolderPaths(database, codebase.ID)
+	if err != nil {
+		VerboseLog("Warning: couldn't fetch existing folders: %v", err)
+		existingFolders = make(map[string]string)
+	}
+
+	// Build set of current file/folder paths for deletion detection
+	currentFilePaths := make(map[string]bool)
+	for _, f := range scanResult.Files {
+		currentFilePaths[f.Path] = true
+	}
+	currentFolderPaths := make(map[string]bool)
+	for path := range scanResult.Folders {
+		currentFolderPaths[path] = true
+	}
+
+	// Categorize files: new, changed, unchanged
+	var newFiles, changedFiles, unchangedFiles []indexer.FileInfo
+	for _, fileInfo := range scanResult.Files {
+		existing, exists := existingFiles[fileInfo.Path]
+		if !exists {
+			newFiles = append(newFiles, fileInfo)
+		} else if ingestForceReindex || existing.ContentHash != fileInfo.Hash {
+			changedFiles = append(changedFiles, fileInfo)
+		} else {
+			unchangedFiles = append(unchangedFiles, fileInfo)
+		}
+	}
+
+	// Find deleted files
+	var deletedFilePaths []string
+	for path := range existingFiles {
+		if !currentFilePaths[path] {
+			deletedFilePaths = append(deletedFilePaths, path)
+		}
+	}
+
+	// Find deleted folders
+	var deletedFolderPaths []string
+	for path := range existingFolders {
+		if !currentFolderPaths[path] {
+			deletedFolderPaths = append(deletedFolderPaths, path)
+		}
+	}
+
+	// Report incremental stats
+	if !isFirstIndex && !ingestForceReindex {
+		dimColor.Printf("  Incremental: %d new, %d changed, %d unchanged, %d deleted\n",
+			len(newFiles), len(changedFiles), len(unchangedFiles), len(deletedFilePaths))
+	}
+
+	// Delete removed files and folders
+	if len(deletedFilePaths) > 0 {
+		if err := db.DeleteFileIndexesByPaths(database, codebase.ID, deletedFilePaths); err != nil {
+			VerboseLog("Warning: failed to delete removed files: %v", err)
+		}
+		VerboseLog("Deleted %d removed file indexes", len(deletedFilePaths))
+	}
+	if len(deletedFolderPaths) > 0 {
+		if err := db.DeleteFoldersByPaths(database, codebase.ID, deletedFolderPaths); err != nil {
+			VerboseLog("Warning: failed to delete removed folders: %v", err)
+		}
+		VerboseLog("Deleted %d removed folder indexes", len(deletedFolderPaths))
+	}
+
+	// Index folders (always update metadata, but only generate summaries for new/changed)
 	fmt.Println()
 	dimColor.Printf("  Indexing folders...")
 	folderCount := 0
 	folderIDMap := make(map[string]string)
 
 	for folderPath, folderInfo := range scanResult.Folders {
-		folderID := uuid.New().String()
+		// Reuse existing folder ID if available
+		folderID := existingFolders[folderPath]
+		if folderID == "" {
+			folderID = uuid.New().String()
+		}
 		folderIDMap[folderPath] = folderID
 
 		folder := &db.Folder{
@@ -794,13 +900,16 @@ func indexCodebase(absPath string, cfg *config.Config) error {
 			IndexedAt:  time.Now(),
 		}
 
-		// Generate folder summary for shallow folders
+		// Only generate folder summary for new folders or on force reindex
+		isNewFolder := existingFolders[folderPath] == ""
 		if !ingestSkipSummaries && summarizer != nil && folderInfo.Depth <= 2 && len(folderInfo.Files) > 0 {
-			ctx := context.Background()
-			summary, err := summarizer.SummarizeFolder(ctx, folderInfo)
-			if err == nil {
-				folder.Summary = summary.Summary
-				folder.Purpose = summary.Purpose
+			if isNewFolder || ingestForceReindex {
+				ctx := context.Background()
+				summary, err := summarizer.SummarizeFolder(ctx, folderInfo)
+				if err == nil {
+					folder.Summary = summary.Summary
+					folder.Purpose = summary.Purpose
+				}
 			}
 		}
 
@@ -813,13 +922,21 @@ func indexCodebase(absPath string, cfg *config.Config) error {
 	}
 	fmt.Println()
 
-	// Index files
+	// Index files (only new and changed files need summaries)
+	filesToProcess := append(newFiles, changedFiles...)
 	dimColor.Printf("  Indexing files...")
 	fileCount := 0
 	summarizedCount := 0
+	totalFiles := len(filesToProcess) + len(unchangedFiles)
 
-	for _, fileInfo := range scanResult.Files {
-		fileID := uuid.New().String()
+	// Process new and changed files (need summaries)
+	for _, fileInfo := range filesToProcess {
+		// Check if we had an existing ID to reuse
+		existingInfo := existingFiles[fileInfo.Path]
+		fileID := existingInfo.ID
+		if fileID == "" {
+			fileID = uuid.New().String()
+		}
 
 		folderPath := filepath.Dir(fileInfo.Path)
 		if folderPath == "." {
@@ -841,7 +958,7 @@ func indexCodebase(absPath string, cfg *config.Config) error {
 			IndexedAt:   time.Now(),
 		}
 
-		// Generate file summary
+		// Generate file summary for new/changed files
 		if !ingestSkipSummaries && summarizer != nil && shouldSummarizeFile(fileInfo) {
 			ctx := context.Background()
 			summary, err := summarizer.SummarizeFile(ctx, fileInfo)
@@ -858,11 +975,42 @@ func indexCodebase(absPath string, cfg *config.Config) error {
 		}
 
 		fileCount++
-		if fileCount%10 == 0 || fileCount == len(scanResult.Files) {
-			fmt.Printf("\r  Processed %d/%d files", fileCount, len(scanResult.Files))
+		if fileCount%10 == 0 || fileCount == len(filesToProcess) {
+			fmt.Printf("\r  Processed %d/%d files (summarizing)", fileCount, len(filesToProcess))
 		}
 	}
-	fmt.Println()
+
+	// Update unchanged files (just update metadata, keep existing summary)
+	for _, fileInfo := range unchangedFiles {
+		existingInfo := existingFiles[fileInfo.Path]
+
+		folderPath := filepath.Dir(fileInfo.Path)
+		if folderPath == "." {
+			folderPath = "."
+		}
+		folderID := folderIDMap[folderPath]
+
+		file := &db.FileIndex{
+			ID:          existingInfo.ID,
+			CodebaseID:  codebase.ID,
+			FolderID:    folderID,
+			Path:        fileInfo.Path,
+			Name:        fileInfo.Name,
+			Extension:   fileInfo.Extension,
+			Language:    fileInfo.Language,
+			SizeBytes:   fileInfo.Size,
+			LineCount:   indexer.CountLines(fileInfo.Content),
+			ContentHash: fileInfo.Hash,
+			Summary:     existingInfo.Summary, // Preserve existing summary
+			IndexedAt:   time.Now(),
+		}
+
+		if err := db.UpsertFileIndex(database, file); err != nil {
+			VerboseLog("Warning: failed to save file %s: %v", fileInfo.Path, err)
+		}
+	}
+
+	fmt.Printf("\r  Processed %d/%d files                    \n", totalFiles, totalFiles)
 
 	// Show stats
 	fmt.Println()
@@ -878,7 +1026,12 @@ func indexCodebase(absPath string, cfg *config.Config) error {
 
 	if summarizedCount > 0 {
 		dimColor.Printf("  Summaries:  ")
-		infoColor.Printf("%d files\n", summarizedCount)
+		infoColor.Printf("%d files (new/changed)\n", summarizedCount)
+	}
+
+	if len(deletedFilePaths) > 0 {
+		dimColor.Printf("  Removed:    ")
+		infoColor.Printf("%d files\n", len(deletedFilePaths))
 	}
 
 	return nil
@@ -1030,4 +1183,67 @@ Do NOT include any preamble like "Here is a summary" - just write the summary di
 	defer cancel()
 
 	return client.Complete(ctx, prompt)
+}
+
+// fillMissingSummaries generates summaries for user commits that don't have them
+func fillMissingSummaries(database *sql.DB, repo *git.Repository, codebase *db.Codebase, llmClient llm.LLMClient) (int, error) {
+	dimColor := color.New(color.FgHiBlack)
+
+	// Get user commits missing summaries
+	commits, err := db.GetUserCommitsMissingSummaries(database, codebase.ID)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get commits missing summaries: %w", err)
+	}
+
+	if len(commits) == 0 {
+		VerboseLog("No commits missing summaries")
+		return 0, nil
+	}
+
+	dimColor.Printf("  Filling %d missing commit summaries...\n", len(commits))
+
+	filled := 0
+	for i, commit := range commits {
+		// Get file changes for this commit
+		fileChanges, err := db.GetFileChangesByCommit(database, commit.ID)
+		if err != nil {
+			VerboseLog("Warning: failed to get file changes for commit %s: %v", commit.Hash[:8], err)
+			continue
+		}
+
+		if len(fileChanges) == 0 {
+			VerboseLog("Skipping commit %s: no file changes", commit.Hash[:8])
+			continue
+		}
+
+		// Convert to pointer slice for generateCommitSummary
+		var fcPtrs []*db.FileChange
+		for j := range fileChanges {
+			fcPtrs = append(fcPtrs, &fileChanges[j])
+		}
+
+		// Generate summary
+		summary, err := generateCommitSummary(llmClient, commit.Message, fcPtrs)
+		if err != nil {
+			VerboseLog("Warning: failed to generate summary for commit %s: %v", commit.Hash[:8], err)
+			continue
+		}
+
+		// Update commit with summary
+		if err := db.UpdateCommitSummary(database, commit.ID, summary); err != nil {
+			VerboseLog("Warning: failed to update summary for commit %s: %v", commit.Hash[:8], err)
+			continue
+		}
+
+		filled++
+		if (i+1)%10 == 0 || i+1 == len(commits) {
+			fmt.Printf("\r  Processed %d/%d commits", i+1, len(commits))
+		}
+	}
+
+	if len(commits) > 0 {
+		fmt.Println()
+	}
+
+	return filled, nil
 }

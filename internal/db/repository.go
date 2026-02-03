@@ -297,6 +297,51 @@ func CommitExists(db *sql.DB, codebaseID, hash string) (bool, error) {
 	return count > 0, err
 }
 
+// GetExistingCommitHashes returns a set of commit hashes that already exist for a codebase
+// This is more efficient than checking one-by-one with CommitExists
+func GetExistingCommitHashes(db *sql.DB, codebaseID string) (map[string]bool, error) {
+	rows, err := db.Query(`SELECT hash FROM commits WHERE codebase_id = $1`, codebaseID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	hashes := make(map[string]bool)
+	for rows.Next() {
+		var hash string
+		if err := rows.Scan(&hash); err != nil {
+			return nil, err
+		}
+		hashes[hash] = true
+	}
+	return hashes, rows.Err()
+}
+
+// GetUserCommitsMissingSummaries returns user commits that don't have summaries generated
+func GetUserCommitsMissingSummaries(db *sql.DB, codebaseID string) ([]Commit, error) {
+	rows, err := db.Query(`
+		SELECT id, hash, codebase_id, branch_id, author_email, message, summary,
+			committed_at, stats, is_user_commit, is_on_default_branch
+		FROM commits 
+		WHERE codebase_id = $1 
+			AND is_user_commit = TRUE 
+			AND (summary IS NULL OR summary = '')
+		ORDER BY committed_at DESC
+	`, codebaseID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return scanCommits(rows)
+}
+
+// UpdateCommitSummary updates just the summary field for a commit
+func UpdateCommitSummary(db *sql.DB, commitID, summary string) error {
+	_, err := db.Exec(`UPDATE commits SET summary = $1 WHERE id = $2`, summary, commitID)
+	return err
+}
+
 // GetCommitByHash retrieves a commit by hash
 func GetCommitByHash(db *sql.DB, codebaseID, hash string) (*Commit, error) {
 	row := db.QueryRow(`
@@ -563,6 +608,92 @@ func GetFilesByCodebase(db *sql.DB, codebaseID string) ([]FileIndex, error) {
 	defer rows.Close()
 
 	return scanFileIndexes(rows)
+}
+
+// ExistingFileInfo holds minimal info needed for incremental indexing
+type ExistingFileInfo struct {
+	ID          string
+	Path        string
+	ContentHash string
+	Summary     string
+}
+
+// GetExistingFileHashes returns a map of file path -> ExistingFileInfo for efficient change detection
+func GetExistingFileHashes(db *sql.DB, codebaseID string) (map[string]ExistingFileInfo, error) {
+	rows, err := db.Query(`
+		SELECT id, path, content_hash, summary 
+		FROM file_indexes 
+		WHERE codebase_id = $1
+	`, codebaseID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[string]ExistingFileInfo)
+	for rows.Next() {
+		var info ExistingFileInfo
+		var contentHash, summary sql.NullString
+		if err := rows.Scan(&info.ID, &info.Path, &contentHash, &summary); err != nil {
+			return nil, err
+		}
+		info.ContentHash = contentHash.String
+		info.Summary = summary.String
+		result[info.Path] = info
+	}
+	return result, rows.Err()
+}
+
+// DeleteFileIndex deletes a file index record
+func DeleteFileIndex(db *sql.DB, codebaseID, path string) error {
+	_, err := db.Exec(`DELETE FROM file_indexes WHERE codebase_id = $1 AND path = $2`, codebaseID, path)
+	return err
+}
+
+// DeleteFileIndexesByPaths deletes multiple file index records
+func DeleteFileIndexesByPaths(db *sql.DB, codebaseID string, paths []string) error {
+	if len(paths) == 0 {
+		return nil
+	}
+	// DuckDB doesn't support arrays in IN clause the same way, so we delete one by one
+	for _, path := range paths {
+		if _, err := db.Exec(`DELETE FROM file_indexes WHERE codebase_id = $1 AND path = $2`, codebaseID, path); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// GetExistingFolderPaths returns a set of folder paths for a codebase
+func GetExistingFolderPaths(db *sql.DB, codebaseID string) (map[string]string, error) {
+	rows, err := db.Query(`SELECT id, path FROM folders WHERE codebase_id = $1`, codebaseID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[string]string)
+	for rows.Next() {
+		var id, path string
+		if err := rows.Scan(&id, &path); err != nil {
+			return nil, err
+		}
+		result[path] = id
+	}
+	return result, rows.Err()
+}
+
+// DeleteFoldersByPaths deletes multiple folder records
+func DeleteFoldersByPaths(db *sql.DB, codebaseID string, paths []string) error {
+	if len(paths) == 0 {
+		return nil
+	}
+	for _, path := range paths {
+		if _, err := db.Exec(`DELETE FROM folders WHERE codebase_id = $1 AND path = $2`, codebaseID, path); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // GetFilesByFolder retrieves all files in a folder
