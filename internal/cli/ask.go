@@ -5,11 +5,12 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/spf13/cobra"
+
 	"github.com/ishaan812/devlog/internal/chat"
 	"github.com/ishaan812/devlog/internal/config"
 	"github.com/ishaan812/devlog/internal/db"
 	"github.com/ishaan812/devlog/internal/llm"
-	"github.com/spf13/cobra"
 )
 
 var (

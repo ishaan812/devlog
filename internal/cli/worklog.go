@@ -10,10 +10,11 @@ import (
 	"time"
 
 	"github.com/fatih/color"
+	"github.com/spf13/cobra"
+
 	"github.com/ishaan812/devlog/internal/config"
 	"github.com/ishaan812/devlog/internal/db"
 	"github.com/ishaan812/devlog/internal/llm"
-	"github.com/spf13/cobra"
 )
 
 var (
@@ -194,7 +195,6 @@ func queryCommitsForWorklog(ctx context.Context, dbRepo *db.SQLRepository, codeb
 		}
 		queryStr += fmt.Sprintf(" AND c.branch_id = $%d", argIdx)
 		args = append(args, branch.ID)
-		argIdx++
 	}
 
 	queryStr += " ORDER BY c.committed_at DESC"
@@ -550,13 +550,13 @@ func writeBranchSummaryBullets(sb *strings.Builder, group branchGroup) {
 
 	if len(summaryBullets) > 0 {
 		for _, summary := range summaryBullets {
-			sb.WriteString(fmt.Sprintf("- %s\n", summary))
+			fmt.Fprintf(sb, "- %s\n", summary)
 		}
 	} else {
 		// Fall back to commit messages if no summaries
 		for _, c := range group.Commits {
 			message := strings.Split(strings.TrimSpace(c.Message), "\n")[0]
-			sb.WriteString(fmt.Sprintf("- %s\n", message))
+			fmt.Fprintf(sb, "- %s\n", message)
 		}
 	}
 	sb.WriteString("\n")
@@ -643,7 +643,7 @@ Commit descriptions:
 	return client.Complete(ctx, prompt)
 }
 
-// writeFallbackUpdates writes commit messages as bullet points when LLM is not available
+// writeFallbackUpdates writes commit messages as bullet points when LLM is not available.
 func writeFallbackUpdates(sb *strings.Builder, commits []commitData) {
 	for _, c := range commits {
 		if c.Summary != "" {
@@ -652,10 +652,10 @@ func writeFallbackUpdates(sb *strings.Builder, commits []commitData) {
 			if len(summary) > 150 {
 				summary = summary[:147] + "..."
 			}
-			sb.WriteString(fmt.Sprintf("- %s\n", summary))
+			fmt.Fprintf(sb, "- %s\n", summary)
 		} else {
 			message := strings.Split(strings.TrimSpace(c.Message), "\n")[0]
-			sb.WriteString(fmt.Sprintf("- %s\n", message))
+			fmt.Fprintf(sb, "- %s\n", message)
 		}
 	}
 }
@@ -687,46 +687,4 @@ Commit messages:
 	defer cancel()
 
 	return client.Complete(ctx, prompt)
-}
-
-func generateDaySummary(group dayGroup, client llm.Client) (string, error) {
-	var messages []string
-	for _, c := range group.Commits {
-		messages = append(messages, strings.TrimSpace(c.Message))
-	}
-
-	if len(messages) == 0 {
-		return "", nil
-	}
-
-	prompt := fmt.Sprintf(`Summarize these git commits from one day in one sentence. Be brief and professional.
-
-Commits:
-%s`, strings.Join(messages, "\n"))
-
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	return client.Complete(ctx, prompt)
-}
-
-// getDaySummaryFromCommits combines stored commit summaries into a day summary
-func getDaySummaryFromCommits(commits []commitData) string {
-	var summaries []string
-	for _, c := range commits {
-		if c.Summary != "" {
-			summaries = append(summaries, c.Summary)
-		}
-	}
-
-	if len(summaries) == 0 {
-		return ""
-	}
-
-	if len(summaries) == 1 {
-		return summaries[0]
-	}
-
-	// Combine multiple summaries
-	return strings.Join(summaries, " ")
 }

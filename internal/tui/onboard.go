@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
 	"github.com/ishaan812/devlog/internal/config"
 )
 
@@ -18,10 +19,6 @@ var (
 	titleStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(lipgloss.Color("86")).
-			MarginBottom(1)
-
-	subtitleStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("241")).
 			MarginBottom(1)
 
 	selectedStyle = lipgloss.NewStyle().
@@ -357,8 +354,7 @@ func (m Model) handleEnter() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) advanceStep() (tea.Model, tea.Cmd) {
-	switch m.step {
-	case stepProviderConfig:
+	if m.step == stepProviderConfig {
 		m.step = stepGitHubUsername
 		m.prepareStep()
 	}
@@ -716,7 +712,7 @@ func RunOnboard() (*config.Config, error) {
 
 	m := finalModel.(Model)
 	if m.step != stepSuccess {
-		return nil, fmt.Errorf("onboarding cancelled")
+		return nil, fmt.Errorf("onboarding canceled")
 	}
 
 	return m.config, nil

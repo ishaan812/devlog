@@ -9,10 +9,11 @@ import (
 
 	"github.com/briandowns/spinner"
 	"github.com/fatih/color"
-	"github.com/ishaan812/devlog/internal/config"
-	"github.com/ishaan812/devlog/internal/tui"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
+
+	"github.com/ishaan812/devlog/internal/config"
+	"github.com/ishaan812/devlog/internal/tui"
 )
 
 var (
@@ -50,9 +51,9 @@ func runOnboard(cmd *cobra.Command, args []string) error {
 	if !onboardLegacy && term.IsTerminal(int(os.Stdin.Fd())) {
 		cfg, err := tui.RunOnboard()
 		if err != nil {
-			// If TUI fails or is cancelled, fall back to legacy
-			if err.Error() == "onboarding cancelled" {
-				fmt.Println("Onboarding cancelled.")
+			// If TUI fails or is canceled, fall back to legacy
+			if err.Error() == "onboarding canceled" {
+				fmt.Println("Onboarding canceled.")
 				return nil
 			}
 			// For other errors, try legacy mode

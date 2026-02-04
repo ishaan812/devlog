@@ -8,10 +8,11 @@ import (
 	"time"
 
 	"github.com/fatih/color"
+	"github.com/spf13/cobra"
+
 	"github.com/ishaan812/devlog/internal/config"
 	"github.com/ishaan812/devlog/internal/db"
 	"github.com/ishaan812/devlog/internal/llm"
-	"github.com/spf13/cobra"
 )
 
 var (
@@ -143,7 +144,6 @@ func runSearch(cmd *cobra.Command, args []string) error {
 
 func searchFiles(ctx context.Context, dbRepo *db.SQLRepository, codebase *db.Codebase, query string,
 	titleColor, pathColor, summaryColor, dimColor, purposeColor, semanticColor *color.Color) error {
-
 	var files []db.FileIndex
 	var matchingFolders []db.Folder
 	useSemanticSearch := !searchKeyword && dbRepo.HasEmbeddings(ctx, codebase.ID)
@@ -252,7 +252,6 @@ func searchFiles(ctx context.Context, dbRepo *db.SQLRepository, codebase *db.Cod
 
 func searchCommits(ctx context.Context, dbRepo *db.SQLRepository, codebase *db.Codebase, query string,
 	titleColor, commitColor, dimColor *color.Color) error {
-
 	titleColor.Println("  Commits")
 	fmt.Println()
 
@@ -292,7 +291,7 @@ func searchCommits(ctx context.Context, dbRepo *db.SQLRepository, codebase *db.C
 	queryStr += fmt.Sprintf(" ORDER BY committed_at DESC LIMIT $%d", argIdx)
 	args = append(args, searchLimit)
 
-	results, err := dbRepo.ExecuteQuery(ctx, queryStr)
+	results, err := dbRepo.ExecuteQueryWithArgs(ctx, queryStr, args...)
 	if err != nil {
 		return fmt.Errorf("failed to search commits: %w", err)
 	}

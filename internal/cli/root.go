@@ -4,9 +4,10 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/spf13/cobra"
+
 	"github.com/ishaan812/devlog/internal/config"
 	"github.com/ishaan812/devlog/internal/db"
-	"github.com/spf13/cobra"
 )
 
 var (
@@ -84,7 +85,7 @@ func IsVerbose() bool {
 	return verbose
 }
 
-func VerboseLog(format string, args ...interface{}) {
+func VerboseLog(format string, args ...any) {
 	if verbose {
 		fmt.Fprintf(os.Stderr, "[DEBUG] "+format+"\n", args...)
 	}

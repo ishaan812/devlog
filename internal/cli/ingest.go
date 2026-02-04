@@ -11,13 +11,14 @@ import (
 	"github.com/briandowns/spinner"
 	"github.com/fatih/color"
 	"github.com/google/uuid"
+	"github.com/spf13/cobra"
+
 	"github.com/ishaan812/devlog/internal/config"
 	"github.com/ishaan812/devlog/internal/db"
 	"github.com/ishaan812/devlog/internal/git"
 	"github.com/ishaan812/devlog/internal/indexer"
 	"github.com/ishaan812/devlog/internal/llm"
 	"github.com/ishaan812/devlog/internal/tui"
-	"github.com/spf13/cobra"
 )
 
 // githubNoReplyRegex matches GitHub noreply emails: username@users.noreply.github.com or 12345+username@users.noreply.github.com

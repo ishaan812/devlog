@@ -8,10 +8,11 @@ import (
 	"time"
 
 	"github.com/fatih/color"
-	"github.com/ishaan812/devlog/internal/db"
-	"github.com/ishaan812/devlog/internal/git"
 	"github.com/manifoldco/promptui"
 	"github.com/spf13/cobra"
+
+	"github.com/ishaan812/devlog/internal/db"
+	"github.com/ishaan812/devlog/internal/git"
 )
 
 var (
@@ -345,7 +346,7 @@ func runBranchStory(cmd *cobra.Command, args []string) error {
 		prompt := promptui.Prompt{Label: "Enter new story", Default: branch.Story}
 		story, err = prompt.Run()
 		if err != nil {
-			return fmt.Errorf("cancelled")
+			return fmt.Errorf("canceled")
 		}
 	}
 

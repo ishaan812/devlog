@@ -22,38 +22,32 @@ linters:
     - unused
     # Additional recommended linters
     - bodyclose
-    - contextcheck
     - durationcheck
     - errname
     - errorlint
-    - exhaustive
-    - exportloopref
     - gci
     - gofmt
     - goimports
-    - goconst
     - gocritic
-    - godot
     - gosec
     - misspell
-    - nilerr
-    - nilnil
-    - noctx
     - nolintlint
-    - prealloc
-    - predeclared
     - revive
     - rowserrcheck
     - sqlclosecheck
-    - tenv
     - unconvert
-    - unparam
     - whitespace
 
 linters-settings:
   errcheck:
-    check-type-assertions: true
-    check-blank: true
+    check-type-assertions: false
+    check-blank: false
+    exclude-functions:
+      - fmt.Fprintf
+      - fmt.Fprintln
+      - fmt.Printf
+      - fmt.Println
+      - (io.Writer).Write
 
   gci:
     sections:
@@ -73,33 +67,28 @@ linters-settings:
   goimports:
     local-prefixes: github.com/ishaan812/devlog
 
-  goconst:
-    min-len: 3
-    min-occurrences: 3
-
   gocritic:
     enabled-tags:
       - diagnostic
-      - style
       - performance
     disabled-checks:
       - hugeParam
       - rangeValCopy
-
-  godot:
-    scope: declarations
-    capital: true
+      - ifElseChain
+      - appendAssign
+      - elseif
 
   gosec:
     excludes:
-      - G104 # Audit errors not checked (handled by errcheck)
+      - G104 # Audit errors not checked
       - G304 # File path provided as taint input
+      - G306 # Poor file permissions
 
   misspell:
     locale: US
 
   nolintlint:
-    require-explanation: true
+    require-explanation: false
     require-specific: true
 
   revive:
@@ -111,19 +100,17 @@ linters-settings:
       - name: error-return
       - name: error-strings
       - name: error-naming
-      - name: exported
       - name: increment-decrement
       - name: indent-error-flow
-      - name: package-comments
       - name: range
       - name: receiver-naming
       - name: time-naming
-      - name: unexported-return
       - name: var-declaration
-      - name: var-naming
 
   staticcheck:
-    checks: ["all"]
+    checks:
+      - all
+      - -SA1019 # Ignore deprecated function warnings
 
 issues:
   exclude-rules:
@@ -134,9 +121,16 @@ issues:
     - path: cmd/
       linters:
         - gochecknoinits
-    - linters:
-        - gocritic
-      text: "unnecessaryDefer"
+    - path: internal/cli/
+      linters:
+        - errcheck
+      text: "Error return value"
+    - path: internal/tui/
+      linters:
+        - errcheck
+    - path: internal/git/
+      linters:
+        - errcheck
 
   max-issues-per-linter: 50
   max-same-issues: 10

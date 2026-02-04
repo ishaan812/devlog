@@ -1,8 +1,9 @@
-.PHONY: build install install-local clean test run-ingest run-ask run-worklog run-onboard
+.PHONY: build install install-local clean test run-ingest run-ask run-worklog run-onboard fmt lint tools
 
 BINARY_NAME=devlog
 BUILD_DIR=./bin
 INSTALL_DIR=/usr/local/bin
+GOBIN=$(shell go env GOPATH)/bin
 
 build:
 	go build -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/devlog
@@ -56,20 +57,49 @@ build-all:
 tidy:
 	go mod tidy
 
+# Install dev tools (goimports, golangci-lint)
+tools:
+	@echo "Installing goimports..."
+	go install golang.org/x/tools/cmd/goimports@latest
+	@echo "Installing golangci-lint..."
+	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+	@echo "Tools installed. Make sure $(shell go env GOPATH)/bin is in your PATH."
+
 # Format code
 fmt:
 	@echo "Running gofmt..."
-	gofmt -s -w .
-	@echo "Running goimports..."
-	goimports -w -local github.com/ishaan812/devlog .
+	@gofmt -s -w .
+	@if [ -x "$(GOBIN)/goimports" ]; then \
+		echo "Running goimports..."; \
+		$(GOBIN)/goimports -w -local github.com/ishaan812/devlog .; \
+	elif command -v goimports >/dev/null 2>&1; then \
+		echo "Running goimports..."; \
+		goimports -w -local github.com/ishaan812/devlog .; \
+	else \
+		echo "goimports not found. Run 'make tools' to install."; \
+	fi
 
 # Lint code
 lint:
-	golangci-lint run ./...
+	@if [ -x "$(GOBIN)/golangci-lint" ]; then \
+		$(GOBIN)/golangci-lint run ./...; \
+	elif command -v golangci-lint >/dev/null 2>&1; then \
+		golangci-lint run ./...; \
+	else \
+		echo "golangci-lint not found. Run 'make tools' to install."; \
+		echo "Running go vet as fallback..."; \
+		go vet ./...; \
+	fi
 
 # Lint and fix
 lint-fix:
-	golangci-lint run --fix ./...
+	@if [ -x "$(GOBIN)/golangci-lint" ]; then \
+		$(GOBIN)/golangci-lint run --fix ./...; \
+	elif command -v golangci-lint >/dev/null 2>&1; then \
+		golangci-lint run --fix ./...; \
+	else \
+		echo "golangci-lint not found. Run 'make tools' to install."; \
+	fi
 
 # Check formatting without modifying
 fmt-check:

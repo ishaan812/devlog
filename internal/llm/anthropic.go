@@ -66,10 +66,7 @@ func (c *AnthropicClient) ChatComplete(ctx context.Context, messages []Message) 
 			systemPrompt = m.Content
 			continue
 		}
-		anthropicMessages = append(anthropicMessages, anthropicMessage{
-			Role:    m.Role,
-			Content: m.Content,
-		})
+		anthropicMessages = append(anthropicMessages, anthropicMessage(m))
 	}
 
 	reqBody := anthropicRequest{

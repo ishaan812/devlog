@@ -8,9 +8,10 @@ import (
 	"strings"
 
 	"github.com/fatih/color"
+	"github.com/spf13/cobra"
+
 	"github.com/ishaan812/devlog/internal/config"
 	"github.com/ishaan812/devlog/internal/db"
-	"github.com/spf13/cobra"
 )
 
 var (
@@ -101,7 +102,7 @@ func runClear(cmd *cobra.Command, args []string) error {
 
 		if response != "y" && response != "yes" {
 			fmt.Println()
-			dimColor.Println("  Cancelled.")
+			dimColor.Println("  Canceled.")
 			fmt.Println()
 			return nil
 		}

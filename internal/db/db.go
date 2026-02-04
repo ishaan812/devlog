@@ -3,12 +3,13 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 
-	_ "github.com/marcboeker/go-duckdb"
+	_ "github.com/marcboeker/go-duckdb" // DuckDB driver
 
 	"github.com/ishaan812/devlog/internal/config"
 )
@@ -166,7 +167,7 @@ func Transaction(ctx context.Context, db *sql.DB, fn func(tx *sql.Tx) error) err
 	}()
 	if err := fn(tx); err != nil {
 		if rbErr := tx.Rollback(); rbErr != nil {
-			return fmt.Errorf("rollback failed: %v (original: %w)", rbErr, err)
+			return errors.Join(fmt.Errorf("rollback failed: %w", rbErr), err)
 		}
 		return err
 	}

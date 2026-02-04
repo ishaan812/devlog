@@ -73,10 +73,7 @@ func (c *BedrockClient) ChatComplete(ctx context.Context, messages []Message) (s
 			systemPrompt = m.Content
 			continue
 		}
-		bedrockMessages = append(bedrockMessages, bedrockMessage{
-			Role:    m.Role,
-			Content: m.Content,
-		})
+		bedrockMessages = append(bedrockMessages, bedrockMessage(m))
 	}
 
 	reqBody := bedrockClaudeRequest{

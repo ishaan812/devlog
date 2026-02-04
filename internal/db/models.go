@@ -52,7 +52,7 @@ type Commit struct {
 	Message           string
 	Summary           string
 	CommittedAt       time.Time
-	Stats             map[string]interface{}
+	Stats             map[string]any
 	IsUserCommit      bool
 	IsOnDefaultBranch bool
 }
@@ -110,8 +110,8 @@ type IngestCursor struct {
 	UpdatedAt      time.Time
 }
 
-// JSON is a type alias for map[string]interface{} used for JSON columns
-type JSON = map[string]interface{}
+// JSON is a type alias for map[string]any used for JSON columns
+type JSON = map[string]any
 
 // Helper functions for JSON serialization
 
@@ -132,7 +132,7 @@ func NullTime(t time.Time) sql.NullTime {
 }
 
 // ToJSON converts a value to JSON string
-func ToJSON(v interface{}) string {
+func ToJSON(v any) string {
 	if v == nil {
 		return ""
 	}
@@ -144,11 +144,11 @@ func ToJSON(v interface{}) string {
 }
 
 // FromJSON parses a JSON string into a map
-func FromJSON(s string) map[string]interface{} {
+func FromJSON(s string) map[string]any {
 	if s == "" {
 		return nil
 	}
-	var m map[string]interface{}
+	var m map[string]any
 	if err := json.Unmarshal([]byte(s), &m); err != nil {
 		return nil
 	}
@@ -180,14 +180,14 @@ func FromJSONStringSlice(s string) []string {
 }
 
 // convertToIntMap converts DuckDB JSON (which comes as native Go types) to map[string]int
-func convertToIntMap(v interface{}) map[string]int {
+func convertToIntMap(v any) map[string]int {
 	if v == nil {
 		return nil
 	}
 
-	// DuckDB returns JSON as map[string]interface{}
+	// DuckDB returns JSON as map[string]any
 	switch m := v.(type) {
-	case map[string]interface{}:
+	case map[string]any:
 		result := make(map[string]int)
 		for k, val := range m {
 			switch n := val.(type) {
@@ -207,14 +207,14 @@ func convertToIntMap(v interface{}) map[string]int {
 	return nil
 }
 
-// convertToMap converts DuckDB JSON to map[string]interface{}
-func convertToMap(v interface{}) map[string]interface{} {
+// convertToMap converts DuckDB JSON to map[string]any
+func convertToMap(v any) map[string]any {
 	if v == nil {
 		return nil
 	}
 
 	switch m := v.(type) {
-	case map[string]interface{}:
+	case map[string]any:
 		return m
 	case string:
 		return FromJSON(m)
@@ -223,13 +223,13 @@ func convertToMap(v interface{}) map[string]interface{} {
 }
 
 // convertToStringSlice converts DuckDB JSON array to []string
-func convertToStringSlice(v interface{}) []string {
+func convertToStringSlice(v any) []string {
 	if v == nil {
 		return nil
 	}
 
 	switch s := v.(type) {
-	case []interface{}:
+	case []any:
 		result := make([]string, 0, len(s))
 		for _, item := range s {
 			if str, ok := item.(string); ok {

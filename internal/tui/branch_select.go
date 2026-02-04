@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
 	"github.com/ishaan812/devlog/internal/git"
 )
 
@@ -61,7 +62,7 @@ var (
 type BranchSelection struct {
 	MainBranch       string
 	SelectedBranches []string
-	Cancelled        bool
+	Canceled         bool
 }
 
 // BranchSelectModel is the Bubbletea model for branch selection
@@ -252,7 +253,7 @@ func (m BranchSelectModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		switch {
 		case key.Matches(msg, keys.Quit):
-			m.result.Cancelled = true
+			m.result.Canceled = true
 			m.done = true
 			return m, tea.Quit
 
@@ -486,8 +487,8 @@ func RunBranchSelection(branches []git.BranchInfo, detectedDefault string) (*Bra
 	}
 
 	result := finalModel.(BranchSelectModel).Result()
-	if result.Cancelled {
-		return nil, fmt.Errorf("branch selection cancelled")
+	if result.Canceled {
+		return nil, fmt.Errorf("branch selection canceled")
 	}
 
 	return &result, nil
@@ -505,8 +506,8 @@ func RunBranchSelectionWithPreselected(branches []git.BranchInfo, mainBranch str
 	}
 
 	result := finalModel.(BranchSelectModel).Result()
-	if result.Cancelled {
-		return nil, fmt.Errorf("branch selection cancelled")
+	if result.Canceled {
+		return nil, fmt.Errorf("branch selection canceled")
 	}
 
 	return &result, nil

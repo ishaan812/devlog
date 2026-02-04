@@ -7,11 +7,11 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/ishaan812/devlog/internal/config"
-	"github.com/ishaan812/devlog/internal/db"
-
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
+
+	"github.com/ishaan812/devlog/internal/config"
+	"github.com/ishaan812/devlog/internal/db"
 )
 
 var (
@@ -130,7 +130,7 @@ func runProfileList(cmd *cobra.Command, args []string) error {
 	titleColor.Println("\nProfiles")
 	fmt.Println()
 
-	if cfg.Profiles == nil || len(cfg.Profiles) == 0 {
+	if len(cfg.Profiles) == 0 {
 		dimColor.Println("  No profiles found. Run 'devlog onboard' to create one.")
 		fmt.Println()
 		return nil

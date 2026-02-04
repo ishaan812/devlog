@@ -5,9 +5,10 @@ import (
 	"fmt"
 
 	"github.com/fatih/color"
+	"github.com/spf13/cobra"
+
 	"github.com/ishaan812/devlog/internal/config"
 	"github.com/ishaan812/devlog/internal/db"
-	"github.com/spf13/cobra"
 )
 
 var listCmd = &cobra.Command{
@@ -70,10 +71,8 @@ func runList(cmd *cobra.Command, args []string) error {
 	} else {
 		for _, name := range profiles {
 			profile := cfg.Profiles[name]
-			marker := "  "
 			if name == activeProfile {
-				marker = "→ "
-				activeColor.Printf("  %s%s", marker, name)
+				activeColor.Printf("  → %s", name)
 			} else {
 				fmt.Printf("    %s", name)
 			}

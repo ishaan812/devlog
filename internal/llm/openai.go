@@ -55,10 +55,7 @@ func (c *OpenAIClient) Complete(ctx context.Context, prompt string) (string, err
 func (c *OpenAIClient) ChatComplete(ctx context.Context, messages []Message) (string, error) {
 	openAIMessages := make([]openAIMessage, len(messages))
 	for i, m := range messages {
-		openAIMessages[i] = openAIMessage{
-			Role:    m.Role,
-			Content: m.Content,
-		}
+		openAIMessages[i] = openAIMessage(m)
 	}
 
 	reqBody := openAIChatRequest{
