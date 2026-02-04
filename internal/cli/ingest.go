@@ -1175,7 +1175,12 @@ func generateCommitSummary(client llm.LLMClient, commitMessage string, fileChang
 	prompt := fmt.Sprintf(`Analyze this git commit and write a clear, technical summary of what was accomplished.
 Focus on the WHAT and WHY, not just listing files. Be specific about functionality added/changed.
 Keep it to 1-2 sentences, max 100 words. Be professional and technical.
-Do NOT include any preamble like "Here is a summary" - just write the summary directly.
+
+IMPORTANT STYLE RULES:
+- Do NOT start with "This commit" or "The commit" - start directly with the action (e.g., "Added...", "Improved...", "Fixed...")
+- Do NOT include any preamble like "Here is a summary"
+- Write in active voice, past tense (e.g., "Added error handling" not "This commit adds error handling")
+- Be concise and direct
 
 %s`, sb.String())
 
