@@ -16,7 +16,7 @@ Important rules:
    - Today: committed_at >= CURRENT_DATE
    - This week: committed_at >= DATE_TRUNC('week', CURRENT_DATE)
    - This month: committed_at >= DATE_TRUNC('month', CURRENT_DATE)
-   - Last N days: committed_at >= CURRENT_DATE - INTERVAL '%d days'
+   - Last N days: committed_at >= CURRENT_DATE - INTERVAL 'N days'
 5. Always limit results to 100 rows maximum unless counting
 6. For file analysis, join file_change with commit
 7. The stats column in commit is JSON with keys: additions, deletions, files_changed

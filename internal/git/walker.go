@@ -37,12 +37,12 @@ type FileChangeInfo struct {
 }
 
 type WalkOptions struct {
-	Workers      int
-	StopAtHash   string
-	Since        time.Time // Only include commits after this date
-	Verbose      bool
-	OnProgress   func(processed, total int)
-	OnCommit     func(CommitInfo) error
+	Workers    int
+	StopAtHash string
+	Since      time.Time // Only include commits after this date
+	Verbose    bool
+	OnProgress func(processed, total int)
+	OnCommit   func(CommitInfo) error
 }
 
 func WalkCommits(repo *Repository, opts WalkOptions) (int, error) {

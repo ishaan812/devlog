@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -21,8 +20,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Regex to extract GitHub username from noreply emails
-// Matches: username@users.noreply.github.com or 12345+username@users.noreply.github.com
+// githubNoReplyRegex matches GitHub noreply emails: username@users.noreply.github.com or 12345+username@users.noreply.github.com
 var githubNoReplyRegex = regexp.MustCompile(`^(?:\d+\+)?([^@]+)@users\.noreply\.github\.com$`)
 
 // extractGitHubUsername extracts the GitHub username from an email if it's a GitHub noreply email
@@ -50,8 +48,9 @@ var (
 	ingestSince string
 
 	// Branch selection flags
-	ingestBranches    []string
-	ingestAllBranches bool
+	ingestBranches       []string
+	ingestAllBranches    bool
+	ingestReselectBranch bool
 
 	// Indexing flags
 	ingestSkipSummaries  bool
@@ -77,12 +76,15 @@ This unified command performs two phases:
 
 The repository is automatically added to the active profile.
 
-By default, you'll be prompted to select which branches to ingest.
+Branch selections are saved per repo. On subsequent ingests, you'll be prompted:
+  [Enter] Use current selection  [m] Modify  [r] Reselect all
+
 The main/default branch is ingested fully, while feature branches only
 ingest commits unique to that branch (not on the main branch).
 
 Examples:
-  devlog ingest                       # Interactive branch selection
+  devlog ingest                       # Prompts for branch action if saved, or full selection
+  devlog ingest --reselect-branches   # Skip prompt, go straight to full branch selection
   devlog ingest ~/projects/myapp      # Ingest specific path
   devlog ingest --all-branches        # Ingest all branches without prompting
   devlog ingest --branches main,dev   # Ingest specific branches
@@ -105,6 +107,7 @@ func init() {
 	// Branch selection flags
 	ingestCmd.Flags().StringSliceVar(&ingestBranches, "branches", nil, "Specific branches to ingest (comma-separated)")
 	ingestCmd.Flags().BoolVar(&ingestAllBranches, "all-branches", false, "Ingest all branches without prompting")
+	ingestCmd.Flags().BoolVar(&ingestReselectBranch, "reselect-branches", false, "Re-select branches (ignore saved selection)")
 
 	// Indexing flags
 	ingestCmd.Flags().BoolVar(&ingestSkipSummaries, "skip-summaries", false, "Skip LLM-generated summaries")
@@ -198,31 +201,31 @@ type BranchSelection struct {
 }
 
 func ingestGitHistory(absPath string, cfg *config.Config) error {
+	ctx := context.Background()
 	titleColor := color.New(color.FgHiCyan, color.Bold)
 	successColor := color.New(color.FgHiGreen)
 	dimColor := color.New(color.FgHiBlack)
 	infoColor := color.New(color.FgHiWhite)
 	titleColor.Printf("  Git History\n")
-	// Open repository
+
 	VerboseLog("Opening repository at %s", absPath)
 	repo, err := git.OpenRepo(absPath)
 	if err != nil {
 		return fmt.Errorf("failed to open repository: %w", err)
 	}
-	// Initialize database
+
 	VerboseLog("Initializing database")
-	database, err := db.GetDB()
+	dbRepo, err := db.GetRepository()
 	if err != nil {
 		return fmt.Errorf("failed to initialize database: %w", err)
 	}
-	// Get or create codebase record
-	codebase, err := db.GetCodebaseByPath(database, absPath)
+
+	codebase, err := dbRepo.GetCodebaseByPath(ctx, absPath)
 	if err != nil {
 		return fmt.Errorf("failed to get codebase: %w", err)
 	}
 
 	if codebase == nil {
-		// Create new codebase
 		defaultBranch, _ := repo.GetDefaultBranch()
 		codebase = &db.Codebase{
 			ID:            uuid.New().String(),
@@ -231,19 +234,17 @@ func ingestGitHistory(absPath string, cfg *config.Config) error {
 			DefaultBranch: defaultBranch,
 			IndexedAt:     time.Now(),
 		}
-		if err := db.UpsertCodebase(database, codebase); err != nil {
+		if err := dbRepo.UpsertCodebase(ctx, codebase); err != nil {
 			return fmt.Errorf("failed to create codebase: %w", err)
 		}
 	}
 
-	// Get user identifiers for marking user commits
 	userEmail := cfg.UserEmail
 	if userEmail == "" {
 		userEmail, _ = repo.GetUserEmail()
 	}
 	githubUsername := cfg.GitHubUsername
 
-	// Create/update developer record for current user
 	if userEmail != "" {
 		userName := cfg.UserName
 		if userName == "" {
@@ -255,13 +256,11 @@ func ingestGitHistory(absPath string, cfg *config.Config) error {
 			Email:         userEmail,
 			IsCurrentUser: true,
 		}
-		if err := db.UpsertDeveloper(database, dev); err != nil {
+		if err := dbRepo.UpsertDeveloper(ctx, dev); err != nil {
 			VerboseLog("Warning: failed to upsert developer: %v", err)
 		}
-		db.SetCurrentUser(database, userEmail)
+		dbRepo.SetCurrentUser(ctx, userEmail)
 	}
-
-	// List all branches
 	allBranches, err := repo.ListBranches()
 	if err != nil {
 		return fmt.Errorf("failed to list branches: %w", err)
@@ -272,19 +271,16 @@ func ingestGitHistory(absPath string, cfg *config.Config) error {
 		return nil
 	}
 
-	// Branch selection
-	selection, err := selectBranches(allBranches, codebase.DefaultBranch)
+	selection, err := selectBranches(allBranches, codebase.DefaultBranch, cfg, absPath)
 	if err != nil {
 		return fmt.Errorf("branch selection failed: %w", err)
 	}
 
-	// Update codebase default branch if changed
 	if selection.MainBranch != codebase.DefaultBranch {
 		codebase.DefaultBranch = selection.MainBranch
-		db.UpsertCodebase(database, codebase)
+		dbRepo.UpsertCodebase(ctx, codebase)
 	}
 
-	// Determine the since date
 	var sinceDate time.Time
 	if ingestAll {
 		dimColor.Println("  Ingesting full history...")
@@ -299,13 +295,9 @@ func ingestGitHistory(absPath string, cfg *config.Config) error {
 		dimColor.Printf("  Last %d days...\n", ingestDays)
 	}
 
-	// Track totals
 	var totalCommits, totalFiles int
-
-	// Create LLM client for commit summaries (if not skipped)
-	var llmClient llm.LLMClient
+	var llmClient llm.Client
 	if !ingestSkipCommitSums && !ingestSkipSummaries {
-		var err error
 		llmClient, err = createLLMClient(cfg)
 		if err != nil {
 			dimColor.Printf("  Note: LLM not available, skipping commit summaries\n")
@@ -313,21 +305,18 @@ func ingestGitHistory(absPath string, cfg *config.Config) error {
 		}
 	}
 
-	// Batch-fetch existing commit hashes for efficient deduplication
-	existingHashes, err := db.GetExistingCommitHashes(database, codebase.ID)
+	existingHashes, err := dbRepo.GetExistingCommitHashes(ctx, codebase.ID)
 	if err != nil {
-		VerboseLog("Warning: failed to get existing hashes, will check individually: %v", err)
+		VerboseLog("Warning: failed to get existing hashes: %v", err)
 		existingHashes = make(map[string]bool)
 	}
 	VerboseLog("Found %d existing commits in database", len(existingHashes))
 
-	// Create a map of selected branches for quick lookup
 	selectedMap := make(map[string]bool)
 	for _, b := range selection.SelectedBranches {
 		selectedMap[b] = true
 	}
 
-	// Ingest main/default branch first
 	fmt.Println()
 	dimColor.Printf("  Scanning branches...\n")
 
@@ -335,18 +324,14 @@ func ingestGitHistory(absPath string, cfg *config.Config) error {
 		if branchInfo.Name != selection.MainBranch {
 			continue
 		}
-
-		// Mark as default
 		branchInfo.IsDefault = true
-
-		commits, files, err := ingestBranch(database, repo, codebase, branchInfo, "", sinceDate, userEmail, githubUsername, llmClient, existingHashes)
+		commits, files, err := ingestBranch(ctx, dbRepo, repo, codebase, branchInfo, "", sinceDate, userEmail, githubUsername, llmClient, existingHashes)
 		if err != nil {
 			VerboseLog("Warning: failed to ingest branch %s: %v", branchInfo.Name, err)
 			continue
 		}
 		totalCommits += commits
 		totalFiles += files
-
 		if commits > 0 {
 			infoColor.Printf("    %s (main): %d commits\n", branchInfo.Name, commits)
 		} else {
@@ -354,32 +339,24 @@ func ingestGitHistory(absPath string, cfg *config.Config) error {
 		}
 	}
 
-	// Ingest selected feature branches (only unique commits)
 	for _, branchInfo := range allBranches {
-		// Skip main branch (already processed) and non-selected branches
-		if branchInfo.Name == selection.MainBranch {
+		if branchInfo.Name == selection.MainBranch || !selectedMap[branchInfo.Name] {
 			continue
 		}
-		if !selectedMap[branchInfo.Name] {
-			continue
-		}
-
-		commits, files, err := ingestBranch(database, repo, codebase, branchInfo, selection.MainBranch, sinceDate, userEmail, githubUsername, llmClient, existingHashes)
+		commits, files, err := ingestBranch(ctx, dbRepo, repo, codebase, branchInfo, selection.MainBranch, sinceDate, userEmail, githubUsername, llmClient, existingHashes)
 		if err != nil {
 			VerboseLog("Warning: failed to ingest branch %s: %v", branchInfo.Name, err)
 			continue
 		}
 		totalCommits += commits
 		totalFiles += files
-
 		if commits > 0 {
 			infoColor.Printf("    %s: %d commits\n", branchInfo.Name, commits)
 		}
 	}
 
-	// Fill missing summaries if requested
 	if ingestFillSummaries && llmClient != nil {
-		fillCount, err := fillMissingSummaries(database, repo, codebase, llmClient)
+		fillCount, err := fillMissingSummaries(ctx, dbRepo, repo, codebase, llmClient)
 		if err != nil {
 			VerboseLog("Warning: failed to fill missing summaries: %v", err)
 		} else if fillCount > 0 {
@@ -387,7 +364,6 @@ func ingestGitHistory(absPath string, cfg *config.Config) error {
 		}
 	}
 
-	// Print summary
 	fmt.Println()
 	if totalCommits == 0 {
 		dimColor.Println("  No new commits in time range")
@@ -395,16 +371,17 @@ func ingestGitHistory(absPath string, cfg *config.Config) error {
 		successColor.Printf("  Ingested %d commits, %d file changes\n", totalCommits, totalFiles)
 	}
 
-	// Show totals
-	commitCount, _ := db.GetCommitCount(database, codebase.ID)
-	fileCount, _ := db.GetFileChangeCount(database, codebase.ID)
+	commitCount, _ := dbRepo.GetCommitCount(ctx, codebase.ID)
+	fileCount, _ := dbRepo.GetFileChangeCount(ctx, codebase.ID)
 	infoColor.Printf("  Total: %d commits, %d file changes\n\n", commitCount, fileCount)
 
 	return nil
 }
 
-func selectBranches(branches []git.BranchInfo, detectedDefault string) (*BranchSelection, error) {
+func selectBranches(branches []git.BranchInfo, detectedDefault string, cfg *config.Config, repoPath string) (*BranchSelection, error) {
 	dimColor := color.New(color.FgHiBlack)
+	infoColor := color.New(color.FgCyan)
+	promptColor := color.New(color.FgYellow)
 
 	// If branches specified via flag, use them
 	if len(ingestBranches) > 0 {
@@ -431,6 +408,70 @@ func selectBranches(branches []git.BranchInfo, detectedDefault string) (*BranchS
 		}, nil
 	}
 
+	// Check for saved branch selection
+	profileName := cfg.GetActiveProfileName()
+	saved := cfg.GetBranchSelection(profileName, repoPath)
+
+	// If we have a saved selection and not forcing reselect, prompt for action
+	if saved != nil && len(saved.SelectedBranches) > 0 && !ingestReselectBranch {
+		// Validate that saved branches still exist
+		branchMap := make(map[string]bool)
+		for _, b := range branches {
+			branchMap[b.Name] = true
+		}
+
+		validBranches := []string{}
+		for _, b := range saved.SelectedBranches {
+			if branchMap[b] {
+				validBranches = append(validBranches, b)
+			}
+		}
+
+		// Check if main branch still exists and we have valid branches
+		if branchMap[saved.MainBranch] && len(validBranches) > 0 {
+			fmt.Println()
+			infoColor.Printf("  Saved branch selection:\n")
+			dimColor.Printf("    Main: %s\n", saved.MainBranch)
+			dimColor.Printf("    Branches: %s\n", strings.Join(validBranches, ", "))
+			fmt.Println()
+
+			promptColor.Printf("  [Enter] Use current selection  [m] Modify  [r] Reselect all: ")
+
+			var input string
+			fmt.Scanln(&input)
+			input = strings.ToLower(strings.TrimSpace(input))
+
+			switch input {
+			case "", "y", "yes":
+				// Use current selection
+				fmt.Println()
+				return &BranchSelection{
+					MainBranch:       saved.MainBranch,
+					SelectedBranches: validBranches,
+				}, nil
+
+			case "m", "modify":
+				// Modify existing selection - run TUI with pre-selected branches
+				fmt.Println()
+				selection, err := tui.RunBranchSelectionWithPreselected(branches, saved.MainBranch, validBranches)
+				if err != nil {
+					return nil, err
+				}
+				return saveBranchSelection(cfg, profileName, repoPath, selection, dimColor)
+
+			case "r", "reselect":
+				// Fall through to full reselection
+			default:
+				// Treat unknown input as using current selection
+				fmt.Println()
+				return &BranchSelection{
+					MainBranch:       saved.MainBranch,
+					SelectedBranches: validBranches,
+				}, nil
+			}
+		}
+	}
+
 	// Interactive selection using Bubbletea TUI
 	fmt.Println()
 	selection, err := tui.RunBranchSelection(branches, detectedDefault)
@@ -438,8 +479,23 @@ func selectBranches(branches []git.BranchInfo, detectedDefault string) (*BranchS
 		return nil, err
 	}
 
+	return saveBranchSelection(cfg, profileName, repoPath, selection, dimColor)
+}
+
+func saveBranchSelection(cfg *config.Config, profileName, repoPath string, selection *tui.BranchSelection, dimColor *color.Color) (*BranchSelection, error) {
 	fmt.Println()
 	dimColor.Printf("  Selected %d branch(es): %s\n", len(selection.SelectedBranches), strings.Join(selection.SelectedBranches, ", "))
+
+	// Save the selection for future use
+	if err := cfg.SaveBranchSelection(profileName, repoPath, selection.MainBranch, selection.SelectedBranches); err != nil {
+		VerboseLog("Warning: failed to save branch selection: %v", err)
+	} else {
+		if err := cfg.Save(); err != nil {
+			VerboseLog("Warning: failed to save config: %v", err)
+		} else {
+			dimColor.Printf("  (branch selection saved)\n")
+		}
+	}
 	fmt.Println()
 
 	return &BranchSelection{
@@ -448,9 +504,8 @@ func selectBranches(branches []git.BranchInfo, detectedDefault string) (*BranchS
 	}, nil
 }
 
-func ingestBranch(database *sql.DB, repo *git.Repository, codebase *db.Codebase, branchInfo git.BranchInfo, baseBranch string, sinceDate time.Time, userEmail string, githubUsername string, llmClient llm.LLMClient, existingHashes map[string]bool) (int, int, error) {
-	// Get or create branch record
-	branch, err := db.GetBranch(database, codebase.ID, branchInfo.Name)
+func ingestBranch(ctx context.Context, dbRepo *db.SQLRepository, repo *git.Repository, codebase *db.Codebase, branchInfo git.BranchInfo, baseBranch string, sinceDate time.Time, userEmail string, githubUsername string, llmClient llm.Client, existingHashes map[string]bool) (int, int, error) {
+	branch, err := dbRepo.GetBranch(ctx, codebase.ID, branchInfo.Name)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -468,22 +523,17 @@ func ingestBranch(database *sql.DB, repo *git.Repository, codebase *db.Codebase,
 			CreatedAt:  time.Now(),
 			UpdatedAt:  time.Now(),
 		}
-		// Save branch first so commits can reference it
-		if err := db.UpsertBranch(database, branch); err != nil {
+		if err := dbRepo.UpsertBranch(ctx, branch); err != nil {
 			VerboseLog("Warning: failed to create branch %s: %v", branchInfo.Name, err)
 		}
 	}
 
-	// Get cursor for incremental updates
-	lastHash, _ := db.GetBranchCursor(database, codebase.ID, branchInfo.Name)
+	lastHash, _ := dbRepo.GetBranchCursor(ctx, codebase.ID, branchInfo.Name)
 
-	// Get commits to process
 	var commitHashes []string
 	if isDefault || baseBranch == "" {
-		// For default branch, get all commits
 		commitHashes, err = repo.GetCommitsOnBranch(branchInfo.Name, "")
 	} else {
-		// For feature branches, only get unique commits
 		commitHashes, err = repo.GetCommitsOnBranch(branchInfo.Name, baseBranch)
 	}
 	if err != nil {
@@ -491,15 +541,12 @@ func ingestBranch(database *sql.DB, repo *git.Repository, codebase *db.Codebase,
 		return 0, 0, err
 	}
 
-	// Filter to only new commits (not in existingHashes and before cursor)
 	var newCommitHashes []string
 	for _, hash := range commitHashes {
-		// Stop at last processed hash (cursor)
 		if hash == lastHash {
 			VerboseLog("Stopping at cursor hash: %s", lastHash)
 			break
 		}
-		// Skip if already exists in database (batch check)
 		if existingHashes[hash] {
 			continue
 		}
@@ -508,63 +555,41 @@ func ingestBranch(database *sql.DB, repo *git.Repository, codebase *db.Codebase,
 
 	VerboseLog("Branch %s: %d total commits, %d new to process", branchInfo.Name, len(commitHashes), len(newCommitHashes))
 
-	// Track counts
 	var commitCount, fileCount int
 	var firstHash, latestHash string
 
 	for _, hash := range newCommitHashes {
-		// Get commit details
 		gitCommit, err := repo.GetCommit(hash)
 		if err != nil {
 			VerboseLog("Error getting commit %s: %v", hash, err)
 			continue
 		}
 
-		// Check date filter
 		if !sinceDate.IsZero() && gitCommit.Author.When.Before(sinceDate) {
-			VerboseLog("Skipping commit %s: before date filter (commit: %v, filter: %v)", hash[:8], gitCommit.Author.When, sinceDate)
+			VerboseLog("Skipping commit %s: before date filter", hash[:8])
 			continue
 		}
 
-		// Track first/latest
 		if latestHash == "" {
 			latestHash = hash
 		}
 		firstHash = hash
 
-		// Insert developer
 		author := gitCommit.Author
-		dev := &db.Developer{
-			ID:    author.Email,
-			Name:  author.Name,
-			Email: author.Email,
-		}
-		db.UpsertDeveloper(database, dev)
+		dev := &db.Developer{ID: author.Email, Name: author.Name, Email: author.Email}
+		dbRepo.UpsertDeveloper(ctx, dev)
 
-		// Determine if this is a user commit
-		// Match by email or by GitHub username extracted from noreply email
-		isUserCommit := false
-		if userEmail != "" && strings.EqualFold(author.Email, userEmail) {
-			isUserCommit = true
-		} else if isUserCommitByGitHub(author.Email, githubUsername) {
-			isUserCommit = true
-		}
+		isUserCommit := (userEmail != "" && strings.EqualFold(author.Email, userEmail)) || isUserCommitByGitHub(author.Email, githubUsername)
 
-		// Get commit stats
 		stats, fileChanges := getCommitStats(repo, gitCommit)
 
-		// Generate commit summary for user commits
 		var commitSummary string
 		if isUserCommit && llmClient != nil && len(fileChanges) > 0 {
-			summary, err := generateCommitSummary(llmClient, gitCommit.Message, fileChanges)
-			if err != nil {
-				VerboseLog("Warning: failed to generate commit summary: %v", err)
-			} else {
+			if summary, err := generateCommitSummary(llmClient, gitCommit.Message, fileChanges); err == nil {
 				commitSummary = summary
 			}
 		}
 
-		// Create commit record
 		commit := &db.Commit{
 			ID:                uuid.New().String(),
 			Hash:              hash,
@@ -579,18 +604,16 @@ func ingestBranch(database *sql.DB, repo *git.Repository, codebase *db.Codebase,
 			IsOnDefaultBranch: isDefault,
 		}
 
-		if err := db.UpsertCommit(database, commit); err != nil {
+		if err := dbRepo.UpsertCommit(ctx, commit); err != nil {
 			VerboseLog("Warning: failed to insert commit %s: %v", hash[:8], err)
 			continue
 		}
 
-		// Mark as existing for subsequent branches
 		existingHashes[hash] = true
 
-		// Insert file changes
 		for _, fc := range fileChanges {
 			fc.CommitID = commit.ID
-			if err := db.CreateFileChange(database, fc); err != nil {
+			if err := dbRepo.CreateFileChange(ctx, fc); err != nil {
 				VerboseLog("Warning: failed to insert file change: %v", err)
 			}
 			fileCount++
@@ -599,7 +622,6 @@ func ingestBranch(database *sql.DB, repo *git.Repository, codebase *db.Codebase,
 		commitCount++
 	}
 
-	// Update branch record
 	if commitCount > 0 || branch.ID != "" {
 		branch.CommitCount = commitCount
 		branch.IsDefault = isDefault
@@ -610,11 +632,10 @@ func ingestBranch(database *sql.DB, repo *git.Repository, codebase *db.Codebase,
 			branch.LastCommitHash = latestHash
 		}
 		branch.UpdatedAt = time.Now()
-		db.UpsertBranch(database, branch)
+		dbRepo.UpsertBranch(ctx, branch)
 
-		// Update cursor
 		if latestHash != "" {
-			db.UpdateBranchCursor(database, codebase.ID, branchInfo.Name, latestHash)
+			dbRepo.UpdateBranchCursor(ctx, codebase.ID, branchInfo.Name, latestHash)
 		}
 	}
 
@@ -711,6 +732,7 @@ func getCommitStats(repo *git.Repository, commit *git.Commit) (db.JSON, []*db.Fi
 }
 
 func indexCodebase(absPath string, cfg *config.Config) error {
+	ctx := context.Background()
 	titleColor := color.New(color.FgHiCyan, color.Bold)
 	successColor := color.New(color.FgHiGreen)
 	infoColor := color.New(color.FgHiWhite)
@@ -719,13 +741,11 @@ func indexCodebase(absPath string, cfg *config.Config) error {
 
 	titleColor.Printf("  Codebase Indexing\n")
 
-	// Initialize database
-	database, err := db.GetDB()
+	dbRepo, err := db.GetRepository()
 	if err != nil {
 		return fmt.Errorf("failed to initialize database: %w", err)
 	}
 
-	// Scan codebase
 	s := spinner.New(spinner.CharSets[14], 100*time.Millisecond)
 	s.Suffix = " Scanning files..."
 	s.Color("cyan")
@@ -738,7 +758,6 @@ func indexCodebase(absPath string, cfg *config.Config) error {
 	}
 	s.Stop()
 
-	// Limit files if needed
 	if ingestMaxFiles > 0 && len(scanResult.Files) > ingestMaxFiles {
 		scanResult.Files = scanResult.Files[:ingestMaxFiles]
 		warnColor.Printf("  Limited to %d files\n", ingestMaxFiles)
@@ -746,7 +765,6 @@ func indexCodebase(absPath string, cfg *config.Config) error {
 
 	successColor.Printf("  Found %d files in %d folders\n", len(scanResult.Files), len(scanResult.Folders))
 
-	// Detect tech stack
 	techStack := indexer.DetectTechStack(scanResult.Files)
 	if len(techStack) > 0 {
 		var techs []string
@@ -756,8 +774,7 @@ func indexCodebase(absPath string, cfg *config.Config) error {
 		dimColor.Printf("  Tech: %s\n", joinMax(techs, 5))
 	}
 
-	// Get or create codebase record
-	codebase, _ := db.GetCodebaseByPath(database, absPath)
+	codebase, _ := dbRepo.GetCodebaseByPath(ctx, absPath)
 	isFirstIndex := codebase == nil
 	if codebase == nil {
 		codebase = &db.Codebase{
@@ -769,8 +786,7 @@ func indexCodebase(absPath string, cfg *config.Config) error {
 	codebase.IndexedAt = time.Now()
 	codebase.TechStack = techStack
 
-	// Setup LLM client for summaries
-	var llmClient llm.LLMClient
+	var llmClient llm.Client
 	var summarizer *indexer.Summarizer
 
 	if !ingestSkipSummaries {
@@ -783,13 +799,10 @@ func indexCodebase(absPath string, cfg *config.Config) error {
 		}
 	}
 
-	// Generate codebase summary (only on first index or force reindex)
 	if !ingestSkipSummaries && summarizer != nil && (isFirstIndex || ingestForceReindex || codebase.Summary == "") {
 		s.Suffix = " Generating codebase summary..."
 		s.Start()
-		ctx := context.Background()
-		summary, err := summarizer.SummarizeCodebase(ctx, scanResult)
-		if err == nil {
+		if summary, err := summarizer.SummarizeCodebase(ctx, scanResult); err == nil {
 			codebase.Summary = summary
 		}
 		s.Stop()
@@ -798,19 +811,17 @@ func indexCodebase(absPath string, cfg *config.Config) error {
 		}
 	}
 
-	// Save codebase
-	if err := db.UpsertCodebase(database, codebase); err != nil {
+	if err := dbRepo.UpsertCodebase(ctx, codebase); err != nil {
 		return fmt.Errorf("failed to save codebase: %w", err)
 	}
 
-	// === INCREMENTAL INDEXING: Fetch existing data for comparison ===
-	existingFiles, err := db.GetExistingFileHashes(database, codebase.ID)
+	existingFiles, err := dbRepo.GetExistingFileHashes(ctx, codebase.ID)
 	if err != nil {
-		VerboseLog("Warning: couldn't fetch existing files, will re-index all: %v", err)
+		VerboseLog("Warning: couldn't fetch existing files: %v", err)
 		existingFiles = make(map[string]db.ExistingFileInfo)
 	}
 
-	existingFolders, err := db.GetExistingFolderPaths(database, codebase.ID)
+	existingFolders, err := dbRepo.GetExistingFolderPaths(ctx, codebase.ID)
 	if err != nil {
 		VerboseLog("Warning: couldn't fetch existing folders: %v", err)
 		existingFolders = make(map[string]string)
@@ -861,15 +872,14 @@ func indexCodebase(absPath string, cfg *config.Config) error {
 			len(newFiles), len(changedFiles), len(unchangedFiles), len(deletedFilePaths))
 	}
 
-	// Delete removed files and folders
 	if len(deletedFilePaths) > 0 {
-		if err := db.DeleteFileIndexesByPaths(database, codebase.ID, deletedFilePaths); err != nil {
+		if err := dbRepo.DeleteFileIndexesByPaths(ctx, codebase.ID, deletedFilePaths); err != nil {
 			VerboseLog("Warning: failed to delete removed files: %v", err)
 		}
 		VerboseLog("Deleted %d removed file indexes", len(deletedFilePaths))
 	}
 	if len(deletedFolderPaths) > 0 {
-		if err := db.DeleteFoldersByPaths(database, codebase.ID, deletedFolderPaths); err != nil {
+		if err := dbRepo.DeleteFoldersByPaths(ctx, codebase.ID, deletedFolderPaths); err != nil {
 			VerboseLog("Warning: failed to delete removed folders: %v", err)
 		}
 		VerboseLog("Deleted %d removed folder indexes", len(deletedFolderPaths))
@@ -900,20 +910,17 @@ func indexCodebase(absPath string, cfg *config.Config) error {
 			IndexedAt:  time.Now(),
 		}
 
-		// Only generate folder summary for new folders or on force reindex
 		isNewFolder := existingFolders[folderPath] == ""
 		if !ingestSkipSummaries && summarizer != nil && folderInfo.Depth <= 2 && len(folderInfo.Files) > 0 {
 			if isNewFolder || ingestForceReindex {
-				ctx := context.Background()
-				summary, err := summarizer.SummarizeFolder(ctx, folderInfo)
-				if err == nil {
+				if summary, err := summarizer.SummarizeFolder(ctx, folderInfo); err == nil {
 					folder.Summary = summary.Summary
 					folder.Purpose = summary.Purpose
 				}
 			}
 		}
 
-		if err := db.UpsertFolder(database, folder); err != nil {
+		if err := dbRepo.UpsertFolder(ctx, folder); err != nil {
 			VerboseLog("Warning: failed to save folder %s: %v", folderPath, err)
 		}
 
@@ -958,11 +965,8 @@ func indexCodebase(absPath string, cfg *config.Config) error {
 			IndexedAt:   time.Now(),
 		}
 
-		// Generate file summary for new/changed files
 		if !ingestSkipSummaries && summarizer != nil && shouldSummarizeFile(fileInfo) {
-			ctx := context.Background()
-			summary, err := summarizer.SummarizeFile(ctx, fileInfo)
-			if err == nil {
+			if summary, err := summarizer.SummarizeFile(ctx, fileInfo); err == nil {
 				file.Summary = summary.Summary
 				file.Purpose = summary.Purpose
 				file.KeyExports = summary.KeyExports
@@ -970,7 +974,7 @@ func indexCodebase(absPath string, cfg *config.Config) error {
 			}
 		}
 
-		if err := db.UpsertFileIndex(database, file); err != nil {
+		if err := dbRepo.UpsertFileIndex(ctx, file); err != nil {
 			VerboseLog("Warning: failed to save file %s: %v", fileInfo.Path, err)
 		}
 
@@ -1005,16 +1009,15 @@ func indexCodebase(absPath string, cfg *config.Config) error {
 			IndexedAt:   time.Now(),
 		}
 
-		if err := db.UpsertFileIndex(database, file); err != nil {
+		if err := dbRepo.UpsertFileIndex(ctx, file); err != nil {
 			VerboseLog("Warning: failed to save file %s: %v", fileInfo.Path, err)
 		}
 	}
 
 	fmt.Printf("\r  Processed %d/%d files                    \n", totalFiles, totalFiles)
 
-	// Show stats
 	fmt.Println()
-	stats, _ := db.GetCodebaseStats(database, codebase.ID)
+	stats, _ := dbRepo.GetCodebaseStats(ctx, codebase.ID)
 	dimColor.Printf("  Folders:    ")
 	infoColor.Printf("%d\n", stats.FolderCount)
 	dimColor.Printf("  Files:      ")
@@ -1037,16 +1040,12 @@ func indexCodebase(absPath string, cfg *config.Config) error {
 	return nil
 }
 
-func createLLMClient(cfg *config.Config) (llm.LLMClient, error) {
+func createLLMClient(cfg *config.Config) (llm.Client, error) {
 	provider := cfg.DefaultProvider
 	if provider == "" {
 		provider = "ollama"
 	}
-
-	llmCfg := llm.Config{
-		Provider: llm.Provider(provider),
-	}
-
+	llmCfg := llm.Config{Provider: llm.Provider(provider)}
 	switch llmCfg.Provider {
 	case llm.ProviderOpenAI:
 		llmCfg.APIKey = cfg.GetAPIKey("openai")
@@ -1064,7 +1063,6 @@ func createLLMClient(cfg *config.Config) (llm.LLMClient, error) {
 			llmCfg.Model = cfg.OllamaModel
 		}
 	}
-
 	return llm.NewClient(llmCfg)
 }
 
@@ -1121,8 +1119,7 @@ func formatBytes(b int64) string {
 	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGTPE"[exp])
 }
 
-// generateCommitSummary generates a meaningful summary for a commit using file changes
-func generateCommitSummary(client llm.LLMClient, commitMessage string, fileChanges []*db.FileChange) (string, error) {
+func generateCommitSummary(client llm.Client, commitMessage string, fileChanges []*db.FileChange) (string, error) {
 	// Build context from file changes
 	var sb strings.Builder
 	sb.WriteString("Commit message: ")
@@ -1190,12 +1187,10 @@ IMPORTANT STYLE RULES:
 	return client.Complete(ctx, prompt)
 }
 
-// fillMissingSummaries generates summaries for user commits that don't have them
-func fillMissingSummaries(database *sql.DB, repo *git.Repository, codebase *db.Codebase, llmClient llm.LLMClient) (int, error) {
+func fillMissingSummaries(ctx context.Context, dbRepo *db.SQLRepository, repo *git.Repository, codebase *db.Codebase, llmClient llm.Client) (int, error) {
 	dimColor := color.New(color.FgHiBlack)
 
-	// Get user commits missing summaries
-	commits, err := db.GetUserCommitsMissingSummaries(database, codebase.ID)
+	commits, err := dbRepo.GetUserCommitsMissingSummaries(ctx, codebase.ID)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get commits missing summaries: %w", err)
 	}
@@ -1209,8 +1204,7 @@ func fillMissingSummaries(database *sql.DB, repo *git.Repository, codebase *db.C
 
 	filled := 0
 	for i, commit := range commits {
-		// Get file changes for this commit
-		fileChanges, err := db.GetFileChangesByCommit(database, commit.ID)
+		fileChanges, err := dbRepo.GetFileChangesByCommit(ctx, commit.ID)
 		if err != nil {
 			VerboseLog("Warning: failed to get file changes for commit %s: %v", commit.Hash[:8], err)
 			continue
@@ -1221,21 +1215,18 @@ func fillMissingSummaries(database *sql.DB, repo *git.Repository, codebase *db.C
 			continue
 		}
 
-		// Convert to pointer slice for generateCommitSummary
 		var fcPtrs []*db.FileChange
 		for j := range fileChanges {
 			fcPtrs = append(fcPtrs, &fileChanges[j])
 		}
 
-		// Generate summary
 		summary, err := generateCommitSummary(llmClient, commit.Message, fcPtrs)
 		if err != nil {
 			VerboseLog("Warning: failed to generate summary for commit %s: %v", commit.Hash[:8], err)
 			continue
 		}
 
-		// Update commit with summary
-		if err := db.UpdateCommitSummary(database, commit.ID, summary); err != nil {
+		if err := dbRepo.UpdateCommitSummary(ctx, commit.ID, summary); err != nil {
 			VerboseLog("Warning: failed to update summary for commit %s: %v", commit.Hash[:8], err)
 			continue
 		}

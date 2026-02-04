@@ -12,13 +12,15 @@ import (
 	"github.com/ishaan812/devlog/internal/llm"
 )
 
+// Pipeline handles question-answering using LLM and database.
 type Pipeline struct {
-	client   llm.LLMClient
+	client   llm.Client
 	database *sql.DB
 	verbose  bool
 }
 
-func NewPipeline(client llm.LLMClient, database *sql.DB, verbose bool) *Pipeline {
+// NewPipeline creates a new Pipeline.
+func NewPipeline(client llm.Client, database *sql.DB, verbose bool) *Pipeline {
 	return &Pipeline{
 		client:   client,
 		database: database,
@@ -83,17 +85,18 @@ func (p *Pipeline) GenerateSQL(ctx context.Context, question string) (string, er
 	return sql, nil
 }
 
-func (p *Pipeline) ExecuteQuery(query string) ([]map[string]interface{}, error) {
-	// Safety check - only allow SELECT queries
+// ExecuteQuery executes a SQL query and returns results.
+func (p *Pipeline) ExecuteQuery(query string) ([]map[string]any, error) {
 	normalizedQuery := strings.ToUpper(strings.TrimSpace(query))
 	if !strings.HasPrefix(normalizedQuery, "SELECT") {
 		return nil, fmt.Errorf("only SELECT queries are allowed")
 	}
-
-	return db.ExecuteQuery(p.database, query)
+	repo := db.NewRepository(p.database)
+	return repo.ExecuteQuery(context.Background(), query)
 }
 
-func (p *Pipeline) Summarize(ctx context.Context, question string, results []map[string]interface{}) (string, error) {
+// Summarize generates a summary of query results.
+func (p *Pipeline) Summarize(ctx context.Context, question string, results []map[string]any) (string, error) {
 	resultsJSON, err := json.MarshalIndent(results, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal results: %w", err)
@@ -139,21 +142,13 @@ func (p *Pipeline) ParseTimeFilter(ctx context.Context, question string) (*TimeF
 	return &filter, nil
 }
 
-func (p *Pipeline) fallbackQuery(ctx context.Context, question string) ([]map[string]interface{}, error) {
-	// Simple fallback: get recent commits
+func (p *Pipeline) fallbackQuery(ctx context.Context, question string) ([]map[string]any, error) {
 	query := `
-		SELECT
-			c.hash,
-			c.message,
-			c.author_email,
-			c.committed_at,
-			c.stats
-		FROM commit c
-		ORDER BY c.committed_at DESC
-		LIMIT 20
+		SELECT c.hash, c.message, c.author_email, c.committed_at, c.stats
+		FROM commits c ORDER BY c.committed_at DESC LIMIT 20
 	`
-
-	return db.ExecuteQuery(p.database, query)
+	repo := db.NewRepository(p.database)
+	return repo.ExecuteQuery(ctx, query)
 }
 
 func cleanSQL(response string) string {

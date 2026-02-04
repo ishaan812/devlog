@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/fatih/color"
@@ -89,13 +90,22 @@ func runList(cmd *cobra.Command, args []string) error {
 				}
 			}
 
-			// Show stats for this profile
 			db.SetActiveProfile(name)
-			database, err := db.GetDB()
-			if err == nil {
-				var commitCount, codebaseCount int
-				database.QueryRow(`SELECT COUNT(*) FROM commits`).Scan(&commitCount)
-				database.QueryRow(`SELECT COUNT(*) FROM codebases`).Scan(&codebaseCount)
+			if dbRepo, err := db.GetRepository(); err == nil {
+				ctx := context.Background()
+				commitResults, _ := dbRepo.ExecuteQuery(ctx, `SELECT COUNT(*) as cnt FROM commits`)
+				codebaseResults, _ := dbRepo.ExecuteQuery(ctx, `SELECT COUNT(*) as cnt FROM codebases`)
+				var commitCount, codebaseCount int64
+				if len(commitResults) > 0 {
+					if v, ok := commitResults[0]["cnt"].(int64); ok {
+						commitCount = v
+					}
+				}
+				if len(codebaseResults) > 0 {
+					if v, ok := codebaseResults[0]["cnt"].(int64); ok {
+						codebaseCount = v
+					}
+				}
 				if commitCount > 0 || codebaseCount > 0 {
 					dimColor.Printf("      ")
 					infoColor.Printf("%d commits", commitCount)
@@ -191,23 +201,19 @@ func runListRepos(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Get database stats for each repo
+	ctx := context.Background()
 	db.SetActiveProfile(profileName)
-	database, err := db.GetDB()
+	dbRepo, err := db.GetRepository()
 	if err != nil {
 		return fmt.Errorf("failed to open database: %w", err)
 	}
 
 	for _, repoPath := range profile.Repos {
 		infoColor.Printf("  • %s\n", repoPath)
-
-		// Get stats for this repo
-		codebase, _ := db.GetCodebaseByPath(database, repoPath)
-		if codebase != nil {
-			commitCount, _ := db.GetCommitCount(database, codebase.ID)
-			fileCount, _ := db.GetFileChangeCount(database, codebase.ID)
+		if codebase, _ := dbRepo.GetCodebaseByPath(ctx, repoPath); codebase != nil {
+			commitCount, _ := dbRepo.GetCommitCount(ctx, codebase.ID)
+			fileCount, _ := dbRepo.GetFileChangeCount(ctx, codebase.ID)
 			dimColor.Printf("    %d commits, %d file changes\n", commitCount, fileCount)
-
 			if codebase.Summary != "" {
 				dimColor.Printf("    %s\n", truncate(codebase.Summary, 60))
 			}

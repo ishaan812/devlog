@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -40,44 +41,50 @@ func init() {
 }
 
 func runClear(cmd *cobra.Command, args []string) error {
+	ctx := context.Background()
 	warnColor := color.New(color.FgHiYellow, color.Bold)
 	successColor := color.New(color.FgHiGreen)
 	dimColor := color.New(color.FgHiBlack)
 
-	// Load config
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 
-	// Determine which profile to clear
 	profileName := clearProfile
 	if profileName == "" {
 		profileName = cfg.GetActiveProfileName()
 	}
 
-	// Get current stats before clearing
 	db.SetActiveProfile(profileName)
-	database, err := db.GetDB()
+	dbRepo, err := db.GetRepository()
 	if err != nil {
 		return fmt.Errorf("failed to open database: %w", err)
 	}
 
-	// Count current data
-	var commitCount, fileChangeCount, codebaseCount, fileIndexCount int
-	database.QueryRow(`SELECT COUNT(*) FROM commits`).Scan(&commitCount)
-	database.QueryRow(`SELECT COUNT(*) FROM file_changes`).Scan(&fileChangeCount)
-	database.QueryRow(`SELECT COUNT(*) FROM codebases`).Scan(&codebaseCount)
-	database.QueryRow(`SELECT COUNT(*) FROM file_indexes`).Scan(&fileIndexCount)
+	getCount := func(query string) int64 {
+		results, _ := dbRepo.ExecuteQuery(ctx, query)
+		if len(results) > 0 {
+			if v, ok := results[0]["cnt"].(int64); ok {
+				return v
+			}
+		}
+		return 0
+	}
+
+	commitCount := getCount("SELECT COUNT(*) as cnt FROM commits")
+	fileChangeCount := getCount("SELECT COUNT(*) as cnt FROM file_changes")
+	codebaseCount := getCount("SELECT COUNT(*) as cnt FROM codebases")
+	fileIndexCount := getCount("SELECT COUNT(*) as cnt FROM file_indexes")
 
 	fmt.Println()
-	warnColor.Printf("  ⚠️  Clear Database\n\n")
+	warnColor.Printf("  Warning: Clear Database\n\n")
 	dimColor.Printf("  Profile: %s\n\n", profileName)
 	dimColor.Println("  This will delete:")
-	fmt.Printf("    • %d commits\n", commitCount)
-	fmt.Printf("    • %d file changes\n", fileChangeCount)
-	fmt.Printf("    • %d codebases\n", codebaseCount)
-	fmt.Printf("    • %d file indexes\n", fileIndexCount)
+	fmt.Printf("    %d commits\n", commitCount)
+	fmt.Printf("    %d file changes\n", fileChangeCount)
+	fmt.Printf("    %d codebases\n", codebaseCount)
+	fmt.Printf("    %d file indexes\n", fileIndexCount)
 	fmt.Println()
 
 	if commitCount == 0 && codebaseCount == 0 {
@@ -86,7 +93,6 @@ func runClear(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Confirmation prompt
 	if !clearForce {
 		warnColor.Print("  Are you sure you want to delete all data? [y/N]: ")
 		reader := bufio.NewReader(os.Stdin)
@@ -101,34 +107,24 @@ func runClear(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Clear data in correct order (respecting foreign keys)
 	fmt.Println()
 	dimColor.Println("  Clearing data...")
 
-	// Delete in reverse dependency order
 	tables := []string{
-		"file_changes",
-		"ingest_cursors",
-		"commits",
-		"branches",
-		"file_indexes",
-		"folders",
-		"codebases",
-		"developers",
+		"file_changes", "ingest_cursors", "commits", "branches",
+		"file_indexes", "folders", "codebases", "developers",
 	}
 
+	database := dbRepo.DB()
 	for _, table := range tables {
-		_, err := database.Exec(fmt.Sprintf("DELETE FROM %s", table))
-		if err != nil {
+		if _, err := database.Exec(fmt.Sprintf("DELETE FROM %s", table)); err != nil {
 			VerboseLog("Warning: failed to clear %s: %v", table, err)
 		}
 	}
-
-	// Checkpoint to ensure changes are persisted
 	database.Exec("CHECKPOINT")
 
 	fmt.Println()
-	successColor.Printf("  ✓ Database cleared successfully\n")
+	successColor.Printf("  Database cleared successfully\n")
 	fmt.Println()
 
 	return nil

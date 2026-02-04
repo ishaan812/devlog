@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -89,37 +88,31 @@ type branchGroup struct {
 }
 
 func runWorklog(cmd *cobra.Command, args []string) error {
-	// Colors for terminal output
+	ctx := context.Background()
 	titleColor := color.New(color.FgHiCyan, color.Bold)
 	dimColor := color.New(color.FgHiBlack)
 
-	// Load config
 	cfg, err := config.Load()
 	if err != nil {
 		VerboseLog("Warning: failed to load config: %v", err)
 		cfg = &config.Config{DefaultProvider: "ollama"}
 	}
 
-	// Initialize database
-	database, err := db.GetDB()
+	dbRepo, err := db.GetRepository()
 	if err != nil {
 		return fmt.Errorf("failed to initialize database: %w", err)
 	}
 
-	// Get codebase
 	codebasePath, _ := filepath.Abs(".")
-	codebase, err := db.GetCodebaseByPath(database, codebasePath)
+	codebase, err := dbRepo.GetCodebaseByPath(ctx, codebasePath)
 	if err != nil || codebase == nil {
-		// If no codebase, query all commits across profiles
 		VerboseLog("No codebase found at current path, querying all commits")
 	}
 
-	// Calculate date range
 	endDate := time.Now()
 	startDate := endDate.AddDate(0, 0, -worklogDays)
 
-	// Query commits
-	commits, err := queryCommitsForWorklog(database, codebase, startDate, endDate, cfg)
+	commits, err := queryCommitsForWorklog(ctx, dbRepo, codebase, startDate, endDate, cfg)
 	if err != nil {
 		return fmt.Errorf("failed to query commits: %w", err)
 	}
@@ -134,8 +127,7 @@ func runWorklog(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Setup LLM client
-	var client llm.LLMClient
+	var client llm.Client
 	if !worklogNoLLM {
 		client, err = createWorklogClient(cfg)
 		if err != nil {
@@ -143,11 +135,10 @@ func runWorklog(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Generate markdown based on grouping
 	var markdown string
 	switch worklogGroupBy {
 	case "branch":
-		groups := groupByBranch(database, commits)
+		groups := groupByBranch(ctx, dbRepo, commits)
 		markdown, err = generateBranchWorklogMarkdown(groups, client, cfg)
 	default:
 		groups := groupByDate(commits)
@@ -158,12 +149,8 @@ func runWorklog(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to generate markdown: %w", err)
 	}
 
-	// Output - default to file in current directory
 	outputPath := worklogOutput
 	if outputPath == "" {
-		// Generate default filename with date range
-		endDate := time.Now()
-		startDate := endDate.AddDate(0, 0, -worklogDays)
 		outputPath = fmt.Sprintf("worklog_%s_%s.md", startDate.Format("2006-01-02"), endDate.Format("2006-01-02"))
 	}
 
@@ -179,8 +166,7 @@ func runWorklog(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func queryCommitsForWorklog(database *sql.DB, codebase *db.Codebase, startDate, endDate time.Time, cfg *config.Config) ([]commitData, error) {
-	// Build query with JOIN to get branch name in a single query
+func queryCommitsForWorklog(ctx context.Context, dbRepo *db.SQLRepository, codebase *db.Codebase, startDate, endDate time.Time, cfg *config.Config) ([]commitData, error) {
 	queryStr := `
 		SELECT c.id, c.hash, c.codebase_id, c.branch_id, c.author_email, c.message, c.summary, c.committed_at,
 			b.name as branch_name
@@ -188,24 +174,21 @@ func queryCommitsForWorklog(database *sql.DB, codebase *db.Codebase, startDate, 
 		LEFT JOIN branches b ON c.branch_id = b.id
 		WHERE c.committed_at >= $1 AND c.committed_at <= $2
 	`
-	args := []interface{}{startDate, endDate}
+	args := []any{startDate, endDate}
 	argIdx := 3
 
-	// Filter by codebase if available
 	if codebase != nil {
 		queryStr += fmt.Sprintf(" AND c.codebase_id = $%d", argIdx)
 		args = append(args, codebase.ID)
 		argIdx++
 	}
 
-	// Filter by user commits unless --all
 	if !worklogAll {
 		queryStr += " AND c.is_user_commit = TRUE"
 	}
 
-	// Filter by branch if specified
 	if worklogBranch != "" && codebase != nil {
-		branch, err := db.GetBranch(database, codebase.ID, worklogBranch)
+		branch, err := dbRepo.GetBranch(ctx, codebase.ID, worklogBranch)
 		if err != nil || branch == nil {
 			return nil, fmt.Errorf("branch '%s' not found", worklogBranch)
 		}
@@ -216,65 +199,47 @@ func queryCommitsForWorklog(database *sql.DB, codebase *db.Codebase, startDate, 
 
 	queryStr += " ORDER BY c.committed_at DESC"
 
-	rows, err := database.Query(queryStr, args...)
+	results, err := dbRepo.ExecuteQueryWithArgs(ctx, queryStr, args...)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
-	// First, collect all commits without nested queries (DuckDB doesn't support concurrent queries)
-	type rawCommit struct {
-		ID          string
-		Hash        string
-		CodebaseID  string
-		BranchID    sql.NullString
-		AuthorEmail string
-		Message     string
-		Summary     sql.NullString
-		CommittedAt time.Time
-		BranchName  sql.NullString
-	}
-	var rawCommits []rawCommit
-
-	for rows.Next() {
-		var c rawCommit
-		if err := rows.Scan(&c.ID, &c.Hash, &c.CodebaseID, &c.BranchID, &c.AuthorEmail, &c.Message, &c.Summary, &c.CommittedAt, &c.BranchName); err != nil {
-			return nil, err
-		}
-		rawCommits = append(rawCommits, c)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	// Close rows before doing file change lookups
-	rows.Close()
-
-	// Now build commit data with file changes
 	var commits []commitData
-	for _, c := range rawCommits {
+	for _, row := range results {
 		cd := commitData{
-			Hash:        c.Hash,
-			Message:     c.Message,
-			Summary:     c.Summary.String,
-			AuthorEmail: c.AuthorEmail,
-			CommittedAt: c.CommittedAt,
-			BranchID:    c.BranchID.String,
-			BranchName:  c.BranchName.String,
+			Hash:        getString(row, "hash"),
+			Message:     getString(row, "message"),
+			Summary:     getString(row, "summary"),
+			AuthorEmail: getString(row, "author_email"),
+			BranchID:    getString(row, "branch_id"),
+			BranchName:  getString(row, "branch_name"),
+		}
+		if t, ok := row["committed_at"].(time.Time); ok {
+			cd.CommittedAt = t
 		}
 
-		// Get file changes for this commit
-		fileChanges, _ := db.GetFileChangesByCommit(database, c.ID)
-		for _, fc := range fileChanges {
-			cd.Additions += fc.Additions
-			cd.Deletions += fc.Deletions
-			cd.Files = append(cd.Files, fc.FilePath)
+		if id := getString(row, "id"); id != "" {
+			fileChanges, _ := dbRepo.GetFileChangesByCommit(ctx, id)
+			for _, fc := range fileChanges {
+				cd.Additions += fc.Additions
+				cd.Deletions += fc.Deletions
+				cd.Files = append(cd.Files, fc.FilePath)
+			}
 		}
 
 		commits = append(commits, cd)
 	}
 
 	return commits, nil
+}
+
+func getString(m map[string]any, key string) string {
+	if v, ok := m[key]; ok && v != nil {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return ""
 }
 
 func groupByDate(commits []commitData) []dayGroup {
@@ -302,7 +267,7 @@ func groupByDate(commits []commitData) []dayGroup {
 	return groups
 }
 
-func groupByBranch(database *sql.DB, commits []commitData) []branchGroup {
+func groupByBranch(ctx context.Context, dbRepo *db.SQLRepository, commits []commitData) []branchGroup {
 	branchMap := make(map[string]*branchGroup)
 	branchOrder := []string{}
 
@@ -313,11 +278,8 @@ func groupByBranch(database *sql.DB, commits []commitData) []branchGroup {
 		}
 
 		if _, exists := branchMap[branchID]; !exists {
-			branch, _ := db.GetBranchByID(database, branchID)
-			branchMap[branchID] = &branchGroup{
-				Branch:  branch,
-				Commits: []commitData{},
-			}
+			branch, _ := dbRepo.GetBranchByID(ctx, branchID)
+			branchMap[branchID] = &branchGroup{Branch: branch, Commits: []commitData{}}
 			branchOrder = append(branchOrder, branchID)
 		}
 		branchMap[branchID].Commits = append(branchMap[branchID].Commits, c)
@@ -331,7 +293,7 @@ func groupByBranch(database *sql.DB, commits []commitData) []branchGroup {
 	return groups
 }
 
-func createWorklogClient(cfg *config.Config) (llm.LLMClient, error) {
+func createWorklogClient(cfg *config.Config) (llm.Client, error) {
 	selectedProvider := worklogProvider
 	if selectedProvider == "" {
 		selectedProvider = cfg.DefaultProvider
@@ -339,12 +301,7 @@ func createWorklogClient(cfg *config.Config) (llm.LLMClient, error) {
 	if selectedProvider == "" {
 		selectedProvider = "ollama"
 	}
-
-	llmCfg := llm.Config{
-		Provider: llm.Provider(selectedProvider),
-		Model:    worklogModel,
-	}
-
+	llmCfg := llm.Config{Provider: llm.Provider(selectedProvider), Model: worklogModel}
 	switch llmCfg.Provider {
 	case llm.ProviderOpenAI:
 		llmCfg.APIKey = cfg.GetAPIKey("openai")
@@ -362,11 +319,10 @@ func createWorklogClient(cfg *config.Config) (llm.LLMClient, error) {
 			llmCfg.Model = cfg.OllamaModel
 		}
 	}
-
 	return llm.NewClient(llmCfg)
 }
 
-func generateWorklogMarkdown(groups []dayGroup, client llm.LLMClient, cfg *config.Config) (string, error) {
+func generateWorklogMarkdown(groups []dayGroup, client llm.Client, cfg *config.Config) (string, error) {
 	var sb strings.Builder
 
 	// Header
@@ -474,7 +430,7 @@ func generateWorklogMarkdown(groups []dayGroup, client llm.LLMClient, cfg *confi
 	return sb.String(), nil
 }
 
-func generateBranchWorklogMarkdown(groups []branchGroup, client llm.LLMClient, cfg *config.Config) (string, error) {
+func generateBranchWorklogMarkdown(groups []branchGroup, client llm.Client, cfg *config.Config) (string, error) {
 	var sb strings.Builder
 
 	// Header
@@ -606,7 +562,7 @@ func writeBranchSummaryBullets(sb *strings.Builder, group branchGroup) {
 	sb.WriteString("\n")
 }
 
-func generateBranchSummary(group branchGroup, client llm.LLMClient) (string, error) {
+func generateBranchSummary(group branchGroup, client llm.Client) (string, error) {
 	// Collect all summaries and messages
 	var summaries []string
 	for _, c := range group.Commits {
@@ -634,8 +590,7 @@ Commit descriptions:
 	return client.Complete(ctx, prompt)
 }
 
-// generateDayBranchUpdates creates a concise, interesting summary of commits for a branch on a specific day
-func generateDayBranchUpdates(commits []commitData, client llm.LLMClient) (string, error) {
+func generateDayBranchUpdates(commits []commitData, client llm.Client) (string, error) {
 	// Collect summaries or messages
 	var descriptions []string
 	for _, c := range commits {
@@ -705,7 +660,7 @@ func writeFallbackUpdates(sb *strings.Builder, commits []commitData) {
 	}
 }
 
-func generateOverallSummary(groups []dayGroup, client llm.LLMClient) (string, error) {
+func generateOverallSummary(groups []dayGroup, client llm.Client) (string, error) {
 	// Collect all commit messages
 	var messages []string
 	for _, g := range groups {
@@ -734,7 +689,7 @@ Commit messages:
 	return client.Complete(ctx, prompt)
 }
 
-func generateDaySummary(group dayGroup, client llm.LLMClient) (string, error) {
+func generateDaySummary(group dayGroup, client llm.Client) (string, error) {
 	var messages []string
 	for _, c := range group.Commits {
 		messages = append(messages, strings.TrimSpace(c.Message))

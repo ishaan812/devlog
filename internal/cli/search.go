@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -73,9 +72,9 @@ func init() {
 }
 
 func runSearch(cmd *cobra.Command, args []string) error {
+	ctx := context.Background()
 	query := strings.Join(args, " ")
 
-	// Colors
 	titleColor := color.New(color.FgHiCyan, color.Bold)
 	pathColor := color.New(color.FgHiYellow)
 	summaryColor := color.New(color.FgHiWhite)
@@ -84,18 +83,17 @@ func runSearch(cmd *cobra.Command, args []string) error {
 	semanticColor := color.New(color.FgHiGreen)
 	commitColor := color.New(color.FgHiBlue)
 
-	database, err := db.GetDB()
+	dbRepo, err := db.GetRepository()
 	if err != nil {
 		return fmt.Errorf("failed to initialize database: %w", err)
 	}
 
-	// Get codebase
 	codebasePath := searchCodebase
 	if codebasePath == "" {
 		codebasePath, _ = filepath.Abs(".")
 	}
 
-	codebase, err := db.GetCodebaseByPath(database, codebasePath)
+	codebase, err := dbRepo.GetCodebaseByPath(ctx, codebasePath)
 	if err != nil {
 		return err
 	}
@@ -103,11 +101,9 @@ func runSearch(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("codebase not indexed. Run 'devlog ingest' first")
 	}
 
-	// Display header
 	fmt.Println()
 	titleColor.Printf("  Search Results for: %s\n", query)
 
-	// Show active filters
 	var filters []string
 	if searchLanguage != "" {
 		filters = append(filters, fmt.Sprintf("lang:%s", searchLanguage))
@@ -130,66 +126,50 @@ func runSearch(cmd *cobra.Command, args []string) error {
 	dimColor.Println("  " + strings.Repeat("─", 50))
 	fmt.Println()
 
-	// Search based on type
 	switch searchType {
 	case "files":
-		return searchFiles(database, codebase, query, titleColor, pathColor, summaryColor, dimColor, purposeColor, semanticColor)
+		return searchFiles(ctx, dbRepo, codebase, query, titleColor, pathColor, summaryColor, dimColor, purposeColor, semanticColor)
 	case "commits":
-		return searchCommits(database, codebase, query, titleColor, commitColor, dimColor)
+		return searchCommits(ctx, dbRepo, codebase, query, titleColor, commitColor, dimColor)
 	case "all":
-		err := searchFiles(database, codebase, query, titleColor, pathColor, summaryColor, dimColor, purposeColor, semanticColor)
-		if err != nil {
+		if err := searchFiles(ctx, dbRepo, codebase, query, titleColor, pathColor, summaryColor, dimColor, purposeColor, semanticColor); err != nil {
 			VerboseLog("File search error: %v", err)
 		}
-		return searchCommits(database, codebase, query, titleColor, commitColor, dimColor)
+		return searchCommits(ctx, dbRepo, codebase, query, titleColor, commitColor, dimColor)
 	default:
 		return fmt.Errorf("unknown search type: %s (use files, commits, or all)", searchType)
 	}
 }
 
-func searchFiles(database *sql.DB, codebase *db.Codebase, query string,
+func searchFiles(ctx context.Context, dbRepo *db.SQLRepository, codebase *db.Codebase, query string,
 	titleColor, pathColor, summaryColor, dimColor, purposeColor, semanticColor *color.Color) error {
 
 	var files []db.FileIndex
 	var matchingFolders []db.Folder
-	useSemanticSearch := !searchKeyword && db.HasEmbeddings(database, codebase.ID)
+	useSemanticSearch := !searchKeyword && dbRepo.HasEmbeddings(ctx, codebase.ID)
 
 	if useSemanticSearch {
-		// Try semantic search with embeddings
 		cfg, _ := config.Load()
 		embedder, err := createEmbedder(cfg)
 		if err != nil {
 			VerboseLog("Embedder not available, falling back to keyword search: %v", err)
 			useSemanticSearch = false
 		} else {
-			ctx := context.Background()
 			queryEmbedding, err := embedder.Embed(ctx, query)
 			if err != nil {
 				VerboseLog("Failed to embed query, falling back to keyword search: %v", err)
 				useSemanticSearch = false
 			} else {
-				// Semantic search for files
-				files, err = db.SemanticSearchFiles(database, codebase.ID, queryEmbedding, searchLimit)
-				if err != nil {
-					VerboseLog("Semantic file search failed: %v", err)
-				}
-
-				// Semantic search for folders
-				matchingFolders, err = db.SemanticSearchFolders(database, codebase.ID, queryEmbedding, 5)
-				if err != nil {
-					VerboseLog("Semantic folder search failed: %v", err)
-				}
+				files, _ = dbRepo.SemanticSearchFiles(ctx, codebase.ID, queryEmbedding, searchLimit)
+				matchingFolders, _ = dbRepo.SemanticSearchFolders(ctx, codebase.ID, queryEmbedding, 5)
 			}
 		}
 	}
 
-	// Fall back to keyword search if semantic search didn't work or wasn't used
 	if !useSemanticSearch {
-		// Keyword search for files with filters
-		files, _ = searchFilesWithFilters(database, codebase.ID, query)
+		files, _ = searchFilesWithFilters(ctx, dbRepo, codebase.ID, query)
 
-		// Keyword search for folders
-		folders, _ := db.GetFoldersByCodebase(database, codebase.ID)
+		folders, _ := dbRepo.GetFoldersByCodebase(ctx, codebase.ID)
 		queryLower := strings.ToLower(query)
 		for _, f := range folders {
 			if strings.Contains(strings.ToLower(f.Summary), queryLower) ||
@@ -270,22 +250,20 @@ func searchFiles(database *sql.DB, codebase *db.Codebase, query string,
 	return nil
 }
 
-func searchCommits(database *sql.DB, codebase *db.Codebase, query string,
+func searchCommits(ctx context.Context, dbRepo *db.SQLRepository, codebase *db.Codebase, query string,
 	titleColor, commitColor, dimColor *color.Color) error {
 
 	titleColor.Println("  Commits")
 	fmt.Println()
 
-	// Build query with filters
 	queryStr := `
 		SELECT id, hash, codebase_id, branch_id, author_email, message, summary,
 			committed_at, stats, is_user_commit, is_on_default_branch
 		FROM commits WHERE codebase_id = $1
 	`
-	args := []interface{}{codebase.ID}
+	args := []any{codebase.ID}
 	argIdx := 2
 
-	// Apply query filter
 	if query != "" {
 		queryPattern := "%" + query + "%"
 		queryStr += fmt.Sprintf(" AND (message ILIKE $%d OR summary ILIKE $%d)", argIdx, argIdx)
@@ -293,9 +271,8 @@ func searchCommits(database *sql.DB, codebase *db.Codebase, query string,
 		argIdx++
 	}
 
-	// Apply branch filter
 	if searchBranch != "" {
-		branch, err := db.GetBranch(database, codebase.ID, searchBranch)
+		branch, err := dbRepo.GetBranch(ctx, codebase.ID, searchBranch)
 		if err != nil || branch == nil {
 			dimColor.Printf("  Branch '%s' not found\n", searchBranch)
 			return nil
@@ -305,7 +282,6 @@ func searchCommits(database *sql.DB, codebase *db.Codebase, query string,
 		argIdx++
 	}
 
-	// Apply date filter
 	if searchDays > 0 {
 		since := time.Now().AddDate(0, 0, -searchDays)
 		queryStr += fmt.Sprintf(" AND committed_at >= $%d", argIdx)
@@ -316,50 +292,34 @@ func searchCommits(database *sql.DB, codebase *db.Codebase, query string,
 	queryStr += fmt.Sprintf(" ORDER BY committed_at DESC LIMIT $%d", argIdx)
 	args = append(args, searchLimit)
 
-	rows, err := database.Query(queryStr, args...)
+	results, err := dbRepo.ExecuteQuery(ctx, queryStr)
 	if err != nil {
 		return fmt.Errorf("failed to search commits: %w", err)
 	}
-	defer rows.Close()
 
-	var commits []db.Commit
-	for rows.Next() {
-		c := db.Commit{}
-		var branchID, summary, stats sql.NullString
-
-		if err := rows.Scan(&c.ID, &c.Hash, &c.CodebaseID, &branchID, &c.AuthorEmail, &c.Message, &summary,
-			&c.CommittedAt, &stats, &c.IsUserCommit, &c.IsOnDefaultBranch); err != nil {
-			return err
-		}
-
-		c.BranchID = branchID.String
-		c.Summary = summary.String
-		c.Stats = db.FromJSON(stats.String)
-		commits = append(commits, c)
-	}
-
-	if len(commits) == 0 {
+	if len(results) == 0 {
 		dimColor.Println("  No commits found matching the query.")
 		fmt.Println()
 		return nil
 	}
 
-	for _, c := range commits {
-		// Get first line of commit message
-		msg := strings.Split(c.Message, "\n")[0]
+	for _, row := range results {
+		hash := getString(row, "hash")
+		msg := strings.Split(getString(row, "message"), "\n")[0]
 		if len(msg) > 70 {
 			msg = msg[:67] + "..."
 		}
 
-		// Commit date and hash
-		dateStr := c.CommittedAt.Format("Jan 2")
-		commitColor.Printf("  %s ", c.Hash[:7])
+		var dateStr string
+		if t, ok := row["committed_at"].(time.Time); ok {
+			dateStr = t.Format("Jan 2")
+		}
+		commitColor.Printf("  %s ", hash[:7])
 		dimColor.Printf("%s ", dateStr)
 		fmt.Printf("%s\n", msg)
 
-		// Show summary if available
-		if c.Summary != "" && c.Summary != msg {
-			dimColor.Printf("    %s\n", truncate(c.Summary, 60))
+		if summary := getString(row, "summary"); summary != "" && summary != msg {
+			dimColor.Printf("    %s\n", truncate(summary, 60))
 		}
 	}
 
@@ -367,85 +327,12 @@ func searchCommits(database *sql.DB, codebase *db.Codebase, query string,
 	return nil
 }
 
-func searchFilesWithFilters(database *sql.DB, codebaseID, query string) ([]db.FileIndex, error) {
-	// Build query with filters
-	queryStr := `
-		SELECT id, codebase_id, folder_id, path, name, extension, language,
-			size_bytes, line_count, summary, purpose, key_exports, dependencies, content_hash, indexed_at
-		FROM file_indexes WHERE codebase_id = $1
-	`
-	args := []interface{}{codebaseID}
-	argIdx := 2
-
-	// Apply query filter
-	if query != "" {
-		searchPattern := "%" + query + "%"
-		queryStr += fmt.Sprintf(" AND (summary ILIKE $%d OR purpose ILIKE $%d OR name ILIKE $%d)", argIdx, argIdx, argIdx)
-		args = append(args, searchPattern)
-		argIdx++
-	}
-
-	// Apply language filter
-	if searchLanguage != "" {
-		queryStr += fmt.Sprintf(" AND LOWER(language) = LOWER($%d)", argIdx)
-		args = append(args, searchLanguage)
-		argIdx++
-	}
-
-	// Apply extension filter
-	if searchExtension != "" {
-		ext := searchExtension
-		if !strings.HasPrefix(ext, ".") {
-			ext = "." + ext
-		}
-		queryStr += fmt.Sprintf(" AND extension = $%d", argIdx)
-		args = append(args, ext)
-		argIdx++
-	}
-
-	// Apply path filter
-	if searchPath != "" {
-		pathPattern := "%" + searchPath + "%"
-		queryStr += fmt.Sprintf(" AND path ILIKE $%d", argIdx)
-		args = append(args, pathPattern)
-		argIdx++
-	}
-
-	queryStr += fmt.Sprintf(" ORDER BY path LIMIT $%d", argIdx)
-	args = append(args, searchLimit*2)
-
-	rows, err := database.Query(queryStr, args...)
+func searchFilesWithFilters(ctx context.Context, dbRepo *db.SQLRepository, codebaseID, query string) ([]db.FileIndex, error) {
+	files, err := dbRepo.SearchFilesBySummary(ctx, codebaseID, query)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var files []db.FileIndex
-	for rows.Next() {
-		f := db.FileIndex{}
-		var folderID, extension, language, summary, purpose, keyExports, deps, contentHash sql.NullString
-		var indexedAt sql.NullTime
-
-		if err := rows.Scan(&f.ID, &f.CodebaseID, &folderID, &f.Path, &f.Name, &extension, &language,
-			&f.SizeBytes, &f.LineCount, &summary, &purpose, &keyExports, &deps, &contentHash, &indexedAt); err != nil {
-			return nil, err
-		}
-
-		f.FolderID = folderID.String
-		f.Extension = extension.String
-		f.Language = language.String
-		f.Summary = summary.String
-		f.Purpose = purpose.String
-		f.KeyExports = db.FromJSONStringSlice(keyExports.String)
-		f.Dependencies = db.FromJSONStringSlice(deps.String)
-		f.ContentHash = contentHash.String
-		if indexedAt.Valid {
-			f.IndexedAt = indexedAt.Time
-		}
-		files = append(files, f)
-	}
-
-	return files, rows.Err()
+	return applyFileFilters(files), nil
 }
 
 func applyFileFilters(files []db.FileIndex) []db.FileIndex {

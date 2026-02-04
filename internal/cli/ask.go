@@ -44,35 +44,30 @@ func init() {
 }
 
 func runAsk(cmd *cobra.Command, args []string) error {
+	ctx := context.Background()
 	question := strings.Join(args, " ")
 
-	// Load config
 	cfg, err := config.Load()
 	if err != nil {
 		VerboseLog("Warning: failed to load config: %v", err)
 		cfg = &config.Config{DefaultProvider: "ollama"}
 	}
 
-	// Initialize database
 	VerboseLog("Initializing database")
-	database, err := db.GetDB()
+	dbRepo, err := db.GetRepository()
 	if err != nil {
 		return fmt.Errorf("failed to initialize database: %w", err)
 	}
 
-	// Check if we have any data
-	var count int
-	err = database.QueryRow("SELECT COUNT(*) FROM commits").Scan(&count)
+	results, err := dbRepo.ExecuteQuery(ctx, "SELECT COUNT(*) as cnt FROM commits")
 	if err != nil {
 		return fmt.Errorf("failed to query database: %w", err)
 	}
-
-	if count == 0 {
+	if len(results) == 0 || results[0]["cnt"] == int64(0) {
 		fmt.Println("No commits found in database. Run 'devlog ingest' first to scan a repository.")
 		return nil
 	}
 
-	// Determine provider
 	selectedProvider := provider
 	if selectedProvider == "" {
 		selectedProvider = cfg.DefaultProvider
@@ -81,15 +76,9 @@ func runAsk(cmd *cobra.Command, args []string) error {
 		selectedProvider = "ollama"
 	}
 
-	// Initialize LLM client
 	VerboseLog("Initializing LLM client with provider: %s", selectedProvider)
-	llmCfg := llm.Config{
-		Provider: llm.Provider(selectedProvider),
-		Model:    model,
-		BaseURL:  baseURL,
-	}
+	llmCfg := llm.Config{Provider: llm.Provider(selectedProvider), Model: model, BaseURL: baseURL}
 
-	// Set API keys from config
 	switch llmCfg.Provider {
 	case llm.ProviderOpenAI:
 		llmCfg.APIKey = cfg.GetAPIKey("openai")
@@ -122,11 +111,9 @@ func runAsk(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to create LLM client: %w", err)
 	}
 
-	// Create pipeline and ask question
-	pipeline := chat.NewPipeline(client, database, IsVerbose())
+	pipeline := chat.NewPipeline(client, dbRepo.DB(), IsVerbose())
 
 	fmt.Println("Thinking...")
-	ctx := context.Background()
 	response, err := pipeline.Ask(ctx, question)
 	if err != nil {
 		return fmt.Errorf("failed to process question: %w", err)

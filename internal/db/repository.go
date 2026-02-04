@@ -1,138 +1,194 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"time"
 )
 
-// ==================== Developer Repository ====================
-
-// UpsertDeveloper creates or updates a developer
-func UpsertDeveloper(db *sql.DB, dev *Developer) error {
-	// Delete existing record first (DuckDB ON CONFLICT has limitations)
-	db.Exec(`DELETE FROM developers WHERE email = $1`, dev.Email)
-
-	_, err := db.Exec(`
-		INSERT INTO developers (id, name, email, is_current_user)
-		VALUES ($1, $2, $3, $4)
-	`, dev.ID, dev.Name, dev.Email, dev.IsCurrentUser)
-	return err
+// Repository defines the interface for all database operations.
+type Repository interface {
+	// Developer operations
+	UpsertDeveloper(ctx context.Context, dev *Developer) error
+	GetDeveloperByEmail(ctx context.Context, email string) (*Developer, error)
+	SetCurrentUser(ctx context.Context, email string) error
+	GetCurrentUser(ctx context.Context) (*Developer, error)
+	UpsertCodebase(ctx context.Context, codebase *Codebase) error
+	GetCodebaseByPath(ctx context.Context, path string) (*Codebase, error)
+	GetCodebaseByID(ctx context.Context, id string) (*Codebase, error)
+	GetAllCodebases(ctx context.Context) ([]Codebase, error)
+	UpsertBranch(ctx context.Context, branch *Branch) error
+	GetBranch(ctx context.Context, codebaseID, name string) (*Branch, error)
+	GetBranchByID(ctx context.Context, id string) (*Branch, error)
+	GetBranchesByCodebase(ctx context.Context, codebaseID string) ([]Branch, error)
+	GetBranchCommits(ctx context.Context, branchID string, limit int) ([]Commit, error)
+	ClearDefaultBranch(ctx context.Context, codebaseID string) error
+	UpsertCommit(ctx context.Context, commit *Commit) error
+	CommitExists(ctx context.Context, codebaseID, hash string) (bool, error)
+	GetExistingCommitHashes(ctx context.Context, codebaseID string) (map[string]bool, error)
+	GetUserCommitsMissingSummaries(ctx context.Context, codebaseID string) ([]Commit, error)
+	UpdateCommitSummary(ctx context.Context, commitID, summary string) error
+	GetCommitByHash(ctx context.Context, codebaseID, hash string) (*Commit, error)
+	GetUserCommits(ctx context.Context, codebaseID string, since time.Time) ([]Commit, error)
+	GetCommitCount(ctx context.Context, codebaseID string) (int64, error)
+	GetCommitCountByPath(ctx context.Context, repoPath string) (int64, error)
+	CreateFileChange(ctx context.Context, fc *FileChange) error
+	GetFileChangesByCommit(ctx context.Context, commitID string) ([]FileChange, error)
+	GetFileChangeCount(ctx context.Context, codebaseID string) (int64, error)
+	GetBranchCursor(ctx context.Context, codebaseID, branchName string) (string, error)
+	UpdateBranchCursor(ctx context.Context, codebaseID, branchName, hash string) error
+	UpsertFolder(ctx context.Context, folder *Folder) error
+	GetFoldersByCodebase(ctx context.Context, codebaseID string) ([]Folder, error)
+	GetFolderByPath(ctx context.Context, codebaseID, path string) (*Folder, error)
+	GetExistingFolderPaths(ctx context.Context, codebaseID string) (map[string]string, error)
+	DeleteFoldersByPaths(ctx context.Context, codebaseID string, paths []string) error
+	UpsertFileIndex(ctx context.Context, file *FileIndex) error
+	GetFilesByCodebase(ctx context.Context, codebaseID string) ([]FileIndex, error)
+	GetExistingFileHashes(ctx context.Context, codebaseID string) (map[string]ExistingFileInfo, error)
+	DeleteFileIndex(ctx context.Context, codebaseID, path string) error
+	DeleteFileIndexesByPaths(ctx context.Context, codebaseID string, paths []string) error
+	GetFilesByFolder(ctx context.Context, folderID string) ([]FileIndex, error)
+	SearchFilesBySummary(ctx context.Context, codebaseID, query string) ([]FileIndex, error)
+	GetCodebaseStats(ctx context.Context, codebaseID string) (*CodebaseStats, error)
+	HasEmbeddings(ctx context.Context, codebaseID string) bool
+	SemanticSearchFiles(ctx context.Context, codebaseID string, queryEmbedding []float32, limit int) ([]FileIndex, error)
+	SemanticSearchFolders(ctx context.Context, codebaseID string, queryEmbedding []float32, limit int) ([]Folder, error)
+	ExecuteQuery(ctx context.Context, query string) ([]map[string]any, error)
 }
 
-// GetDeveloperByEmail retrieves a developer by email
-func GetDeveloperByEmail(db *sql.DB, email string) (*Developer, error) {
-	row := db.QueryRow(`SELECT id, name, email, is_current_user FROM developers WHERE email = $1`, email)
-	dev := &Developer{}
-	err := row.Scan(&dev.ID, &dev.Name, &dev.Email, &dev.IsCurrentUser)
-	if err == sql.ErrNoRows {
-		return nil, nil
+// SQLRepository implements Repository using SQL database.
+type SQLRepository struct {
+	db *sql.DB
+}
+
+// NewRepository creates a new SQLRepository.
+func NewRepository(db *sql.DB) *SQLRepository {
+	return &SQLRepository{db: db}
+}
+
+// DB returns the underlying database connection.
+func (r *SQLRepository) DB() *sql.DB {
+	return r.db
+}
+
+// UpsertDeveloper creates or updates a developer.
+func (r *SQLRepository) UpsertDeveloper(ctx context.Context, dev *Developer) error {
+	if _, err := r.db.ExecContext(ctx, `DELETE FROM developers WHERE email = $1`, dev.Email); err != nil {
+		return fmt.Errorf("delete existing developer: %w", err)
 	}
-	return dev, err
-}
-
-// SetCurrentUser marks a developer as the current user
-func SetCurrentUser(db *sql.DB, email string) error {
-	_, err := db.Exec(`UPDATE developers SET is_current_user = FALSE WHERE is_current_user = TRUE`)
+	_, err := r.db.ExecContext(ctx, `INSERT INTO developers (id, name, email, is_current_user) VALUES ($1, $2, $3, $4)`,
+		dev.ID, dev.Name, dev.Email, dev.IsCurrentUser)
 	if err != nil {
-		return err
+		return fmt.Errorf("insert developer: %w", err)
 	}
-	_, err = db.Exec(`UPDATE developers SET is_current_user = TRUE WHERE email = $1`, email)
-	return err
+	return nil
 }
 
-// GetCurrentUser retrieves the current user
-func GetCurrentUser(db *sql.DB) (*Developer, error) {
-	row := db.QueryRow(`SELECT id, name, email, is_current_user FROM developers WHERE is_current_user = TRUE`)
+// GetDeveloperByEmail retrieves a developer by email.
+func (r *SQLRepository) GetDeveloperByEmail(ctx context.Context, email string) (*Developer, error) {
+	row := r.db.QueryRowContext(ctx, `SELECT id, name, email, is_current_user FROM developers WHERE email = $1`, email)
 	dev := &Developer{}
 	err := row.Scan(&dev.ID, &dev.Name, &dev.Email, &dev.IsCurrentUser)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
-	return dev, err
+	if err != nil {
+		return nil, fmt.Errorf("scan developer: %w", err)
+	}
+	return dev, nil
 }
 
-// ==================== Codebase Repository ====================
+// SetCurrentUser marks a developer as the current user.
+func (r *SQLRepository) SetCurrentUser(ctx context.Context, email string) error {
+	if _, err := r.db.ExecContext(ctx, `UPDATE developers SET is_current_user = FALSE WHERE is_current_user = TRUE`); err != nil {
+		return fmt.Errorf("clear current user: %w", err)
+	}
+	if _, err := r.db.ExecContext(ctx, `UPDATE developers SET is_current_user = TRUE WHERE email = $1`, email); err != nil {
+		return fmt.Errorf("set current user: %w", err)
+	}
+	return nil
+}
 
-// UpsertCodebase creates or updates a codebase
-func UpsertCodebase(db *sql.DB, codebase *Codebase) error {
-	_, err := db.Exec(`
+// GetCurrentUser retrieves the current user.
+func (r *SQLRepository) GetCurrentUser(ctx context.Context) (*Developer, error) {
+	row := r.db.QueryRowContext(ctx, `SELECT id, name, email, is_current_user FROM developers WHERE is_current_user = TRUE`)
+	dev := &Developer{}
+	err := row.Scan(&dev.ID, &dev.Name, &dev.Email, &dev.IsCurrentUser)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("scan current user: %w", err)
+	}
+	return dev, nil
+}
+
+// UpsertCodebase creates or updates a codebase.
+func (r *SQLRepository) UpsertCodebase(ctx context.Context, codebase *Codebase) error {
+	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO codebases (id, path, name, summary, tech_stack, default_branch, indexed_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		ON CONFLICT (path) DO UPDATE SET
-			name = EXCLUDED.name,
-			summary = EXCLUDED.summary,
-			tech_stack = EXCLUDED.tech_stack,
-			default_branch = EXCLUDED.default_branch,
-			indexed_at = EXCLUDED.indexed_at
-	`, codebase.ID, codebase.Path, codebase.Name, NullString(codebase.Summary),
+			name = EXCLUDED.name, summary = EXCLUDED.summary, tech_stack = EXCLUDED.tech_stack,
+			default_branch = EXCLUDED.default_branch, indexed_at = EXCLUDED.indexed_at`,
+		codebase.ID, codebase.Path, codebase.Name, NullString(codebase.Summary),
 		ToJSON(codebase.TechStack), NullString(codebase.DefaultBranch), NullTime(codebase.IndexedAt))
-	return err
+	if err != nil {
+		return fmt.Errorf("upsert codebase: %w", err)
+	}
+	return nil
 }
 
-// GetCodebaseByPath retrieves a codebase by path
-func GetCodebaseByPath(db *sql.DB, path string) (*Codebase, error) {
-	row := db.QueryRow(`
-		SELECT id, path, name, summary, tech_stack, default_branch, indexed_at
-		FROM codebases WHERE path = $1
-	`, path)
-	return scanCodebase(row)
+// GetCodebaseByPath retrieves a codebase by path.
+func (r *SQLRepository) GetCodebaseByPath(ctx context.Context, path string) (*Codebase, error) {
+	row := r.db.QueryRowContext(ctx, `SELECT id, path, name, summary, tech_stack, default_branch, indexed_at FROM codebases WHERE path = $1`, path)
+	return r.scanCodebase(row)
 }
 
-// GetCodebaseByID retrieves a codebase by ID
-func GetCodebaseByID(db *sql.DB, id string) (*Codebase, error) {
-	row := db.QueryRow(`
-		SELECT id, path, name, summary, tech_stack, default_branch, indexed_at
-		FROM codebases WHERE id = $1
-	`, id)
-	return scanCodebase(row)
+// GetCodebaseByID retrieves a codebase by ID.
+func (r *SQLRepository) GetCodebaseByID(ctx context.Context, id string) (*Codebase, error) {
+	row := r.db.QueryRowContext(ctx, `SELECT id, path, name, summary, tech_stack, default_branch, indexed_at FROM codebases WHERE id = $1`, id)
+	return r.scanCodebase(row)
 }
 
-func scanCodebase(row *sql.Row) (*Codebase, error) {
+func (r *SQLRepository) scanCodebase(row *sql.Row) (*Codebase, error) {
 	c := &Codebase{}
 	var summary, defaultBranch sql.NullString
-	var techStack interface{}
+	var techStack any
 	var indexedAt sql.NullTime
-
 	err := row.Scan(&c.ID, &c.Path, &c.Name, &summary, &techStack, &defaultBranch, &indexedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("scan codebase: %w", err)
 	}
-
 	c.Summary = summary.String
 	c.DefaultBranch = defaultBranch.String
 	if indexedAt.Valid {
 		c.IndexedAt = indexedAt.Time
 	}
-
-	// Handle tech_stack - DuckDB returns JSON as native Go types
 	c.TechStack = convertToIntMap(techStack)
-
 	return c, nil
 }
 
-// GetAllCodebases retrieves all codebases
-func GetAllCodebases(db *sql.DB) ([]Codebase, error) {
-	rows, err := db.Query(`SELECT id, path, name, summary, tech_stack, default_branch, indexed_at FROM codebases ORDER BY name`)
+// GetAllCodebases retrieves all codebases.
+func (r *SQLRepository) GetAllCodebases(ctx context.Context) ([]Codebase, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT id, path, name, summary, tech_stack, default_branch, indexed_at FROM codebases ORDER BY name`)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("query codebases: %w", err)
 	}
 	defer rows.Close()
-
 	var codebases []Codebase
 	for rows.Next() {
 		c := Codebase{}
 		var summary, defaultBranch sql.NullString
-		var techStack interface{}
+		var techStack any
 		var indexedAt sql.NullTime
-
 		if err := rows.Scan(&c.ID, &c.Path, &c.Name, &summary, &techStack, &defaultBranch, &indexedAt); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("scan codebase row: %w", err)
 		}
-
 		c.Summary = summary.String
 		c.DefaultBranch = defaultBranch.String
 		if indexedAt.Valid {
@@ -141,61 +197,61 @@ func GetAllCodebases(db *sql.DB) ([]Codebase, error) {
 		c.TechStack = convertToIntMap(techStack)
 		codebases = append(codebases, c)
 	}
-	return codebases, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate codebases: %w", err)
+	}
+	return codebases, nil
 }
 
-// ==================== Branch Repository ====================
-
-// UpsertBranch creates or updates a branch
-func UpsertBranch(db *sql.DB, branch *Branch) error {
-	// Delete existing record first (DuckDB ON CONFLICT has limitations)
-	db.Exec(`DELETE FROM branches WHERE codebase_id = $1 AND name = $2`, branch.CodebaseID, branch.Name)
-
-	_, err := db.Exec(`
+// UpsertBranch creates or updates a branch.
+func (r *SQLRepository) UpsertBranch(ctx context.Context, branch *Branch) error {
+	if _, err := r.db.ExecContext(ctx, `DELETE FROM branches WHERE codebase_id = $1 AND name = $2`, branch.CodebaseID, branch.Name); err != nil {
+		return fmt.Errorf("delete existing branch: %w", err)
+	}
+	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO branches (id, codebase_id, name, is_default, base_branch, summary, story, status,
 			first_commit_hash, last_commit_hash, commit_count, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-	`, branch.ID, branch.CodebaseID, branch.Name, branch.IsDefault, NullString(branch.BaseBranch),
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+		branch.ID, branch.CodebaseID, branch.Name, branch.IsDefault, NullString(branch.BaseBranch),
 		NullString(branch.Summary), NullString(branch.Story), NullString(branch.Status),
 		NullString(branch.FirstCommitHash), NullString(branch.LastCommitHash), branch.CommitCount,
 		NullTime(branch.CreatedAt), NullTime(branch.UpdatedAt))
-	return err
+	if err != nil {
+		return fmt.Errorf("insert branch: %w", err)
+	}
+	return nil
 }
 
-// GetBranch retrieves a branch by codebase and name
-func GetBranch(db *sql.DB, codebaseID, name string) (*Branch, error) {
-	row := db.QueryRow(`
+// GetBranch retrieves a branch by codebase and name.
+func (r *SQLRepository) GetBranch(ctx context.Context, codebaseID, name string) (*Branch, error) {
+	row := r.db.QueryRowContext(ctx, `
 		SELECT id, codebase_id, name, is_default, base_branch, summary, story, status,
 			first_commit_hash, last_commit_hash, commit_count, created_at, updated_at
-		FROM branches WHERE codebase_id = $1 AND name = $2
-	`, codebaseID, name)
-	return scanBranch(row)
+		FROM branches WHERE codebase_id = $1 AND name = $2`, codebaseID, name)
+	return r.scanBranch(row)
 }
 
-// GetBranchByID retrieves a branch by ID
-func GetBranchByID(db *sql.DB, id string) (*Branch, error) {
-	row := db.QueryRow(`
+// GetBranchByID retrieves a branch by ID.
+func (r *SQLRepository) GetBranchByID(ctx context.Context, id string) (*Branch, error) {
+	row := r.db.QueryRowContext(ctx, `
 		SELECT id, codebase_id, name, is_default, base_branch, summary, story, status,
 			first_commit_hash, last_commit_hash, commit_count, created_at, updated_at
-		FROM branches WHERE id = $1
-	`, id)
-	return scanBranch(row)
+		FROM branches WHERE id = $1`, id)
+	return r.scanBranch(row)
 }
 
-func scanBranch(row *sql.Row) (*Branch, error) {
+func (r *SQLRepository) scanBranch(row *sql.Row) (*Branch, error) {
 	b := &Branch{}
 	var baseBranch, summary, story, status, firstHash, lastHash sql.NullString
 	var createdAt, updatedAt sql.NullTime
-
 	err := row.Scan(&b.ID, &b.CodebaseID, &b.Name, &b.IsDefault, &baseBranch, &summary, &story,
 		&status, &firstHash, &lastHash, &b.CommitCount, &createdAt, &updatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("scan branch: %w", err)
 	}
-
 	b.BaseBranch = baseBranch.String
 	b.Summary = summary.String
 	b.Story = story.String
@@ -208,33 +264,28 @@ func scanBranch(row *sql.Row) (*Branch, error) {
 	if updatedAt.Valid {
 		b.UpdatedAt = updatedAt.Time
 	}
-
 	return b, nil
 }
 
-// GetBranchesByCodebase retrieves all branches for a codebase
-func GetBranchesByCodebase(db *sql.DB, codebaseID string) ([]Branch, error) {
-	rows, err := db.Query(`
+// GetBranchesByCodebase retrieves all branches for a codebase.
+func (r *SQLRepository) GetBranchesByCodebase(ctx context.Context, codebaseID string) ([]Branch, error) {
+	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, codebase_id, name, is_default, base_branch, summary, story, status,
 			first_commit_hash, last_commit_hash, commit_count, created_at, updated_at
-		FROM branches WHERE codebase_id = $1 ORDER BY is_default DESC, updated_at DESC
-	`, codebaseID)
+		FROM branches WHERE codebase_id = $1 ORDER BY is_default DESC, updated_at DESC`, codebaseID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("query branches: %w", err)
 	}
 	defer rows.Close()
-
 	var branches []Branch
 	for rows.Next() {
 		b := Branch{}
 		var baseBranch, summary, story, status, firstHash, lastHash sql.NullString
 		var createdAt, updatedAt sql.NullTime
-
 		if err := rows.Scan(&b.ID, &b.CodebaseID, &b.Name, &b.IsDefault, &baseBranch, &summary, &story,
 			&status, &firstHash, &lastHash, &b.CommitCount, &createdAt, &updatedAt); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("scan branch row: %w", err)
 		}
-
 		b.BaseBranch = baseBranch.String
 		b.Summary = summary.String
 		b.Story = story.String
@@ -249,294 +300,292 @@ func GetBranchesByCodebase(db *sql.DB, codebaseID string) ([]Branch, error) {
 		}
 		branches = append(branches, b)
 	}
-	return branches, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate branches: %w", err)
+	}
+	return branches, nil
 }
 
-// GetBranchCommits retrieves recent commits for a branch
-func GetBranchCommits(db *sql.DB, branchID string, limit int) ([]Commit, error) {
-	rows, err := db.Query(`
+// GetBranchCommits retrieves recent commits for a branch.
+func (r *SQLRepository) GetBranchCommits(ctx context.Context, branchID string, limit int) ([]Commit, error) {
+	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, hash, codebase_id, branch_id, author_email, message, summary,
 			committed_at, stats, is_user_commit, is_on_default_branch
-		FROM commits WHERE branch_id = $1 ORDER BY committed_at DESC LIMIT $2
-	`, branchID, limit)
+		FROM commits WHERE branch_id = $1 ORDER BY committed_at DESC LIMIT $2`, branchID, limit)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("query branch commits: %w", err)
 	}
 	defer rows.Close()
-
-	return scanCommits(rows)
+	return r.scanCommits(rows)
 }
 
-// ClearDefaultBranch clears the default flag on all branches for a codebase
-func ClearDefaultBranch(db *sql.DB, codebaseID string) error {
-	_, err := db.Exec(`UPDATE branches SET is_default = FALSE WHERE codebase_id = $1`, codebaseID)
-	return err
+// ClearDefaultBranch clears the default flag on all branches for a codebase.
+func (r *SQLRepository) ClearDefaultBranch(ctx context.Context, codebaseID string) error {
+	if _, err := r.db.ExecContext(ctx, `UPDATE branches SET is_default = FALSE WHERE codebase_id = $1`, codebaseID); err != nil {
+		return fmt.Errorf("clear default branch: %w", err)
+	}
+	return nil
 }
 
-// ==================== Commit Repository ====================
-
-// UpsertCommit creates or updates a commit
-func UpsertCommit(db *sql.DB, commit *Commit) error {
-	// Delete existing record first (DuckDB ON CONFLICT has limitations with indexed columns)
-	db.Exec(`DELETE FROM commits WHERE codebase_id = $1 AND hash = $2`, commit.CodebaseID, commit.Hash)
-
-	_, err := db.Exec(`
+// UpsertCommit creates or updates a commit.
+func (r *SQLRepository) UpsertCommit(ctx context.Context, commit *Commit) error {
+	if _, err := r.db.ExecContext(ctx, `DELETE FROM commits WHERE codebase_id = $1 AND hash = $2`, commit.CodebaseID, commit.Hash); err != nil {
+		return fmt.Errorf("delete existing commit: %w", err)
+	}
+	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO commits (id, hash, codebase_id, branch_id, author_email, message, summary,
 			committed_at, stats, is_user_commit, is_on_default_branch)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-	`, commit.ID, commit.Hash, commit.CodebaseID, NullString(commit.BranchID), commit.AuthorEmail,
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+		commit.ID, commit.Hash, commit.CodebaseID, NullString(commit.BranchID), commit.AuthorEmail,
 		commit.Message, NullString(commit.Summary), commit.CommittedAt, ToJSON(commit.Stats),
 		commit.IsUserCommit, commit.IsOnDefaultBranch)
-	return err
-}
-
-// CommitExists checks if a commit exists
-func CommitExists(db *sql.DB, codebaseID, hash string) (bool, error) {
-	var count int
-	err := db.QueryRow(`SELECT COUNT(*) FROM commits WHERE codebase_id = $1 AND hash = $2`, codebaseID, hash).Scan(&count)
-	return count > 0, err
-}
-
-// GetExistingCommitHashes returns a set of commit hashes that already exist for a codebase
-// This is more efficient than checking one-by-one with CommitExists
-func GetExistingCommitHashes(db *sql.DB, codebaseID string) (map[string]bool, error) {
-	rows, err := db.Query(`SELECT hash FROM commits WHERE codebase_id = $1`, codebaseID)
 	if err != nil {
-		return nil, err
+		return fmt.Errorf("insert commit: %w", err)
+	}
+	return nil
+}
+
+// CommitExists checks if a commit exists.
+func (r *SQLRepository) CommitExists(ctx context.Context, codebaseID, hash string) (bool, error) {
+	var count int
+	err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM commits WHERE codebase_id = $1 AND hash = $2`, codebaseID, hash).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("count commits: %w", err)
+	}
+	return count > 0, nil
+}
+
+// GetExistingCommitHashes returns commit hashes that exist for a codebase.
+func (r *SQLRepository) GetExistingCommitHashes(ctx context.Context, codebaseID string) (map[string]bool, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT hash FROM commits WHERE codebase_id = $1`, codebaseID)
+	if err != nil {
+		return nil, fmt.Errorf("query commit hashes: %w", err)
 	}
 	defer rows.Close()
-
 	hashes := make(map[string]bool)
 	for rows.Next() {
 		var hash string
 		if err := rows.Scan(&hash); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("scan commit hash: %w", err)
 		}
 		hashes[hash] = true
 	}
-	return hashes, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate commit hashes: %w", err)
+	}
+	return hashes, nil
 }
 
-// GetUserCommitsMissingSummaries returns user commits that don't have summaries generated
-func GetUserCommitsMissingSummaries(db *sql.DB, codebaseID string) ([]Commit, error) {
-	rows, err := db.Query(`
+// GetUserCommitsMissingSummaries returns user commits without summaries.
+func (r *SQLRepository) GetUserCommitsMissingSummaries(ctx context.Context, codebaseID string) ([]Commit, error) {
+	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, hash, codebase_id, branch_id, author_email, message, summary,
 			committed_at, stats, is_user_commit, is_on_default_branch
-		FROM commits 
-		WHERE codebase_id = $1 
-			AND is_user_commit = TRUE 
-			AND (summary IS NULL OR summary = '')
-		ORDER BY committed_at DESC
-	`, codebaseID)
+		FROM commits WHERE codebase_id = $1 AND is_user_commit = TRUE AND (summary IS NULL OR summary = '')
+		ORDER BY committed_at DESC`, codebaseID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("query commits missing summaries: %w", err)
 	}
 	defer rows.Close()
-
-	return scanCommits(rows)
+	return r.scanCommits(rows)
 }
 
-// UpdateCommitSummary updates just the summary field for a commit
-func UpdateCommitSummary(db *sql.DB, commitID, summary string) error {
-	_, err := db.Exec(`UPDATE commits SET summary = $1 WHERE id = $2`, summary, commitID)
-	return err
+// UpdateCommitSummary updates a commit's summary.
+func (r *SQLRepository) UpdateCommitSummary(ctx context.Context, commitID, summary string) error {
+	if _, err := r.db.ExecContext(ctx, `UPDATE commits SET summary = $1 WHERE id = $2`, summary, commitID); err != nil {
+		return fmt.Errorf("update commit summary: %w", err)
+	}
+	return nil
 }
 
-// GetCommitByHash retrieves a commit by hash
-func GetCommitByHash(db *sql.DB, codebaseID, hash string) (*Commit, error) {
-	row := db.QueryRow(`
+// GetCommitByHash retrieves a commit by hash.
+func (r *SQLRepository) GetCommitByHash(ctx context.Context, codebaseID, hash string) (*Commit, error) {
+	row := r.db.QueryRowContext(ctx, `
 		SELECT id, hash, codebase_id, branch_id, author_email, message, summary,
 			committed_at, stats, is_user_commit, is_on_default_branch
-		FROM commits WHERE codebase_id = $1 AND hash = $2
-	`, codebaseID, hash)
-
+		FROM commits WHERE codebase_id = $1 AND hash = $2`, codebaseID, hash)
 	c := &Commit{}
 	var branchID, summary sql.NullString
-	var stats interface{}
-
+	var stats any
 	err := row.Scan(&c.ID, &c.Hash, &c.CodebaseID, &branchID, &c.AuthorEmail, &c.Message, &summary,
 		&c.CommittedAt, &stats, &c.IsUserCommit, &c.IsOnDefaultBranch)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("scan commit: %w", err)
 	}
-
 	c.BranchID = branchID.String
 	c.Summary = summary.String
 	c.Stats = convertToMap(stats)
-
 	return c, nil
 }
 
-func scanCommits(rows *sql.Rows) ([]Commit, error) {
+func (r *SQLRepository) scanCommits(rows *sql.Rows) ([]Commit, error) {
 	var commits []Commit
 	for rows.Next() {
 		c := Commit{}
 		var branchID, summary sql.NullString
-		var stats interface{}
-
+		var stats any
 		if err := rows.Scan(&c.ID, &c.Hash, &c.CodebaseID, &branchID, &c.AuthorEmail, &c.Message, &summary,
 			&c.CommittedAt, &stats, &c.IsUserCommit, &c.IsOnDefaultBranch); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("scan commit row: %w", err)
 		}
-
 		c.BranchID = branchID.String
 		c.Summary = summary.String
 		c.Stats = convertToMap(stats)
 		commits = append(commits, c)
 	}
-	return commits, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate commits: %w", err)
+	}
+	return commits, nil
 }
 
-// GetUserCommits retrieves commits by the current user within a date range
-func GetUserCommits(db *sql.DB, codebaseID string, since time.Time) ([]Commit, error) {
-	rows, err := db.Query(`
+// GetUserCommits retrieves user commits since a date.
+func (r *SQLRepository) GetUserCommits(ctx context.Context, codebaseID string, since time.Time) ([]Commit, error) {
+	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, hash, codebase_id, branch_id, author_email, message, summary,
 			committed_at, stats, is_user_commit, is_on_default_branch
 		FROM commits WHERE codebase_id = $1 AND is_user_commit = TRUE AND committed_at >= $2
-		ORDER BY committed_at DESC
-	`, codebaseID, since)
+		ORDER BY committed_at DESC`, codebaseID, since)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("query user commits: %w", err)
 	}
 	defer rows.Close()
-
-	return scanCommits(rows)
+	return r.scanCommits(rows)
 }
 
-// GetCommitCount returns the number of commits for a codebase
-func GetCommitCount(db *sql.DB, codebaseID string) (int64, error) {
+// GetCommitCount returns the commit count for a codebase.
+func (r *SQLRepository) GetCommitCount(ctx context.Context, codebaseID string) (int64, error) {
 	var count int64
-	err := db.QueryRow(`SELECT COUNT(*) FROM commits WHERE codebase_id = $1`, codebaseID).Scan(&count)
-	return count, err
+	err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM commits WHERE codebase_id = $1`, codebaseID).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count commits: %w", err)
+	}
+	return count, nil
 }
 
-// GetCommitCountByPath returns the number of commits for a codebase by path
-func GetCommitCountByPath(db *sql.DB, repoPath string) (int64, error) {
+// GetCommitCountByPath returns the commit count for a codebase by path.
+func (r *SQLRepository) GetCommitCountByPath(ctx context.Context, repoPath string) (int64, error) {
 	var count int64
-	err := db.QueryRow(`
-		SELECT COUNT(*) FROM commits c
-		JOIN codebases cb ON c.codebase_id = cb.id
-		WHERE cb.path = $1
-	`, repoPath).Scan(&count)
-	return count, err
+	err := r.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM commits c JOIN codebases cb ON c.codebase_id = cb.id WHERE cb.path = $1`, repoPath).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count commits by path: %w", err)
+	}
+	return count, nil
 }
 
-// ==================== FileChange Repository ====================
-
-// CreateFileChange creates a file change
-func CreateFileChange(db *sql.DB, fc *FileChange) error {
-	_, err := db.Exec(`
+// CreateFileChange creates a file change.
+func (r *SQLRepository) CreateFileChange(ctx context.Context, fc *FileChange) error {
+	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO file_changes (id, commit_id, file_path, change_type, additions, deletions, patch)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-		ON CONFLICT DO NOTHING
-	`, fc.ID, fc.CommitID, fc.FilePath, fc.ChangeType, fc.Additions, fc.Deletions, NullString(fc.Patch))
-	return err
+		VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT DO NOTHING`,
+		fc.ID, fc.CommitID, fc.FilePath, fc.ChangeType, fc.Additions, fc.Deletions, NullString(fc.Patch))
+	if err != nil {
+		return fmt.Errorf("create file change: %w", err)
+	}
+	return nil
 }
 
-// GetFileChangesByCommit retrieves file changes for a commit
-func GetFileChangesByCommit(db *sql.DB, commitID string) ([]FileChange, error) {
-	rows, err := db.Query(`
+// GetFileChangesByCommit retrieves file changes for a commit.
+func (r *SQLRepository) GetFileChangesByCommit(ctx context.Context, commitID string) ([]FileChange, error) {
+	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, commit_id, file_path, change_type, additions, deletions, patch
-		FROM file_changes WHERE commit_id = $1
-	`, commitID)
+		FROM file_changes WHERE commit_id = $1`, commitID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("query file changes: %w", err)
 	}
 	defer rows.Close()
-
 	var changes []FileChange
 	for rows.Next() {
 		fc := FileChange{}
 		var patch sql.NullString
 		if err := rows.Scan(&fc.ID, &fc.CommitID, &fc.FilePath, &fc.ChangeType, &fc.Additions, &fc.Deletions, &patch); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("scan file change: %w", err)
 		}
 		fc.Patch = patch.String
 		changes = append(changes, fc)
 	}
-	return changes, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate file changes: %w", err)
+	}
+	return changes, nil
 }
 
-// GetFileChangeCount returns the number of file changes for a codebase
-func GetFileChangeCount(db *sql.DB, codebaseID string) (int64, error) {
+// GetFileChangeCount returns file change count for a codebase.
+func (r *SQLRepository) GetFileChangeCount(ctx context.Context, codebaseID string) (int64, error) {
 	var count int64
-	err := db.QueryRow(`
-		SELECT COUNT(*) FROM file_changes fc
-		JOIN commits c ON fc.commit_id = c.id
-		WHERE c.codebase_id = $1
-	`, codebaseID).Scan(&count)
-	return count, err
+	err := r.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM file_changes fc JOIN commits c ON fc.commit_id = c.id WHERE c.codebase_id = $1`, codebaseID).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count file changes: %w", err)
+	}
+	return count, nil
 }
 
-// ==================== IngestCursor Repository ====================
-
-// GetBranchCursor retrieves the last scanned hash for a branch
-func GetBranchCursor(db *sql.DB, codebaseID, branchName string) (string, error) {
+// GetBranchCursor retrieves the last scanned hash for a branch.
+func (r *SQLRepository) GetBranchCursor(ctx context.Context, codebaseID, branchName string) (string, error) {
 	var hash sql.NullString
-	err := db.QueryRow(`
-		SELECT last_commit_hash FROM ingest_cursors
-		WHERE codebase_id = $1 AND branch_name = $2
-	`, codebaseID, branchName).Scan(&hash)
+	err := r.db.QueryRowContext(ctx, `SELECT last_commit_hash FROM ingest_cursors WHERE codebase_id = $1 AND branch_name = $2`,
+		codebaseID, branchName).Scan(&hash)
 	if err == sql.ErrNoRows {
 		return "", nil
 	}
-	return hash.String, err
-}
-
-// UpdateBranchCursor updates the last scanned hash for a branch
-func UpdateBranchCursor(db *sql.DB, codebaseID, branchName, hash string) error {
-	id := fmt.Sprintf("%s:%s", codebaseID, branchName)
-
-	// Delete existing record first (DuckDB ON CONFLICT has limitations)
-	db.Exec(`DELETE FROM ingest_cursors WHERE codebase_id = $1 AND branch_name = $2`, codebaseID, branchName)
-
-	_, err := db.Exec(`
-		INSERT INTO ingest_cursors (id, codebase_id, branch_name, last_commit_hash, updated_at)
-		VALUES ($1, $2, $3, $4, $5)
-	`, id, codebaseID, branchName, hash, time.Now())
-	return err
-}
-
-// ==================== Folder Repository ====================
-
-// UpsertFolder creates or updates a folder
-func UpsertFolder(db *sql.DB, folder *Folder) error {
-	// Delete existing record first (DuckDB ON CONFLICT has limitations)
-	db.Exec(`DELETE FROM folders WHERE codebase_id = $1 AND path = $2`, folder.CodebaseID, folder.Path)
-
-	_, err := db.Exec(`
-		INSERT INTO folders (id, codebase_id, path, name, depth, parent_path, summary, purpose, file_count, indexed_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-	`, folder.ID, folder.CodebaseID, folder.Path, folder.Name, folder.Depth, NullString(folder.ParentPath),
-		NullString(folder.Summary), NullString(folder.Purpose), folder.FileCount, NullTime(folder.IndexedAt))
-	return err
-}
-
-// GetFoldersByCodebase retrieves all folders for a codebase
-func GetFoldersByCodebase(db *sql.DB, codebaseID string) ([]Folder, error) {
-	rows, err := db.Query(`
-		SELECT id, codebase_id, path, name, depth, parent_path, summary, purpose, file_count, indexed_at
-		FROM folders WHERE codebase_id = $1 ORDER BY depth, path
-	`, codebaseID)
 	if err != nil {
-		return nil, err
+		return "", fmt.Errorf("get branch cursor: %w", err)
+	}
+	return hash.String, nil
+}
+
+// UpdateBranchCursor updates the last scanned hash for a branch.
+func (r *SQLRepository) UpdateBranchCursor(ctx context.Context, codebaseID, branchName, hash string) error {
+	id := fmt.Sprintf("%s:%s", codebaseID, branchName)
+	if _, err := r.db.ExecContext(ctx, `DELETE FROM ingest_cursors WHERE codebase_id = $1 AND branch_name = $2`, codebaseID, branchName); err != nil {
+		return fmt.Errorf("delete existing cursor: %w", err)
+	}
+	_, err := r.db.ExecContext(ctx, `INSERT INTO ingest_cursors (id, codebase_id, branch_name, last_commit_hash, updated_at) VALUES ($1, $2, $3, $4, $5)`,
+		id, codebaseID, branchName, hash, time.Now())
+	if err != nil {
+		return fmt.Errorf("insert branch cursor: %w", err)
+	}
+	return nil
+}
+
+// UpsertFolder creates or updates a folder.
+func (r *SQLRepository) UpsertFolder(ctx context.Context, folder *Folder) error {
+	if _, err := r.db.ExecContext(ctx, `DELETE FROM folders WHERE codebase_id = $1 AND path = $2`, folder.CodebaseID, folder.Path); err != nil {
+		return fmt.Errorf("delete existing folder: %w", err)
+	}
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO folders (id, codebase_id, path, name, depth, parent_path, summary, purpose, file_count, indexed_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+		folder.ID, folder.CodebaseID, folder.Path, folder.Name, folder.Depth, NullString(folder.ParentPath),
+		NullString(folder.Summary), NullString(folder.Purpose), folder.FileCount, NullTime(folder.IndexedAt))
+	if err != nil {
+		return fmt.Errorf("insert folder: %w", err)
+	}
+	return nil
+}
+
+// GetFoldersByCodebase retrieves all folders for a codebase.
+func (r *SQLRepository) GetFoldersByCodebase(ctx context.Context, codebaseID string) ([]Folder, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, codebase_id, path, name, depth, parent_path, summary, purpose, file_count, indexed_at
+		FROM folders WHERE codebase_id = $1 ORDER BY depth, path`, codebaseID)
+	if err != nil {
+		return nil, fmt.Errorf("query folders: %w", err)
 	}
 	defer rows.Close()
-
 	var folders []Folder
 	for rows.Next() {
 		f := Folder{}
 		var parentPath, summary, purpose sql.NullString
 		var indexedAt sql.NullTime
-
-		if err := rows.Scan(&f.ID, &f.CodebaseID, &f.Path, &f.Name, &f.Depth, &parentPath,
-			&summary, &purpose, &f.FileCount, &indexedAt); err != nil {
-			return nil, err
+		if err := rows.Scan(&f.ID, &f.CodebaseID, &f.Path, &f.Name, &f.Depth, &parentPath, &summary, &purpose, &f.FileCount, &indexedAt); err != nil {
+			return nil, fmt.Errorf("scan folder: %w", err)
 		}
-
 		f.ParentPath = parentPath.String
 		f.Summary = summary.String
 		f.Purpose = purpose.String
@@ -545,72 +594,102 @@ func GetFoldersByCodebase(db *sql.DB, codebaseID string) ([]Folder, error) {
 		}
 		folders = append(folders, f)
 	}
-	return folders, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate folders: %w", err)
+	}
+	return folders, nil
 }
 
-// GetFolderByPath retrieves a folder by path
-func GetFolderByPath(db *sql.DB, codebaseID, path string) (*Folder, error) {
-	row := db.QueryRow(`
+// GetFolderByPath retrieves a folder by path.
+func (r *SQLRepository) GetFolderByPath(ctx context.Context, codebaseID, path string) (*Folder, error) {
+	row := r.db.QueryRowContext(ctx, `
 		SELECT id, codebase_id, path, name, depth, parent_path, summary, purpose, file_count, indexed_at
-		FROM folders WHERE codebase_id = $1 AND path = $2
-	`, codebaseID, path)
-
+		FROM folders WHERE codebase_id = $1 AND path = $2`, codebaseID, path)
 	f := &Folder{}
 	var parentPath, summary, purpose sql.NullString
 	var indexedAt sql.NullTime
-
-	err := row.Scan(&f.ID, &f.CodebaseID, &f.Path, &f.Name, &f.Depth, &parentPath,
-		&summary, &purpose, &f.FileCount, &indexedAt)
+	err := row.Scan(&f.ID, &f.CodebaseID, &f.Path, &f.Name, &f.Depth, &parentPath, &summary, &purpose, &f.FileCount, &indexedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("scan folder: %w", err)
 	}
-
 	f.ParentPath = parentPath.String
 	f.Summary = summary.String
 	f.Purpose = purpose.String
 	if indexedAt.Valid {
 		f.IndexedAt = indexedAt.Time
 	}
-
 	return f, nil
 }
 
-// ==================== FileIndex Repository ====================
-
-// UpsertFileIndex creates or updates a file index
-func UpsertFileIndex(db *sql.DB, file *FileIndex) error {
-	// Delete existing record first (DuckDB ON CONFLICT has limitations)
-	db.Exec(`DELETE FROM file_indexes WHERE codebase_id = $1 AND path = $2`, file.CodebaseID, file.Path)
-
-	_, err := db.Exec(`
-		INSERT INTO file_indexes (id, codebase_id, folder_id, path, name, extension, language,
-			size_bytes, line_count, summary, purpose, key_exports, dependencies, content_hash, indexed_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-	`, file.ID, file.CodebaseID, NullString(file.FolderID), file.Path, file.Name, NullString(file.Extension),
-		NullString(file.Language), file.SizeBytes, file.LineCount, NullString(file.Summary), NullString(file.Purpose),
-		ToJSON(file.KeyExports), ToJSON(file.Dependencies), NullString(file.ContentHash), NullTime(file.IndexedAt))
-	return err
-}
-
-// GetFilesByCodebase retrieves all files for a codebase
-func GetFilesByCodebase(db *sql.DB, codebaseID string) ([]FileIndex, error) {
-	rows, err := db.Query(`
-		SELECT id, codebase_id, folder_id, path, name, extension, language,
-			size_bytes, line_count, summary, purpose, key_exports, dependencies, content_hash, indexed_at
-		FROM file_indexes WHERE codebase_id = $1 ORDER BY path
-	`, codebaseID)
+// GetExistingFolderPaths returns folder paths for a codebase.
+func (r *SQLRepository) GetExistingFolderPaths(ctx context.Context, codebaseID string) (map[string]string, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT id, path FROM folders WHERE codebase_id = $1`, codebaseID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("query folder paths: %w", err)
 	}
 	defer rows.Close()
-
-	return scanFileIndexes(rows)
+	result := make(map[string]string)
+	for rows.Next() {
+		var id, path string
+		if err := rows.Scan(&id, &path); err != nil {
+			return nil, fmt.Errorf("scan folder path: %w", err)
+		}
+		result[path] = id
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate folder paths: %w", err)
+	}
+	return result, nil
 }
 
-// ExistingFileInfo holds minimal info needed for incremental indexing
+// DeleteFoldersByPaths deletes folders by paths.
+func (r *SQLRepository) DeleteFoldersByPaths(ctx context.Context, codebaseID string, paths []string) error {
+	if len(paths) == 0 {
+		return nil
+	}
+	for _, path := range paths {
+		if _, err := r.db.ExecContext(ctx, `DELETE FROM folders WHERE codebase_id = $1 AND path = $2`, codebaseID, path); err != nil {
+			return fmt.Errorf("delete folder %s: %w", path, err)
+		}
+	}
+	return nil
+}
+
+// UpsertFileIndex creates or updates a file index.
+func (r *SQLRepository) UpsertFileIndex(ctx context.Context, file *FileIndex) error {
+	if _, err := r.db.ExecContext(ctx, `DELETE FROM file_indexes WHERE codebase_id = $1 AND path = $2`, file.CodebaseID, file.Path); err != nil {
+		return fmt.Errorf("delete existing file index: %w", err)
+	}
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO file_indexes (id, codebase_id, folder_id, path, name, extension, language,
+			size_bytes, line_count, summary, purpose, key_exports, dependencies, content_hash, indexed_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+		file.ID, file.CodebaseID, NullString(file.FolderID), file.Path, file.Name, NullString(file.Extension),
+		NullString(file.Language), file.SizeBytes, file.LineCount, NullString(file.Summary), NullString(file.Purpose),
+		ToJSON(file.KeyExports), ToJSON(file.Dependencies), NullString(file.ContentHash), NullTime(file.IndexedAt))
+	if err != nil {
+		return fmt.Errorf("insert file index: %w", err)
+	}
+	return nil
+}
+
+// GetFilesByCodebase retrieves all files for a codebase.
+func (r *SQLRepository) GetFilesByCodebase(ctx context.Context, codebaseID string) ([]FileIndex, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, codebase_id, folder_id, path, name, extension, language,
+			size_bytes, line_count, summary, purpose, key_exports, dependencies, content_hash, indexed_at
+		FROM file_indexes WHERE codebase_id = $1 ORDER BY path`, codebaseID)
+	if err != nil {
+		return nil, fmt.Errorf("query files: %w", err)
+	}
+	defer rows.Close()
+	return r.scanFileIndexes(rows)
+}
+
+// ExistingFileInfo holds minimal info for incremental indexing.
 type ExistingFileInfo struct {
 	ID          string
 	Path        string
@@ -618,112 +697,75 @@ type ExistingFileInfo struct {
 	Summary     string
 }
 
-// GetExistingFileHashes returns a map of file path -> ExistingFileInfo for efficient change detection
-func GetExistingFileHashes(db *sql.DB, codebaseID string) (map[string]ExistingFileInfo, error) {
-	rows, err := db.Query(`
-		SELECT id, path, content_hash, summary 
-		FROM file_indexes 
-		WHERE codebase_id = $1
-	`, codebaseID)
+// GetExistingFileHashes returns file hashes for change detection.
+func (r *SQLRepository) GetExistingFileHashes(ctx context.Context, codebaseID string) (map[string]ExistingFileInfo, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT id, path, content_hash, summary FROM file_indexes WHERE codebase_id = $1`, codebaseID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("query file hashes: %w", err)
 	}
 	defer rows.Close()
-
 	result := make(map[string]ExistingFileInfo)
 	for rows.Next() {
 		var info ExistingFileInfo
 		var contentHash, summary sql.NullString
 		if err := rows.Scan(&info.ID, &info.Path, &contentHash, &summary); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("scan file hash: %w", err)
 		}
 		info.ContentHash = contentHash.String
 		info.Summary = summary.String
 		result[info.Path] = info
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate file hashes: %w", err)
+	}
+	return result, nil
 }
 
-// DeleteFileIndex deletes a file index record
-func DeleteFileIndex(db *sql.DB, codebaseID, path string) error {
-	_, err := db.Exec(`DELETE FROM file_indexes WHERE codebase_id = $1 AND path = $2`, codebaseID, path)
-	return err
+// DeleteFileIndex deletes a file index.
+func (r *SQLRepository) DeleteFileIndex(ctx context.Context, codebaseID, path string) error {
+	if _, err := r.db.ExecContext(ctx, `DELETE FROM file_indexes WHERE codebase_id = $1 AND path = $2`, codebaseID, path); err != nil {
+		return fmt.Errorf("delete file index: %w", err)
+	}
+	return nil
 }
 
-// DeleteFileIndexesByPaths deletes multiple file index records
-func DeleteFileIndexesByPaths(db *sql.DB, codebaseID string, paths []string) error {
+// DeleteFileIndexesByPaths deletes file indexes by paths.
+func (r *SQLRepository) DeleteFileIndexesByPaths(ctx context.Context, codebaseID string, paths []string) error {
 	if len(paths) == 0 {
 		return nil
 	}
-	// DuckDB doesn't support arrays in IN clause the same way, so we delete one by one
 	for _, path := range paths {
-		if _, err := db.Exec(`DELETE FROM file_indexes WHERE codebase_id = $1 AND path = $2`, codebaseID, path); err != nil {
-			return err
+		if _, err := r.db.ExecContext(ctx, `DELETE FROM file_indexes WHERE codebase_id = $1 AND path = $2`, codebaseID, path); err != nil {
+			return fmt.Errorf("delete file index %s: %w", path, err)
 		}
 	}
 	return nil
 }
 
-// GetExistingFolderPaths returns a set of folder paths for a codebase
-func GetExistingFolderPaths(db *sql.DB, codebaseID string) (map[string]string, error) {
-	rows, err := db.Query(`SELECT id, path FROM folders WHERE codebase_id = $1`, codebaseID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	result := make(map[string]string)
-	for rows.Next() {
-		var id, path string
-		if err := rows.Scan(&id, &path); err != nil {
-			return nil, err
-		}
-		result[path] = id
-	}
-	return result, rows.Err()
-}
-
-// DeleteFoldersByPaths deletes multiple folder records
-func DeleteFoldersByPaths(db *sql.DB, codebaseID string, paths []string) error {
-	if len(paths) == 0 {
-		return nil
-	}
-	for _, path := range paths {
-		if _, err := db.Exec(`DELETE FROM folders WHERE codebase_id = $1 AND path = $2`, codebaseID, path); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// GetFilesByFolder retrieves all files in a folder
-func GetFilesByFolder(db *sql.DB, folderID string) ([]FileIndex, error) {
-	rows, err := db.Query(`
+// GetFilesByFolder retrieves files in a folder.
+func (r *SQLRepository) GetFilesByFolder(ctx context.Context, folderID string) ([]FileIndex, error) {
+	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, codebase_id, folder_id, path, name, extension, language,
 			size_bytes, line_count, summary, purpose, key_exports, dependencies, content_hash, indexed_at
-		FROM file_indexes WHERE folder_id = $1 ORDER BY name
-	`, folderID)
+		FROM file_indexes WHERE folder_id = $1 ORDER BY name`, folderID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("query files by folder: %w", err)
 	}
 	defer rows.Close()
-
-	return scanFileIndexes(rows)
+	return r.scanFileIndexes(rows)
 }
 
-func scanFileIndexes(rows *sql.Rows) ([]FileIndex, error) {
+func (r *SQLRepository) scanFileIndexes(rows *sql.Rows) ([]FileIndex, error) {
 	var files []FileIndex
 	for rows.Next() {
 		f := FileIndex{}
 		var folderID, extension, language, summary, purpose, contentHash sql.NullString
-		var keyExports, deps interface{}
+		var keyExports, deps any
 		var indexedAt sql.NullTime
-
 		if err := rows.Scan(&f.ID, &f.CodebaseID, &folderID, &f.Path, &f.Name, &extension, &language,
 			&f.SizeBytes, &f.LineCount, &summary, &purpose, &keyExports, &deps, &contentHash, &indexedAt); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("scan file index: %w", err)
 		}
-
 		f.FolderID = folderID.String
 		f.Extension = extension.String
 		f.Language = language.String
@@ -737,30 +779,28 @@ func scanFileIndexes(rows *sql.Rows) ([]FileIndex, error) {
 		}
 		files = append(files, f)
 	}
-	return files, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate file indexes: %w", err)
+	}
+	return files, nil
 }
 
-// SearchFilesBySummary searches files by summary text
-func SearchFilesBySummary(db *sql.DB, codebaseID, query string) ([]FileIndex, error) {
+// SearchFilesBySummary searches files by summary text.
+func (r *SQLRepository) SearchFilesBySummary(ctx context.Context, codebaseID, query string) ([]FileIndex, error) {
 	searchPattern := "%" + query + "%"
-	rows, err := db.Query(`
+	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, codebase_id, folder_id, path, name, extension, language,
 			size_bytes, line_count, summary, purpose, key_exports, dependencies, content_hash, indexed_at
-		FROM file_indexes
-		WHERE codebase_id = $1 AND (summary ILIKE $2 OR purpose ILIKE $2 OR name ILIKE $2)
-		ORDER BY path LIMIT 20
-	`, codebaseID, searchPattern)
+		FROM file_indexes WHERE codebase_id = $1 AND (summary ILIKE $2 OR purpose ILIKE $2 OR name ILIKE $2)
+		ORDER BY path LIMIT 20`, codebaseID, searchPattern)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("search files: %w", err)
 	}
 	defer rows.Close()
-
-	return scanFileIndexes(rows)
+	return r.scanFileIndexes(rows)
 }
 
-// ==================== Statistics ====================
-
-// CodebaseStats holds statistics for a codebase
+// CodebaseStats holds statistics for a codebase.
 type CodebaseStats struct {
 	FolderCount int64
 	FileCount   int64
@@ -769,97 +809,88 @@ type CodebaseStats struct {
 	Languages   map[string]int
 }
 
-// GetCodebaseStats returns statistics about an indexed codebase
-func GetCodebaseStats(db *sql.DB, codebaseID string) (*CodebaseStats, error) {
-	stats := &CodebaseStats{
-		Languages: make(map[string]int),
+// GetCodebaseStats returns statistics for a codebase.
+func (r *SQLRepository) GetCodebaseStats(ctx context.Context, codebaseID string) (*CodebaseStats, error) {
+	stats := &CodebaseStats{Languages: make(map[string]int)}
+	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM folders WHERE codebase_id = $1`, codebaseID).Scan(&stats.FolderCount); err != nil {
+		return nil, fmt.Errorf("count folders: %w", err)
 	}
-
-	// Folder count
-	db.QueryRow(`SELECT COUNT(*) FROM folders WHERE codebase_id = $1`, codebaseID).Scan(&stats.FolderCount)
-
-	// File stats
-	db.QueryRow(`
+	if err := r.db.QueryRowContext(ctx, `
 		SELECT COALESCE(COUNT(*), 0), COALESCE(SUM(size_bytes), 0), COALESCE(SUM(line_count), 0)
-		FROM file_indexes WHERE codebase_id = $1
-	`, codebaseID).Scan(&stats.FileCount, &stats.TotalSize, &stats.TotalLines)
-
-	// Language breakdown
-	rows, err := db.Query(`
-		SELECT language, COUNT(*) as count
-		FROM file_indexes
-		WHERE codebase_id = $1 AND language IS NOT NULL AND language != ''
-		GROUP BY language ORDER BY count DESC
-	`, codebaseID)
-	if err == nil {
-		defer rows.Close()
-		for rows.Next() {
-			var lang string
-			var count int
-			if rows.Scan(&lang, &count) == nil {
-				stats.Languages[lang] = count
-			}
-		}
+		FROM file_indexes WHERE codebase_id = $1`, codebaseID).Scan(&stats.FileCount, &stats.TotalSize, &stats.TotalLines); err != nil {
+		return nil, fmt.Errorf("get file stats: %w", err)
 	}
-
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT language, COUNT(*) as count FROM file_indexes
+		WHERE codebase_id = $1 AND language IS NOT NULL AND language != ''
+		GROUP BY language ORDER BY count DESC`, codebaseID)
+	if err != nil {
+		return nil, fmt.Errorf("query language stats: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var lang string
+		var count int
+		if err := rows.Scan(&lang, &count); err != nil {
+			return nil, fmt.Errorf("scan language stat: %w", err)
+		}
+		stats.Languages[lang] = count
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate language stats: %w", err)
+	}
 	return stats, nil
 }
 
-// ==================== Semantic Search ====================
-
-// HasEmbeddings checks if the codebase has any embeddings stored
-// DuckDB can be extended with vector support via extensions
-func HasEmbeddings(db *sql.DB, codebaseID string) bool {
-	// For now, return false - can be extended later with DuckDB vector extension
+// HasEmbeddings checks if embeddings are available.
+func (r *SQLRepository) HasEmbeddings(_ context.Context, _ string) bool {
 	return false
 }
 
-// SemanticSearchFiles searches files using vector similarity
-// Falls back to text search without vector support
-func SemanticSearchFiles(db *sql.DB, codebaseID string, queryEmbedding []float32, limit int) ([]FileIndex, error) {
-	// Without vector support, return empty - caller will fall back to keyword search
+// SemanticSearchFiles searches files using vector similarity.
+func (r *SQLRepository) SemanticSearchFiles(_ context.Context, _ string, _ []float32, _ int) ([]FileIndex, error) {
 	return nil, nil
 }
 
-// SemanticSearchFolders searches folders using vector similarity
-func SemanticSearchFolders(db *sql.DB, codebaseID string, queryEmbedding []float32, limit int) ([]Folder, error) {
-	// Without vector support, return empty - caller will fall back to keyword search
+// SemanticSearchFolders searches folders using vector similarity.
+func (r *SQLRepository) SemanticSearchFolders(_ context.Context, _ string, _ []float32, _ int) ([]Folder, error) {
 	return nil, nil
 }
 
-// ==================== Raw Query Support ====================
+// ExecuteQuery executes a raw SQL query without parameters.
+func (r *SQLRepository) ExecuteQuery(ctx context.Context, query string) ([]map[string]any, error) {
+	return r.ExecuteQueryWithArgs(ctx, query)
+}
 
-// ExecuteQuery executes a raw SQL query and returns results as maps
-func ExecuteQuery(db *sql.DB, query string) ([]map[string]interface{}, error) {
-	rows, err := db.Query(query)
+// ExecuteQueryWithArgs executes a SQL query with optional parameters.
+func (r *SQLRepository) ExecuteQueryWithArgs(ctx context.Context, query string, args ...any) ([]map[string]any, error) {
+	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("execute query: %w", err)
 	}
 	defer rows.Close()
-
 	columns, err := rows.Columns()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("get columns: %w", err)
 	}
-
-	var results []map[string]interface{}
+	var results []map[string]any
 	for rows.Next() {
-		values := make([]interface{}, len(columns))
-		valuePtrs := make([]interface{}, len(columns))
+		values := make([]any, len(columns))
+		valuePtrs := make([]any, len(columns))
 		for i := range values {
 			valuePtrs[i] = &values[i]
 		}
-
 		if err := rows.Scan(valuePtrs...); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("scan row: %w", err)
 		}
-
-		row := make(map[string]interface{})
+		row := make(map[string]any)
 		for i, col := range columns {
 			row[col] = values[i]
 		}
 		results = append(results, row)
 	}
-
-	return results, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate rows: %w", err)
+	}
+	return results, nil
 }

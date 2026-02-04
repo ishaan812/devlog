@@ -9,18 +9,15 @@ import (
 	"github.com/ishaan812/devlog/internal/llm"
 )
 
-// Summarizer generates summaries for code files and folders
+// Summarizer generates summaries for code files and folders.
 type Summarizer struct {
-	client  llm.LLMClient
+	client  llm.Client
 	verbose bool
 }
 
-// NewSummarizer creates a new summarizer
-func NewSummarizer(client llm.LLMClient, verbose bool) *Summarizer {
-	return &Summarizer{
-		client:  client,
-		verbose: verbose,
-	}
+// NewSummarizer creates a new summarizer.
+func NewSummarizer(client llm.Client, verbose bool) *Summarizer {
+	return &Summarizer{client: client, verbose: verbose}
 }
 
 // FileSummary holds the generated summary for a file

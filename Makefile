@@ -58,11 +58,32 @@ tidy:
 
 # Format code
 fmt:
-	go fmt ./...
+	@echo "Running gofmt..."
+	gofmt -s -w .
+	@echo "Running goimports..."
+	goimports -w -local github.com/ishaan812/devlog .
 
 # Lint code
 lint:
-	golangci-lint run
+	golangci-lint run ./...
+
+# Lint and fix
+lint-fix:
+	golangci-lint run --fix ./...
+
+# Check formatting without modifying
+fmt-check:
+	@test -z "$$(gofmt -l .)" || (echo "Files need formatting:" && gofmt -l . && exit 1)
+
+# Run all checks
+check: fmt-check lint test
+
+# Pre-commit hook setup
+pre-commit:
+	@echo "Installing pre-commit hook..."
+	@echo '#!/bin/sh\nmake fmt-check && make lint' > .git/hooks/pre-commit
+	@chmod +x .git/hooks/pre-commit
+	@echo "Pre-commit hook installed"
 
 # Verbose build
 build-verbose:

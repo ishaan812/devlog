@@ -8,15 +8,27 @@ import (
 	"time"
 )
 
-// Profile represents a work context with isolated data
-type Profile struct {
-	Name        string   `json:"name"`
-	Description string   `json:"description,omitempty"`
-	CreatedAt   string   `json:"created_at"`
-	Repos       []string `json:"repos"` // Repo paths in this profile
+// DefaultConfigFileName is the name of the configuration file.
+const DefaultConfigFileName = "config.json"
+
+// RepoBranchSelection stores the saved branch selection for a repo.
+type RepoBranchSelection struct {
+	MainBranch       string   `json:"main_branch"`
+	SelectedBranches []string `json:"selected_branches"`
 }
 
+// Profile represents a work context with isolated data.
+type Profile struct {
+	Name             string                          `json:"name"`
+	Description      string                          `json:"description,omitempty"`
+	CreatedAt        string                          `json:"created_at"`
+	Repos            []string                        `json:"repos"`             // Repo paths in this profile
+	BranchSelections map[string]*RepoBranchSelection `json:"branch_selections"` // Saved branch selections per repo path
+}
+
+// Config holds all configuration for devlog.
 type Config struct {
+	// Provider configuration
 	DefaultProvider string `json:"default_provider"`
 	DefaultModel    string `json:"default_model"`
 
@@ -44,64 +56,133 @@ type Config struct {
 	// Profiles
 	Profiles      map[string]*Profile `json:"profiles,omitempty"`
 	ActiveProfile string              `json:"active_profile,omitempty"`
+
+	// Internal: path where config was loaded from
+	path string
 }
 
-var configPath string
+// Option is a functional option for configuring Config defaults.
+type Option func(*Config)
 
-func init() {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		configPath = ".devlog/config.json"
-		return
+// WithDefaultProvider sets the default provider.
+func WithDefaultProvider(provider string) Option {
+	return func(c *Config) {
+		c.DefaultProvider = provider
 	}
-	configPath = filepath.Join(homeDir, ".devlog", "config.json")
 }
 
-func GetConfigPath() string {
-	return configPath
+// WithOllamaConfig sets Ollama configuration.
+func WithOllamaConfig(baseURL, model string) Option {
+	return func(c *Config) {
+		c.OllamaBaseURL = baseURL
+		c.OllamaModel = model
+	}
 }
 
-func Load() (*Config, error) {
-	cfg := &Config{
+// WithAWSConfig sets AWS configuration.
+func WithAWSConfig(region, accessKeyID, secretAccessKey string) Option {
+	return func(c *Config) {
+		c.AWSRegion = region
+		c.AWSAccessKeyID = accessKeyID
+		c.AWSSecretAccessKey = secretAccessKey
+	}
+}
+
+// defaultConfig returns a new Config with default values.
+func defaultConfig() *Config {
+	return &Config{
 		DefaultProvider: "ollama",
 		OllamaBaseURL:   "http://localhost:11434",
 		OllamaModel:     "llama3.2",
 		AWSRegion:       "us-east-1",
 	}
+}
 
-	data, err := os.ReadFile(configPath)
+// GetConfigPath returns the default configuration file path.
+func GetConfigPath() string {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join(".devlog", DefaultConfigFileName)
+	}
+	return filepath.Join(homeDir, ".devlog", DefaultConfigFileName)
+}
+
+// GetDevlogDir returns the base devlog directory path.
+func GetDevlogDir() string {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return ".devlog"
+	}
+	return filepath.Join(homeDir, ".devlog")
+}
+
+// GetProfileDBPath returns the database path for a given profile.
+func GetProfileDBPath(name string) string {
+	return filepath.Join(GetDevlogDir(), "profiles", name, "devlog.db")
+}
+
+// Load loads configuration from the default path.
+func Load(opts ...Option) (*Config, error) {
+	return LoadFrom(GetConfigPath(), opts...)
+}
+
+// LoadFrom loads configuration from a specific path.
+func LoadFrom(path string, opts ...Option) (*Config, error) {
+	cfg := defaultConfig()
+	cfg.path = path
+
+	// Apply options
+	for _, opt := range opts {
+		opt(cfg)
+	}
+
+	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return cfg, nil
 		}
-		return nil, fmt.Errorf("failed to read config: %w", err)
+		return nil, fmt.Errorf("read config file: %w", err)
 	}
 
 	if err := json.Unmarshal(data, cfg); err != nil {
-		return nil, fmt.Errorf("failed to parse config: %w", err)
+		return nil, fmt.Errorf("parse config file: %w", err)
 	}
+
+	// Preserve the path
+	cfg.path = path
 
 	return cfg, nil
 }
 
+// Save saves the configuration to its original path.
 func (c *Config) Save() error {
-	dir := filepath.Dir(configPath)
+	path := c.path
+	if path == "" {
+		path = GetConfigPath()
+	}
+	return c.SaveTo(path)
+}
+
+// SaveTo saves the configuration to a specific path.
+func (c *Config) SaveTo(path string) error {
+	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("failed to create config directory: %w", err)
+		return fmt.Errorf("create config directory: %w", err)
 	}
 
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
-		return fmt.Errorf("failed to marshal config: %w", err)
+		return fmt.Errorf("marshal config: %w", err)
 	}
 
-	if err := os.WriteFile(configPath, data, 0600); err != nil {
-		return fmt.Errorf("failed to write config: %w", err)
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		return fmt.Errorf("write config file: %w", err)
 	}
 
 	return nil
 }
 
+// GetAPIKey returns the API key for a provider.
 func (c *Config) GetAPIKey(provider string) string {
 	switch provider {
 	case "anthropic":
@@ -115,13 +196,13 @@ func (c *Config) GetAPIKey(provider string) string {
 		}
 		return os.Getenv("OPENAI_API_KEY")
 	case "bedrock":
-		// Bedrock uses AWS credentials
 		return c.AWSAccessKeyID
 	default:
 		return ""
 	}
 }
 
+// HasProvider checks if a provider is configured.
 func (c *Config) HasProvider(provider string) bool {
 	switch provider {
 	case "ollama":
@@ -137,16 +218,7 @@ func (c *Config) HasProvider(provider string) bool {
 	}
 }
 
-// GetDevlogDir returns the base devlog directory path
-func GetDevlogDir() string {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return ".devlog"
-	}
-	return filepath.Join(homeDir, ".devlog")
-}
-
-// GetActiveProfile returns the active profile, or nil if none
+// GetActiveProfile returns the active profile, or nil if none.
 func (c *Config) GetActiveProfile() *Profile {
 	if c.ActiveProfile == "" || c.Profiles == nil {
 		return nil
@@ -154,7 +226,7 @@ func (c *Config) GetActiveProfile() *Profile {
 	return c.Profiles[c.ActiveProfile]
 }
 
-// GetActiveProfileName returns the active profile name, defaulting to "default"
+// GetActiveProfileName returns the active profile name, defaulting to "default".
 func (c *Config) GetActiveProfileName() string {
 	if c.ActiveProfile == "" {
 		return "default"
@@ -162,12 +234,7 @@ func (c *Config) GetActiveProfileName() string {
 	return c.ActiveProfile
 }
 
-// GetProfileDBPath returns the database path for a given profile
-func GetProfileDBPath(name string) string {
-	return filepath.Join(GetDevlogDir(), "profiles", name, "devlog.db")
-}
-
-// CreateProfile creates a new profile
+// CreateProfile creates a new profile.
 func (c *Config) CreateProfile(name, description string) error {
 	if c.Profiles == nil {
 		c.Profiles = make(map[string]*Profile)
@@ -180,7 +247,7 @@ func (c *Config) CreateProfile(name, description string) error {
 	// Create profile directory
 	profileDir := filepath.Join(GetDevlogDir(), "profiles", name)
 	if err := os.MkdirAll(profileDir, 0755); err != nil {
-		return fmt.Errorf("failed to create profile directory: %w", err)
+		return fmt.Errorf("create profile directory: %w", err)
 	}
 
 	c.Profiles[name] = &Profile{
@@ -193,7 +260,7 @@ func (c *Config) CreateProfile(name, description string) error {
 	return nil
 }
 
-// DeleteProfile removes a profile and optionally its data
+// DeleteProfile removes a profile and optionally its data.
 func (c *Config) DeleteProfile(name string, deleteData bool) error {
 	if c.Profiles == nil {
 		return fmt.Errorf("profile '%s' not found", name)
@@ -210,7 +277,7 @@ func (c *Config) DeleteProfile(name string, deleteData bool) error {
 	if deleteData {
 		profileDir := filepath.Join(GetDevlogDir(), "profiles", name)
 		if err := os.RemoveAll(profileDir); err != nil {
-			return fmt.Errorf("failed to delete profile data: %w", err)
+			return fmt.Errorf("delete profile data: %w", err)
 		}
 	}
 
@@ -218,7 +285,7 @@ func (c *Config) DeleteProfile(name string, deleteData bool) error {
 	return nil
 }
 
-// SetActiveProfile switches to a different profile
+// SetActiveProfile switches to a different profile.
 func (c *Config) SetActiveProfile(name string) error {
 	if c.Profiles == nil || c.Profiles[name] == nil {
 		return fmt.Errorf("profile '%s' not found", name)
@@ -227,7 +294,7 @@ func (c *Config) SetActiveProfile(name string) error {
 	return nil
 }
 
-// AddRepoToProfile adds a repository path to a profile's repo list
+// AddRepoToProfile adds a repository path to a profile's repo list.
 func (c *Config) AddRepoToProfile(profileName, repoPath string) error {
 	if c.Profiles == nil {
 		return fmt.Errorf("profile '%s' not found", profileName)
@@ -255,7 +322,7 @@ func (c *Config) AddRepoToProfile(profileName, repoPath string) error {
 	return nil
 }
 
-// RemoveRepoFromProfile removes a repository path from a profile's repo list
+// RemoveRepoFromProfile removes a repository path from a profile's repo list.
 func (c *Config) RemoveRepoFromProfile(profileName, repoPath string) error {
 	if c.Profiles == nil {
 		return fmt.Errorf("profile '%s' not found", profileName)
@@ -283,7 +350,78 @@ func (c *Config) RemoveRepoFromProfile(profileName, repoPath string) error {
 	return nil // Not found, but that's okay
 }
 
-// MigrateOldDB migrates an old ~/.devlog/devlog.db to profiles/default/devlog.db
+// GetBranchSelection returns the saved branch selection for a repo, or nil if not found.
+func (c *Config) GetBranchSelection(profileName, repoPath string) *RepoBranchSelection {
+	if c.Profiles == nil {
+		return nil
+	}
+
+	profile, exists := c.Profiles[profileName]
+	if !exists || profile.BranchSelections == nil {
+		return nil
+	}
+
+	// Normalize the path
+	absPath, err := filepath.Abs(repoPath)
+	if err != nil {
+		absPath = repoPath
+	}
+
+	return profile.BranchSelections[absPath]
+}
+
+// SaveBranchSelection saves the branch selection for a repo in a profile.
+func (c *Config) SaveBranchSelection(profileName, repoPath, mainBranch string, selectedBranches []string) error {
+	if c.Profiles == nil {
+		return fmt.Errorf("profile '%s' not found", profileName)
+	}
+
+	profile, exists := c.Profiles[profileName]
+	if !exists {
+		return fmt.Errorf("profile '%s' not found", profileName)
+	}
+
+	// Initialize map if needed
+	if profile.BranchSelections == nil {
+		profile.BranchSelections = make(map[string]*RepoBranchSelection)
+	}
+
+	// Normalize the path
+	absPath, err := filepath.Abs(repoPath)
+	if err != nil {
+		absPath = repoPath
+	}
+
+	profile.BranchSelections[absPath] = &RepoBranchSelection{
+		MainBranch:       mainBranch,
+		SelectedBranches: selectedBranches,
+	}
+
+	return nil
+}
+
+// ClearBranchSelection removes the saved branch selection for a repo.
+func (c *Config) ClearBranchSelection(profileName, repoPath string) error {
+	if c.Profiles == nil {
+		return nil
+	}
+
+	profile, exists := c.Profiles[profileName]
+	if !exists || profile.BranchSelections == nil {
+		return nil
+	}
+
+	// Normalize the path
+	absPath, err := filepath.Abs(repoPath)
+	if err != nil {
+		absPath = repoPath
+	}
+
+	delete(profile.BranchSelections, absPath)
+	return nil
+}
+
+// MigrateOldDB migrates an old ~/.devlog/devlog.db to profiles/default/devlog.db.
 func MigrateOldDB() error {
 	devlogDir := GetDevlogDir()
 	oldDBPath := filepath.Join(devlogDir, "devlog.db")
@@ -301,18 +439,18 @@ func MigrateOldDB() error {
 
 	// Create the new directory
 	if err := os.MkdirAll(newDBDir, 0755); err != nil {
-		return fmt.Errorf("failed to create profile directory: %w", err)
+		return fmt.Errorf("create profile directory: %w", err)
 	}
 
 	// Move the database
 	if err := os.Rename(oldDBPath, newDBPath); err != nil {
-		return fmt.Errorf("failed to migrate database: %w", err)
+		return fmt.Errorf("migrate database: %w", err)
 	}
 
 	return nil
 }
 
-// EnsureDefaultProfile ensures a default profile exists
+// EnsureDefaultProfile ensures a default profile exists.
 func (c *Config) EnsureDefaultProfile() error {
 	if c.Profiles == nil {
 		c.Profiles = make(map[string]*Profile)
@@ -320,7 +458,7 @@ func (c *Config) EnsureDefaultProfile() error {
 
 	if _, exists := c.Profiles["default"]; !exists {
 		if err := c.CreateProfile("default", "Default profile"); err != nil {
-			return err
+			return fmt.Errorf("create default profile: %w", err)
 		}
 	}
 
@@ -331,7 +469,7 @@ func (c *Config) EnsureDefaultProfile() error {
 	return nil
 }
 
-// ListProfiles returns all profile names
+// ListProfiles returns all profile names.
 func (c *Config) ListProfiles() []string {
 	if c.Profiles == nil {
 		return []string{}

@@ -2,3 +2,6 @@ bin/
 docs/
 .claude/
 worklog*
+.cursor/
+.agents/
+.env*

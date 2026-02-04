@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -90,25 +91,23 @@ func init() {
 }
 
 func runBranchList(cmd *cobra.Command, args []string) error {
+	ctx := context.Background()
 	titleColor := color.New(color.FgHiCyan, color.Bold)
 	successColor := color.New(color.FgHiGreen, color.Bold)
 	infoColor := color.New(color.FgWhite)
 	dimColor := color.New(color.FgHiBlack)
 
-	// Get codebase path
 	codebasePath := branchCodebase
 	if codebasePath == "" {
 		codebasePath, _ = filepath.Abs(".")
 	}
 
-	// Initialize database
-	database, err := db.GetDB()
+	dbRepo, err := db.GetRepository()
 	if err != nil {
 		return fmt.Errorf("failed to initialize database: %w", err)
 	}
 
-	// Get codebase
-	codebase, err := db.GetCodebaseByPath(database, codebasePath)
+	codebase, err := dbRepo.GetCodebaseByPath(ctx, codebasePath)
 	if err != nil {
 		return fmt.Errorf("failed to get codebase: %w", err)
 	}
@@ -117,11 +116,12 @@ func runBranchList(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("codebase not indexed. Run 'devlog ingest' first")
 	}
 
-	// Get branches
-	branches, err := db.GetBranchesByCodebase(database, codebase.ID)
+	branches, err := dbRepo.GetBranchesByCodebase(ctx, codebase.ID)
 	if err != nil {
 		return fmt.Errorf("failed to get branches: %w", err)
 	}
+	_ = successColor
+	_ = infoColor
 
 	// Header
 	fmt.Println()
@@ -174,25 +174,23 @@ func runBranchList(cmd *cobra.Command, args []string) error {
 }
 
 func runBranchShow(cmd *cobra.Command, args []string) error {
+	ctx := context.Background()
 	titleColor := color.New(color.FgHiCyan, color.Bold)
 	successColor := color.New(color.FgHiGreen)
 	infoColor := color.New(color.FgWhite)
 	dimColor := color.New(color.FgHiBlack)
 
-	// Get codebase path
 	codebasePath := branchCodebase
 	if codebasePath == "" {
 		codebasePath, _ = filepath.Abs(".")
 	}
 
-	// Initialize database
-	database, err := db.GetDB()
+	dbRepo, err := db.GetRepository()
 	if err != nil {
 		return fmt.Errorf("failed to initialize database: %w", err)
 	}
 
-	// Get codebase
-	codebase, err := db.GetCodebaseByPath(database, codebasePath)
+	codebase, err := dbRepo.GetCodebaseByPath(ctx, codebasePath)
 	if err != nil {
 		return fmt.Errorf("failed to get codebase: %w", err)
 	}
@@ -201,12 +199,10 @@ func runBranchShow(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("codebase not indexed. Run 'devlog ingest' first")
 	}
 
-	// Get branch name (from arg or current branch)
 	var branchName string
 	if len(args) > 0 {
 		branchName = args[0]
 	} else {
-		// Try to get current branch from git
 		repo, err := git.OpenRepo(codebasePath)
 		if err != nil {
 			return fmt.Errorf("specify a branch name or run from a git repository")
@@ -217,8 +213,7 @@ func runBranchShow(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Get branch
-	branch, err := db.GetBranch(database, codebase.ID, branchName)
+	branch, err := dbRepo.GetBranch(ctx, codebase.ID, branchName)
 	if err != nil {
 		return fmt.Errorf("failed to get branch: %w", err)
 	}
@@ -226,6 +221,7 @@ func runBranchShow(cmd *cobra.Command, args []string) error {
 	if branch == nil {
 		return fmt.Errorf("branch '%s' not found. Has it been ingested?", branchName)
 	}
+	_ = successColor
 
 	// Display branch details
 	fmt.Println()
@@ -275,12 +271,11 @@ func runBranchShow(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Recent commits
 	fmt.Println()
 	titleColor.Println("  Recent Commits")
 	fmt.Println()
 
-	commits, err := db.GetBranchCommits(database, branch.ID, 5)
+	commits, err := dbRepo.GetBranchCommits(ctx, branch.ID, 5)
 	if err == nil && len(commits) > 0 {
 		for _, c := range commits {
 			msg := strings.Split(c.Message, "\n")[0]
@@ -301,25 +296,23 @@ func runBranchShow(cmd *cobra.Command, args []string) error {
 }
 
 func runBranchStory(cmd *cobra.Command, args []string) error {
+	ctx := context.Background()
 	successColor := color.New(color.FgHiGreen)
 	dimColor := color.New(color.FgHiBlack)
 
 	branchName := args[0]
 
-	// Get codebase path
 	codebasePath := branchCodebase
 	if codebasePath == "" {
 		codebasePath, _ = filepath.Abs(".")
 	}
 
-	// Initialize database
-	database, err := db.GetDB()
+	dbRepo, err := db.GetRepository()
 	if err != nil {
 		return fmt.Errorf("failed to initialize database: %w", err)
 	}
 
-	// Get codebase
-	codebase, err := db.GetCodebaseByPath(database, codebasePath)
+	codebase, err := dbRepo.GetCodebaseByPath(ctx, codebasePath)
 	if err != nil {
 		return fmt.Errorf("failed to get codebase: %w", err)
 	}
@@ -328,8 +321,7 @@ func runBranchStory(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("codebase not indexed. Run 'devlog ingest' first")
 	}
 
-	// Get branch
-	branch, err := db.GetBranch(database, codebase.ID, branchName)
+	branch, err := dbRepo.GetBranch(ctx, codebase.ID, branchName)
 	if err != nil {
 		return fmt.Errorf("failed to get branch: %w", err)
 	}
@@ -338,10 +330,8 @@ func runBranchStory(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("branch '%s' not found. Has it been ingested?", branchName)
 	}
 
-	// Get story content
 	story := branchStoryMessage
 
-	// If no message flag, use interactive prompt
 	if story == "" {
 		fmt.Println()
 		dimColor.Printf("  Current story for '%s':\n", branchName)
@@ -352,22 +342,17 @@ func runBranchStory(cmd *cobra.Command, args []string) error {
 		}
 		fmt.Println()
 
-		prompt := promptui.Prompt{
-			Label:   "Enter new story",
-			Default: branch.Story,
-		}
-
+		prompt := promptui.Prompt{Label: "Enter new story", Default: branch.Story}
 		story, err = prompt.Run()
 		if err != nil {
 			return fmt.Errorf("cancelled")
 		}
 	}
 
-	// Update branch story
 	branch.Story = story
 	branch.UpdatedAt = time.Now()
 
-	if err := db.UpsertBranch(database, branch); err != nil {
+	if err := dbRepo.UpsertBranch(ctx, branch); err != nil {
 		return fmt.Errorf("failed to update branch: %w", err)
 	}
 
@@ -379,24 +364,22 @@ func runBranchStory(cmd *cobra.Command, args []string) error {
 }
 
 func runBranchSetDefault(cmd *cobra.Command, args []string) error {
+	ctx := context.Background()
 	successColor := color.New(color.FgHiGreen)
 
 	branchName := args[0]
 
-	// Get codebase path
 	codebasePath := branchCodebase
 	if codebasePath == "" {
 		codebasePath, _ = filepath.Abs(".")
 	}
 
-	// Initialize database
-	database, err := db.GetDB()
+	dbRepo, err := db.GetRepository()
 	if err != nil {
 		return fmt.Errorf("failed to initialize database: %w", err)
 	}
 
-	// Get codebase
-	codebase, err := db.GetCodebaseByPath(database, codebasePath)
+	codebase, err := dbRepo.GetCodebaseByPath(ctx, codebasePath)
 	if err != nil {
 		return fmt.Errorf("failed to get codebase: %w", err)
 	}
@@ -405,8 +388,7 @@ func runBranchSetDefault(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("codebase not indexed. Run 'devlog ingest' first")
 	}
 
-	// Get branch to verify it exists
-	branch, err := db.GetBranch(database, codebase.ID, branchName)
+	branch, err := dbRepo.GetBranch(ctx, codebase.ID, branchName)
 	if err != nil {
 		return fmt.Errorf("failed to get branch: %w", err)
 	}
@@ -415,21 +397,18 @@ func runBranchSetDefault(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("branch '%s' not found. Has it been ingested?", branchName)
 	}
 
-	// Update all branches - unset previous default
-	if err := db.ClearDefaultBranch(database, codebase.ID); err != nil {
+	if err := dbRepo.ClearDefaultBranch(ctx, codebase.ID); err != nil {
 		return fmt.Errorf("failed to clear default branch: %w", err)
 	}
 
-	// Set new default
 	branch.IsDefault = true
 	branch.UpdatedAt = time.Now()
-	if err := db.UpsertBranch(database, branch); err != nil {
+	if err := dbRepo.UpsertBranch(ctx, branch); err != nil {
 		return fmt.Errorf("failed to update branch: %w", err)
 	}
 
-	// Update codebase default branch
 	codebase.DefaultBranch = branchName
-	if err := db.UpsertCodebase(database, codebase); err != nil {
+	if err := dbRepo.UpsertCodebase(ctx, codebase); err != nil {
 		return fmt.Errorf("failed to update codebase: %w", err)
 	}
 

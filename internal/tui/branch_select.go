@@ -33,7 +33,7 @@ var (
 			Foreground(lipgloss.Color("42"))
 
 	bsUncheckedStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("241"))
+				Foreground(lipgloss.Color("241"))
 
 	bsMainBranchStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("214")).
@@ -491,4 +491,72 @@ func RunBranchSelection(branches []git.BranchInfo, detectedDefault string) (*Bra
 	}
 
 	return &result, nil
+}
+
+// RunBranchSelectionWithPreselected runs the TUI with pre-selected branches for modification
+func RunBranchSelectionWithPreselected(branches []git.BranchInfo, mainBranch string, selectedBranches []string) (*BranchSelection, error) {
+	model := NewBranchSelectModelWithPreselected(branches, mainBranch, selectedBranches)
+
+	// Don't use alternate screen - stay in same terminal
+	p := tea.NewProgram(model)
+	finalModel, err := p.Run()
+	if err != nil {
+		return nil, err
+	}
+
+	result := finalModel.(BranchSelectModel).Result()
+	if result.Cancelled {
+		return nil, fmt.Errorf("branch selection cancelled")
+	}
+
+	return &result, nil
+}
+
+// NewBranchSelectModelWithPreselected creates a model with pre-selected branches (for modify mode)
+func NewBranchSelectModelWithPreselected(branches []git.BranchInfo, mainBranch string, selectedBranches []string) BranchSelectModel {
+	// Find the main branch index
+	mainIdx := 0
+	for i, b := range branches {
+		if b.Name == mainBranch {
+			mainIdx = i
+			break
+		}
+	}
+
+	// Initialize all branch indices as filtered
+	filtered := make([]int, len(branches))
+	for i := range branches {
+		filtered[i] = i
+	}
+
+	// Build selected map from pre-selected branches
+	selectedMap := make(map[int]bool)
+	selectedSet := make(map[string]bool)
+	for _, b := range selectedBranches {
+		selectedSet[b] = true
+	}
+	for i, b := range branches {
+		if selectedSet[b.Name] {
+			selectedMap[i] = true
+		}
+	}
+
+	// Search input
+	ti := textinput.New()
+	ti.Placeholder = "Type to search branches..."
+	ti.CharLimit = 50
+	ti.Width = 30
+
+	return BranchSelectModel{
+		branches:        branches,
+		filtered:        filtered,
+		cursor:          0,
+		selected:        selectedMap,
+		mainBranchIdx:   mainIdx,
+		detectedDefault: mainBranch,
+		step:            1, // Start at step 1 (modify mode) - skip main branch selection
+		searchInput:     ti,
+		searching:       false,
+		maxVisible:      10,
+	}
 }

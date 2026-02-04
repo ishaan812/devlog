@@ -1,7 +1,7 @@
 package cli
 
 import (
-	"database/sql"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -52,13 +52,13 @@ func init() {
 }
 
 func runGraph(cmd *cobra.Command, args []string) error {
-	// Colors
+	ctx := context.Background()
 	titleColor := color.New(color.FgHiCyan, color.Bold)
 	infoColor := color.New(color.FgHiWhite)
 	dimColor := color.New(color.FgHiBlack)
 	accentColor := color.New(color.FgHiMagenta)
 
-	database, err := db.GetDB()
+	dbRepo, err := db.GetRepository()
 	if err != nil {
 		return fmt.Errorf("failed to initialize database: %w", err)
 	}
@@ -67,16 +67,18 @@ func runGraph(cmd *cobra.Command, args []string) error {
 
 	switch graphType {
 	case "structure":
-		mermaid, err = generateStructureGraph(database, graphCodebase, graphMaxNodes)
+		mermaid, err = generateStructureGraph(ctx, dbRepo, graphCodebase, graphMaxNodes)
 	case "commits":
-		mermaid, err = generateCommitsGraph(database, graphMaxNodes)
+		mermaid, err = generateCommitsGraph(ctx, dbRepo, graphMaxNodes)
 	case "files":
-		mermaid, err = generateFilesGraph(database, graphMaxNodes)
+		mermaid, err = generateFilesGraph(ctx, dbRepo, graphMaxNodes)
 	case "collab":
-		mermaid, err = generateCollabGraph(database, graphMaxNodes)
+		mermaid, err = generateCollabGraph(ctx, dbRepo, graphMaxNodes)
 	default:
 		return fmt.Errorf("unknown graph type: %s", graphType)
 	}
+	_ = infoColor
+	_ = accentColor
 
 	if err != nil {
 		return err
@@ -120,13 +122,12 @@ func runGraph(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func generateStructureGraph(database *sql.DB, codebasePath string, maxNodes int) (string, error) {
-	// Get codebase
+func generateStructureGraph(ctx context.Context, dbRepo *db.SQLRepository, codebasePath string, maxNodes int) (string, error) {
 	if codebasePath == "" {
 		codebasePath, _ = filepath.Abs(".")
 	}
 
-	codebase, err := db.GetCodebaseByPath(database, codebasePath)
+	codebase, err := dbRepo.GetCodebaseByPath(ctx, codebasePath)
 	if err != nil {
 		return "", err
 	}
@@ -134,12 +135,12 @@ func generateStructureGraph(database *sql.DB, codebasePath string, maxNodes int)
 		return "", fmt.Errorf("codebase not indexed. Run 'devlog ingest' first")
 	}
 
-	folders, err := db.GetFoldersByCodebase(database, codebase.ID)
+	folders, err := dbRepo.GetFoldersByCodebase(ctx, codebase.ID)
 	if err != nil {
 		return "", err
 	}
 
-	files, err := db.GetFilesByCodebase(database, codebase.ID)
+	files, err := dbRepo.GetFilesByCodebase(ctx, codebase.ID)
 	if err != nil {
 		return "", err
 	}
@@ -252,35 +253,30 @@ func generateStructureGraph(database *sql.DB, codebasePath string, maxNodes int)
 	return sb.String(), nil
 }
 
-func generateCommitsGraph(database *sql.DB, maxNodes int) (string, error) {
-	// Query recent commits grouped by author
+func generateCommitsGraph(ctx context.Context, dbRepo *db.SQLRepository, maxNodes int) (string, error) {
 	type AuthorStats struct {
 		AuthorEmail string
-		CommitCount int
+		CommitCount int64
 	}
 
-	rows, err := database.Query(`
+	results, err := dbRepo.ExecuteQuery(ctx, fmt.Sprintf(`
 		SELECT author_email, COUNT(*) as commit_count
-		FROM commits
-		GROUP BY author_email
-		ORDER BY commit_count DESC
-		LIMIT $1
-	`, maxNodes)
+		FROM commits GROUP BY author_email ORDER BY commit_count DESC LIMIT %d
+	`, maxNodes))
 	if err != nil {
 		return "", err
 	}
-	defer rows.Close()
 
 	var authors []AuthorStats
-	for rows.Next() {
-		var a AuthorStats
-		if err := rows.Scan(&a.AuthorEmail, &a.CommitCount); err != nil {
-			return "", err
+	for _, row := range results {
+		a := AuthorStats{}
+		if v, ok := row["author_email"].(string); ok {
+			a.AuthorEmail = v
+		}
+		if v, ok := row["commit_count"].(int64); ok {
+			a.CommitCount = v
 		}
 		authors = append(authors, a)
-	}
-	if err := rows.Err(); err != nil {
-		return "", err
 	}
 
 	var sb strings.Builder
@@ -311,35 +307,30 @@ func generateCommitsGraph(database *sql.DB, maxNodes int) (string, error) {
 	return sb.String(), nil
 }
 
-func generateFilesGraph(database *sql.DB, maxNodes int) (string, error) {
-	// Query most changed files
+func generateFilesGraph(ctx context.Context, dbRepo *db.SQLRepository, maxNodes int) (string, error) {
 	type FileStats struct {
 		FilePath    string
-		ChangeCount int
+		ChangeCount int64
 	}
 
-	rows, err := database.Query(`
+	results, err := dbRepo.ExecuteQuery(ctx, fmt.Sprintf(`
 		SELECT file_path, COUNT(*) as change_count
-		FROM file_changes
-		GROUP BY file_path
-		ORDER BY change_count DESC
-		LIMIT $1
-	`, maxNodes)
+		FROM file_changes GROUP BY file_path ORDER BY change_count DESC LIMIT %d
+	`, maxNodes))
 	if err != nil {
 		return "", err
 	}
-	defer rows.Close()
 
 	var fileStats []FileStats
-	for rows.Next() {
-		var fs FileStats
-		if err := rows.Scan(&fs.FilePath, &fs.ChangeCount); err != nil {
-			return "", err
+	for _, row := range results {
+		fs := FileStats{}
+		if v, ok := row["file_path"].(string); ok {
+			fs.FilePath = v
+		}
+		if v, ok := row["change_count"].(int64); ok {
+			fs.ChangeCount = v
 		}
 		fileStats = append(fileStats, fs)
-	}
-	if err := rows.Err(); err != nil {
-		return "", err
 	}
 
 	var sb strings.Builder
@@ -370,46 +361,42 @@ func generateFilesGraph(database *sql.DB, maxNodes int) (string, error) {
 	return sb.String(), nil
 }
 
-func generateCollabGraph(database *sql.DB, maxNodes int) (string, error) {
-	// Query collaboration edges between developers
+func generateCollabGraph(ctx context.Context, dbRepo *db.SQLRepository, maxNodes int) (string, error) {
 	type CollabEdge struct {
 		Dev1        string
 		Dev2        string
-		SharedFiles int
+		SharedFiles int64
 	}
 
-	rows, err := database.Query(`
+	results, err := dbRepo.ExecuteQuery(ctx, fmt.Sprintf(`
 		WITH file_authors AS (
 			SELECT DISTINCT fc.file_path, c.author_email
-			FROM file_changes fc
-			JOIN commits c ON fc.commit_id = c.id
+			FROM file_changes fc JOIN commits c ON fc.commit_id = c.id
 		)
-		SELECT
-			a1.author_email as dev1,
-			a2.author_email as dev2,
-			COUNT(DISTINCT a1.file_path) as shared_files
+		SELECT a1.author_email as dev1, a2.author_email as dev2, COUNT(DISTINCT a1.file_path) as shared_files
 		FROM file_authors a1
 		JOIN file_authors a2 ON a1.file_path = a2.file_path AND a1.author_email < a2.author_email
 		GROUP BY a1.author_email, a2.author_email
 		HAVING COUNT(DISTINCT a1.file_path) > 1
-		ORDER BY shared_files DESC
-		LIMIT $1
-	`, maxNodes)
+		ORDER BY shared_files DESC LIMIT %d
+	`, maxNodes))
 	if err != nil {
 		return "", err
 	}
-	defer rows.Close()
 
 	var edges []CollabEdge
-	for rows.Next() {
-		var e CollabEdge
-		if err := rows.Scan(&e.Dev1, &e.Dev2, &e.SharedFiles); err != nil {
-			return "", err
+	for _, row := range results {
+		e := CollabEdge{}
+		if v, ok := row["dev1"].(string); ok {
+			e.Dev1 = v
+		}
+		if v, ok := row["dev2"].(string); ok {
+			e.Dev2 = v
+		}
+		if v, ok := row["shared_files"].(int64); ok {
+			e.SharedFiles = v
 		}
 		edges = append(edges, e)
-	}
-	if err := rows.Err(); err != nil {
-		return "", err
 	}
 
 	var sb strings.Builder

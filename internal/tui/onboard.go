@@ -51,8 +51,8 @@ var (
 type step int
 
 const (
-	stepWelcome step = iota
-	stepExistingProfiles // NEW: show existing profiles
+	stepWelcome          step = iota
+	stepExistingProfiles      // NEW: show existing profiles
 	stepProfileName
 	stepProfileDesc
 	stepProvider

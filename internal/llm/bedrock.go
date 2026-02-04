@@ -39,10 +39,10 @@ func NewBedrockClient(accessKeyID, secretAccessKey, region, model string) *Bedro
 }
 
 type bedrockClaudeRequest struct {
-	AnthropicVersion string            `json:"anthropic_version"`
-	MaxTokens        int               `json:"max_tokens"`
-	Messages         []bedrockMessage  `json:"messages"`
-	System           string            `json:"system,omitempty"`
+	AnthropicVersion string           `json:"anthropic_version"`
+	MaxTokens        int              `json:"max_tokens"`
+	Messages         []bedrockMessage `json:"messages"`
+	System           string           `json:"system,omitempty"`
 }
 
 type bedrockMessage struct {
