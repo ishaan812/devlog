@@ -819,6 +819,7 @@ func indexCodebase(absPath string, cfg *config.Config) error {
 
 	var llmClient llm.Client
 	var summarizer *indexer.Summarizer
+	var embedder llm.EmbeddingClient
 
 	if !ingestSkipSummaries {
 		llmClient, err = createLLMClient(cfg)
@@ -826,6 +827,16 @@ func indexCodebase(absPath string, cfg *config.Config) error {
 			return fmt.Errorf("failed to initialize LLM client: %w\n\nTo skip file/folder summaries, use: --skip-summaries", err)
 		}
 		summarizer = indexer.NewSummarizer(llmClient, IsVerbose())
+	}
+
+	// Create embedder for semantic search (unless explicitly skipped)
+	if !ingestSkipEmbeddings {
+		embedder, err = createEmbedder(cfg)
+		if err != nil {
+			warnColor.Printf("  Embeddings disabled: %v\n", err)
+			// Non-fatal: continue without embeddings
+			embedder = nil
+		}
 	}
 	if !ingestSkipSummaries && summarizer != nil && (isFirstIndex || ingestForceReindex || codebase.Summary == "") {
 		s.Suffix = " Generating codebase summary..."
@@ -1047,6 +1058,18 @@ func indexCodebase(absPath string, cfg *config.Config) error {
 
 	fmt.Printf("\r  Processed %d/%d files                    \n", totalFiles, totalFiles)
 
+	// Generate embeddings for files and folders with summaries
+	if embedder != nil {
+		embeddingCount, err := generateEmbeddings(ctx, dbRepo, codebase.ID, embedder, dimColor, infoColor)
+		if err != nil {
+			return fmt.Errorf("failed to generate embeddings: %w", err)
+		}
+		if embeddingCount > 0 {
+			dimColor.Printf("  Embeddings: ")
+			infoColor.Printf("%d generated\n", embeddingCount)
+		}
+	}
+
 	fmt.Println()
 	stats, err := dbRepo.GetCodebaseStats(ctx, codebase.ID)
 	if err != nil {
@@ -1205,22 +1228,112 @@ func generateCommitSummary(client llm.Client, commitMessage string, fileChanges 
 
 	sb.WriteString(fmt.Sprintf("\nTotal: +%d/-%d lines across %d files\n", totalAdditions, totalDeletions, len(fileChanges)))
 
-	prompt := fmt.Sprintf(`Analyze this git commit and write a clear, technical summary of what was accomplished.
-Focus on the WHAT and WHY, not just listing files. Be specific about functionality added/changed.
-Keep it to 1-2 sentences, max 100 words. Be professional and technical.
+	prompt := fmt.Sprintf(`You are a commit summarizer. Given a git commit, output ONLY a 1-2 sentence technical summary. No preamble, no commentary, no bullet points.
 
-IMPORTANT STYLE RULES:
-- Do NOT start with "This commit" or "The commit" - start directly with the action (e.g., "Added...", "Improved...", "Fixed...")
-- Do NOT include any preamble like "Here is a summary"
-- Write in active voice, past tense (e.g., "Added error handling" not "This commit adds error handling")
-- Be concise and direct
+Use past tense active voice. Start directly with a verb like "Added", "Fixed", "Refactored", "Updated", "Implemented".
 
-%s`, sb.String())
+<commit>
+%s
+</commit>
+
+Summary:`, sb.String())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	return client.Complete(ctx, prompt)
+}
+
+func generateEmbeddings(ctx context.Context, dbRepo *db.SQLRepository, codebaseID string, embedder llm.EmbeddingClient, dimColor, infoColor *color.Color) (int, error) {
+	// Get all files that have summaries but no embeddings
+	files, err := dbRepo.GetFilesByCodebase(ctx, codebaseID)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get files for embedding: %w", err)
+	}
+
+	// Get all folders
+	folders, err := dbRepo.GetFoldersByCodebase(ctx, codebaseID)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get folders for embedding: %w", err)
+	}
+
+	// Collect items that need embeddings
+	type embeddable struct {
+		text     string
+		fileIdx  int // -1 if folder
+		folderIdx int // -1 if file
+	}
+	var items []embeddable
+
+	for i, f := range files {
+		if f.Summary != "" && len(f.Embedding) == 0 {
+			text := f.Path + ": " + f.Summary
+			if f.Purpose != "" {
+				text += " (" + f.Purpose + ")"
+			}
+			items = append(items, embeddable{text: text, fileIdx: i, folderIdx: -1})
+		}
+	}
+	for i, f := range folders {
+		if f.Summary != "" && len(f.Embedding) == 0 {
+			text := f.Path + ": " + f.Summary
+			if f.Purpose != "" {
+				text += " (" + f.Purpose + ")"
+			}
+			items = append(items, embeddable{text: text, fileIdx: -1, folderIdx: i})
+		}
+	}
+
+	if len(items) == 0 {
+		return 0, nil
+	}
+
+	dimColor.Printf("\n  Generating embeddings for %d items...\n", len(items))
+
+	// Batch embed in chunks of 20
+	batchSize := 20
+	embeddedCount := 0
+
+	for start := 0; start < len(items); start += batchSize {
+		end := start + batchSize
+		if end > len(items) {
+			end = len(items)
+		}
+		batch := items[start:end]
+
+		texts := make([]string, len(batch))
+		for i, item := range batch {
+			texts[i] = item.text
+		}
+
+		embeddings, err := embedder.EmbedBatch(ctx, texts)
+		if err != nil {
+			return embeddedCount, fmt.Errorf("failed to embed batch: %w", err)
+		}
+
+		for i, emb := range embeddings {
+			item := batch[i]
+			if item.fileIdx >= 0 {
+				files[item.fileIdx].Embedding = emb
+				if err := dbRepo.UpsertFileIndex(ctx, &files[item.fileIdx]); err != nil {
+					return embeddedCount, fmt.Errorf("failed to save file embedding for %s: %w", files[item.fileIdx].Path, err)
+				}
+			} else if item.folderIdx >= 0 {
+				folders[item.folderIdx].Embedding = emb
+				if err := dbRepo.UpsertFolder(ctx, &folders[item.folderIdx]); err != nil {
+					return embeddedCount, fmt.Errorf("failed to save folder embedding for %s: %w", folders[item.folderIdx].Path, err)
+				}
+			}
+			embeddedCount++
+		}
+
+		fmt.Printf("\r  Embedded %d/%d items", embeddedCount, len(items))
+	}
+	if len(items) > 0 {
+		fmt.Println()
+	}
+
+	return embeddedCount, nil
 }
 
 func fillMissingSummaries(ctx context.Context, dbRepo *db.SQLRepository, repo *git.Repository, codebase *db.Codebase, llmClient llm.Client) (int, error) {

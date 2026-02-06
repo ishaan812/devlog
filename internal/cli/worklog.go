@@ -366,7 +366,10 @@ func generateWorklogMarkdown(groups []dayGroup, client llm.Client, cfg *config.C
 	// Summary section (with LLM if available)
 	if client != nil {
 		summary, err := generateOverallSummary(groups, client)
-		if err == nil && summary != "" {
+		if err != nil {
+			return "", fmt.Errorf("failed to generate overall summary: %w", err)
+		}
+		if summary != "" {
 			sb.WriteString("## Summary\n\n")
 			sb.WriteString(summary)
 			sb.WriteString("\n\n---\n\n")
@@ -560,18 +563,13 @@ func generateBranchSummary(group branchGroup, client llm.Client) (string, error)
 		return "", nil
 	}
 
-	prompt := fmt.Sprintf(`Summarize the following commit descriptions into a concise overview of the work done on this branch.
-Write 2-4 sentences as a cohesive paragraph. Focus on the key accomplishments and changes.
+	prompt := fmt.Sprintf(`You are a worklog summarizer. Given commit descriptions from one branch, output ONLY a 2-4 sentence paragraph summarizing the work done. No preamble, no labels, no bullet points. Use past tense active voice starting with verbs like "Added", "Implemented", "Fixed", "Refactored".
 
-CRITICAL RULES:
-- NEVER use phrases like "This commit", "The commit", "This change", "The change"
-- Start sentences with active verbs (Added, Implemented, Refactored, Fixed, Updated, etc.)
-- Write in active voice, not passive voice
-- Be direct and specific about what was done
+<commits>
+%s
+</commits>
 
-
-Commit descriptions:
-%s`, strings.Join(summaries, "\n\n"))
+Summary:`, strings.Join(summaries, "\n\n"))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -599,22 +597,19 @@ func generateDayBranchUpdates(commits []commitData, client llm.Client) (string, 
 
 	// For a single commit, make a concise bullet point
 	if len(descriptions) == 1 {
-		prompt := fmt.Sprintf(`Rewrite this commit description as a concise, engaging bullet point (1-2 sentences max).
+		prompt := fmt.Sprintf(`Rewrite this commit description as one concise sentence. Use past tense active voice starting with a verb (e.g. "Added", "Fixed", "Updated"). Output ONLY the sentence, nothing else.
 
-CRITICAL RULES:
-- Start with an action verb (Added, Implemented, Fixed, Refactored, etc.)
-- NEVER use "This commit", "The commit", "This change", or "The change"
-- Write in active voice
-- Output ONLY the plain text (no bullet prefix like "- " or "• ")
+<description>
+%s
+</description>
 
-Description: %s`, descriptions[0])
+Sentence:`, descriptions[0])
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		result, err := client.Complete(ctx, prompt)
 		if err != nil {
 			return "", err
 		}
-		// Clean up any bullet prefixes and bad phrases
 		result = strings.TrimSpace(result)
 		result = strings.TrimPrefix(result, "- ")
 		result = strings.TrimPrefix(result, "• ")
@@ -622,16 +617,13 @@ Description: %s`, descriptions[0])
 		return fmt.Sprintf("- %s", result), nil
 	}
 	// For multiple commits, create summarized bullet points
-	prompt := fmt.Sprintf(`Summarize these commit descriptions into 2-4 concise bullet points highlighting the key updates.
-CRITICAL RULES:
-- Each bullet should be 1 sentence, starting with an action verb (Added, Improved, Fixed, Updated, Refactored, etc.)
-- NEVER start with "This commit", "The commit", "This change", or "The change"
-- Write in active voice, not passive voice
-- Be specific and technical
-- Output ONLY the bullet points, each on its own line starting with "- "
- Be concise and to the point. 
-Commit descriptions:
-%s`, strings.Join(descriptions, "\n\n"))
+	prompt := fmt.Sprintf(`Summarize these commits into 2-4 bullet points. Each bullet is one sentence using past tense active voice starting with a verb (e.g. "Added", "Fixed", "Refactored"). Output ONLY the bullet points, one per line, each starting with "- ".
+
+<commits>
+%s
+</commits>
+
+Bullets:`, strings.Join(descriptions, "\n\n"))
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	result, err := client.Complete(ctx, prompt)
@@ -659,17 +651,13 @@ func generateOverallSummary(groups []dayGroup, client llm.Client) (string, error
 		messages = messages[:50]
 	}
 
-	prompt := fmt.Sprintf(`Summarize the following git commit messages into a brief, professional summary of work accomplished.
-Write 2-3 sentences highlighting the main themes and accomplishments.
+	prompt := fmt.Sprintf(`You are a worklog summarizer. Given commit messages from a time period, output ONLY a 2-3 sentence professional summary of work accomplished. No preamble, no bullet points, no labels. Use past tense active voice starting with verbs like "Added", "Implemented", "Fixed", "Refactored".
 
-CRITICAL RULES:
-- NEVER use "This commit", "The commit", "This change", or "The change"
-- Start sentences with action verbs (Added, Implemented, Refactored, Fixed, etc.)
-- Write in active voice
-- Be concise and specific
+<commits>
+%s
+</commits>
 
-Commit messages:
-%s`, strings.Join(messages, "\n"))
+Summary:`, strings.Join(messages, "\n"))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

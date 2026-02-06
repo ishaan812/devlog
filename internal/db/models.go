@@ -80,6 +80,7 @@ type Folder struct {
 	Purpose    string
 	FileCount  int
 	IndexedAt  time.Time
+	Embedding  []float32
 }
 
 // FileIndex represents an indexed file
@@ -99,6 +100,7 @@ type FileIndex struct {
 	Dependencies []string
 	ContentHash  string
 	IndexedAt    time.Time
+	Embedding    []float32
 }
 
 // IngestCursor tracks ingestion state per branch
@@ -220,6 +222,30 @@ func convertToMap(v any) map[string]any {
 		return FromJSON(m)
 	}
 	return nil
+}
+
+// EmbeddingToJSON serializes an embedding to JSON string for storage
+func EmbeddingToJSON(embedding []float32) string {
+	if len(embedding) == 0 {
+		return ""
+	}
+	b, err := json.Marshal(embedding)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// EmbeddingFromJSON deserializes a JSON string to an embedding
+func EmbeddingFromJSON(s string) []float32 {
+	if s == "" {
+		return nil
+	}
+	var embedding []float32
+	if err := json.Unmarshal([]byte(s), &embedding); err != nil {
+		return nil
+	}
+	return embedding
 }
 
 // convertToStringSlice converts DuckDB JSON array to []string
