@@ -32,7 +32,8 @@ DevLog transforms your git history and codebase into a queryable knowledge base.
 
 ```bash
 # 1. Install DevLog
-go install github.com/ishaan812/devlog/cmd/devlog@latest
+npm install -g devlog
+# or: go install github.com/ishaan812/devlog/cmd/devlog@latest
 
 # 2. Run the setup wizard
 devlog onboard
@@ -49,7 +50,13 @@ devlog search "error handling"
 
 ## Installation
 
-### Using Go Install (Recommended)
+### Using npm (Easiest)
+
+```bash
+npm install -g devlog
+```
+
+### Using Go Install
 
 ```bash
 go install github.com/ishaan812/devlog/cmd/devlog@latest

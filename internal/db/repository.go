@@ -7,23 +7,34 @@ import (
 	"time"
 )
 
-// Repository defines the interface for all database operations.
+// Repository defines the interface for all database operations,
+// grouped by functionality for clarity.
 type Repository interface {
 	// Developer operations
+	// --------------------
 	UpsertDeveloper(ctx context.Context, dev *Developer) error
 	GetDeveloperByEmail(ctx context.Context, email string) (*Developer, error)
 	SetCurrentUser(ctx context.Context, email string) error
 	GetCurrentUser(ctx context.Context) (*Developer, error)
+
+	// Codebase operations
+	// -------------------
 	UpsertCodebase(ctx context.Context, codebase *Codebase) error
 	GetCodebaseByPath(ctx context.Context, path string) (*Codebase, error)
 	GetCodebaseByID(ctx context.Context, id string) (*Codebase, error)
 	GetAllCodebases(ctx context.Context) ([]Codebase, error)
+
+	// Branch operations
+	// -----------------
 	UpsertBranch(ctx context.Context, branch *Branch) error
 	GetBranch(ctx context.Context, codebaseID, name string) (*Branch, error)
 	GetBranchByID(ctx context.Context, id string) (*Branch, error)
 	GetBranchesByCodebase(ctx context.Context, codebaseID string) ([]Branch, error)
 	GetBranchCommits(ctx context.Context, branchID string, limit int) ([]Commit, error)
 	ClearDefaultBranch(ctx context.Context, codebaseID string) error
+
+	// Commit operations
+	// -----------------
 	UpsertCommit(ctx context.Context, commit *Commit) error
 	CommitExists(ctx context.Context, codebaseID, hash string) (bool, error)
 	GetExistingCommitHashes(ctx context.Context, codebaseID string) (map[string]bool, error)
@@ -33,16 +44,27 @@ type Repository interface {
 	GetUserCommits(ctx context.Context, codebaseID string, since time.Time) ([]Commit, error)
 	GetCommitCount(ctx context.Context, codebaseID string) (int64, error)
 	GetCommitCountByPath(ctx context.Context, repoPath string) (int64, error)
+
+	// File change operations
+	// ----------------------
 	CreateFileChange(ctx context.Context, fc *FileChange) error
 	GetFileChangesByCommit(ctx context.Context, commitID string) ([]FileChange, error)
 	GetFileChangeCount(ctx context.Context, codebaseID string) (int64, error)
+
+	// Cursor operations
+	// -----------------
 	GetBranchCursor(ctx context.Context, codebaseID, branchName string) (string, error)
 	UpdateBranchCursor(ctx context.Context, codebaseID, branchName, hash string) error
+
+	// Folder and file indexing operations
+	// -----------------------------------
 	UpsertFolder(ctx context.Context, folder *Folder) error
 	GetFoldersByCodebase(ctx context.Context, codebaseID string) ([]Folder, error)
 	GetFolderByPath(ctx context.Context, codebaseID, path string) (*Folder, error)
 	GetExistingFolderPaths(ctx context.Context, codebaseID string) (map[string]string, error)
 	DeleteFoldersByPaths(ctx context.Context, codebaseID string, paths []string) error
+
+	// File index operations
 	UpsertFileIndex(ctx context.Context, file *FileIndex) error
 	GetFilesByCodebase(ctx context.Context, codebaseID string) ([]FileIndex, error)
 	GetExistingFileHashes(ctx context.Context, codebaseID string) (map[string]ExistingFileInfo, error)
@@ -50,10 +72,16 @@ type Repository interface {
 	DeleteFileIndexesByPaths(ctx context.Context, codebaseID string, paths []string) error
 	GetFilesByFolder(ctx context.Context, folderID string) ([]FileIndex, error)
 	SearchFilesBySummary(ctx context.Context, codebaseID, query string) ([]FileIndex, error)
+
+	// Codebase statistics and search operations
+	// -----------------------------------------
 	GetCodebaseStats(ctx context.Context, codebaseID string) (*CodebaseStats, error)
 	HasEmbeddings(ctx context.Context, codebaseID string) bool
 	SemanticSearchFiles(ctx context.Context, codebaseID string, queryEmbedding []float32, limit int) ([]FileIndex, error)
 	SemanticSearchFolders(ctx context.Context, codebaseID string, queryEmbedding []float32, limit int) ([]Folder, error)
+
+	// Raw query operations
+	// --------------------
 	ExecuteQuery(ctx context.Context, query string) ([]map[string]any, error)
 }
 

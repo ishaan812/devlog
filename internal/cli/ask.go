@@ -50,8 +50,7 @@ func runAsk(cmd *cobra.Command, args []string) error {
 
 	cfg, err := config.Load()
 	if err != nil {
-		VerboseLog("Warning: failed to load config: %v", err)
-		cfg = &config.Config{DefaultProvider: "ollama"}
+		return fmt.Errorf("failed to load config: %w\n\nRun 'devlog onboard' to set up your configuration", err)
 	}
 
 	VerboseLog("Initializing database")
@@ -74,11 +73,15 @@ func runAsk(cmd *cobra.Command, args []string) error {
 		selectedProvider = cfg.DefaultProvider
 	}
 	if selectedProvider == "" {
-		selectedProvider = "ollama"
+		return fmt.Errorf("no provider configured; run 'devlog onboard' first")
 	}
 
 	VerboseLog("Initializing LLM client with provider: %s", selectedProvider)
-	llmCfg := llm.Config{Provider: llm.Provider(selectedProvider), Model: model, BaseURL: baseURL}
+	selectedModel := model // from CLI flag
+	if selectedModel == "" {
+		selectedModel = cfg.DefaultModel
+	}
+	llmCfg := llm.Config{Provider: llm.Provider(selectedProvider), Model: selectedModel, BaseURL: baseURL}
 
 	switch llmCfg.Provider {
 	case llm.ProviderOpenAI:
@@ -91,6 +94,11 @@ func runAsk(cmd *cobra.Command, args []string) error {
 		if llmCfg.APIKey == "" {
 			return fmt.Errorf("Anthropic API key not configured. Run 'devlog onboard' or set ANTHROPIC_API_KEY")
 		}
+	case llm.ProviderOpenRouter:
+		llmCfg.APIKey = cfg.GetAPIKey("openrouter")
+		if llmCfg.APIKey == "" {
+			return fmt.Errorf("OpenRouter API key not configured. Run 'devlog onboard' or set OPENROUTER_API_KEY")
+		}
 	case llm.ProviderBedrock:
 		llmCfg.AWSAccessKeyID = cfg.AWSAccessKeyID
 		llmCfg.AWSSecretAccessKey = cfg.AWSSecretAccessKey
@@ -102,7 +110,8 @@ func runAsk(cmd *cobra.Command, args []string) error {
 		if cfg.OllamaBaseURL != "" {
 			llmCfg.BaseURL = cfg.OllamaBaseURL
 		}
-		if model == "" && cfg.OllamaModel != "" {
+		// Ollama uses its own model field as override
+		if selectedModel == "" && cfg.OllamaModel != "" {
 			llmCfg.Model = cfg.OllamaModel
 		}
 	}

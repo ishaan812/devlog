@@ -165,8 +165,7 @@ func processCommit(c *object.Commit) (CommitInfo, error) {
 		var err error
 		parent, err = c.Parent(0)
 		if err != nil {
-			// Initial commit has no parent, that's okay
-			parent = nil
+			return info, fmt.Errorf("failed to get parent for commit %s: %w", c.Hash.String(), err)
 		}
 	}
 
@@ -176,18 +175,18 @@ func processCommit(c *object.Commit) (CommitInfo, error) {
 		var err error
 		parentTree, err = parent.Tree()
 		if err != nil {
-			return info, nil // Continue without diff
+			return info, fmt.Errorf("failed to get parent tree for commit %s: %w", c.Hash.String(), err)
 		}
 	}
 
 	commitTree, err := c.Tree()
 	if err != nil {
-		return info, nil // Continue without diff
+		return info, fmt.Errorf("failed to get commit tree for %s: %w", c.Hash.String(), err)
 	}
 
 	changes, err := object.DiffTree(parentTree, commitTree)
 	if err != nil {
-		return info, nil // Continue without diff
+		return info, fmt.Errorf("failed to diff trees for commit %s: %w", c.Hash.String(), err)
 	}
 
 	for _, change := range changes {

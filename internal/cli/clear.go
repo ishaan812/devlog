@@ -63,20 +63,35 @@ func runClear(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to open database: %w", err)
 	}
 
-	getCount := func(query string) int64 {
-		results, _ := dbRepo.ExecuteQuery(ctx, query)
+	getCount := func(query string) (int64, error) {
+		results, err := dbRepo.ExecuteQuery(ctx, query)
+		if err != nil {
+			return 0, err
+		}
 		if len(results) > 0 {
 			if v, ok := results[0]["cnt"].(int64); ok {
-				return v
+				return v, nil
 			}
 		}
-		return 0
+		return 0, nil
 	}
 
-	commitCount := getCount("SELECT COUNT(*) as cnt FROM commits")
-	fileChangeCount := getCount("SELECT COUNT(*) as cnt FROM file_changes")
-	codebaseCount := getCount("SELECT COUNT(*) as cnt FROM codebases")
-	fileIndexCount := getCount("SELECT COUNT(*) as cnt FROM file_indexes")
+	commitCount, err := getCount("SELECT COUNT(*) as cnt FROM commits")
+	if err != nil {
+		return fmt.Errorf("failed to count commits: %w", err)
+	}
+	fileChangeCount, err := getCount("SELECT COUNT(*) as cnt FROM file_changes")
+	if err != nil {
+		return fmt.Errorf("failed to count file changes: %w", err)
+	}
+	codebaseCount, err := getCount("SELECT COUNT(*) as cnt FROM codebases")
+	if err != nil {
+		return fmt.Errorf("failed to count codebases: %w", err)
+	}
+	fileIndexCount, err := getCount("SELECT COUNT(*) as cnt FROM file_indexes")
+	if err != nil {
+		return fmt.Errorf("failed to count file indexes: %w", err)
+	}
 
 	fmt.Println()
 	warnColor.Printf("  Warning: Clear Database\n\n")
@@ -119,10 +134,12 @@ func runClear(cmd *cobra.Command, args []string) error {
 	database := dbRepo.DB()
 	for _, table := range tables {
 		if _, err := database.Exec(fmt.Sprintf("DELETE FROM %s", table)); err != nil {
-			VerboseLog("Warning: failed to clear %s: %v", table, err)
+			return fmt.Errorf("failed to clear table %s: %w", table, err)
 		}
 	}
-	database.Exec("CHECKPOINT")
+	if _, err := database.Exec("CHECKPOINT"); err != nil {
+		return fmt.Errorf("failed to checkpoint database: %w", err)
+	}
 
 	fmt.Println()
 	successColor.Printf("  Database cleared successfully\n")

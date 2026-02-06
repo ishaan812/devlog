@@ -125,7 +125,11 @@ func runGraph(cmd *cobra.Command, args []string) error {
 
 func generateStructureGraph(ctx context.Context, dbRepo *db.SQLRepository, codebasePath string, maxNodes int) (string, error) {
 	if codebasePath == "" {
-		codebasePath, _ = filepath.Abs(".")
+		var absErr error
+		codebasePath, absErr = filepath.Abs(".")
+		if absErr != nil {
+			return "", fmt.Errorf("failed to resolve current directory: %w", absErr)
+		}
 	}
 
 	codebase, err := dbRepo.GetCodebaseByPath(ctx, codebasePath)

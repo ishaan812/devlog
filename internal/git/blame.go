@@ -1,6 +1,8 @@
 package git
 
 import (
+	"fmt"
+
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing/object"
 )
@@ -30,9 +32,7 @@ func AnalyzeBlame(repo *Repository, filePath string) (*BlameResult, error) {
 
 	blame, err := git.Blame(commit, filePath)
 	if err != nil {
-		// File might be new or deleted
-		result.Category = "new_feature"
-		return result, nil
+		return nil, fmt.Errorf("failed to blame file %s: %w", filePath, err)
 	}
 
 	// Count lines by author

@@ -13,6 +13,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/ishaan812/devlog/internal/config"
+	"github.com/ishaan812/devlog/internal/constants"
 	"github.com/ishaan812/devlog/internal/tui"
 )
 
@@ -116,63 +117,73 @@ func runOnboardLegacy() error {
 	printStep(2, "Choose your LLM provider")
 	fmt.Println()
 
-	providers := []struct {
-		key  string
-		name string
-		desc string
-	}{
-		{"1", "Ollama", "Free, local, private (recommended for privacy)"},
-		{"2", "Anthropic", "Claude models, excellent quality"},
-		{"3", "OpenAI", "GPT-4, GPT-3.5 models"},
-		{"4", "Bedrock", "Claude via AWS (enterprise)"},
-	}
-
-	for _, p := range providers {
-		accentColor.Printf("  [%s] ", p.key)
-		infoColor.Printf("%-12s", p.name)
-		dimColor.Printf(" - %s\n", p.desc)
+	for _, p := range constants.AllProviders {
+		if !p.SupportsLLM {
+			continue
+		}
+		accentColor.Printf("  [%s] ", p.Key)
+		infoColor.Printf("%-12s", p.Name)
+		dimColor.Printf(" - %s\n", p.Description)
 	}
 
 	fmt.Println()
-	promptColor.Print("Select provider (1-4): ")
+	promptColor.Print("Select provider (1-5): ")
 	choice, _ := reader.ReadString('\n')
 	choice = strings.TrimSpace(choice)
 
-	switch choice {
-	case "1":
-		cfg.DefaultProvider = "ollama"
+	// Find provider by key
+	var selectedProvider constants.Provider
+	for _, p := range constants.AllProviders {
+		if p.Key == choice && p.SupportsLLM {
+			selectedProvider = constants.Provider(strings.ToLower(p.Name))
+			break
+		}
+	}
+
+	if selectedProvider == "" {
+		errorColor.Println("Invalid provider selection. Please try again.")
+		return fmt.Errorf("invalid provider selection")
+	}
+
+	cfg.DefaultProvider = string(selectedProvider)
+
+	switch selectedProvider {
+	case constants.ProviderOllama:
 		configureOllama(cfg, reader)
-	case "2":
-		cfg.DefaultProvider = "anthropic"
+	case constants.ProviderAnthropic:
 		if err := configureAnthropic(cfg, reader); err != nil {
 			return err
 		}
-	case "3":
-		cfg.DefaultProvider = "openai"
+	case constants.ProviderOpenAI:
 		if err := configureOpenAI(cfg, reader); err != nil {
 			return err
 		}
-	case "4":
-		cfg.DefaultProvider = "bedrock"
+	case constants.ProviderOpenRouter:
+		if err := configureOpenRouter(cfg, reader); err != nil {
+			return err
+		}
+	case constants.ProviderBedrock:
 		if err := configureBedrock(cfg, reader); err != nil {
 			return err
 		}
-	default:
-		cfg.DefaultProvider = "ollama"
-		infoColor.Println("Defaulting to Ollama")
-		configureOllama(cfg, reader)
 	}
 
-	// Step 3: User info
+	// Step 3: Embedding model configuration
 	fmt.Println()
-	printStep(3, "Your information (optional)")
+	printStep(3, "Embedding Model Configuration")
+	fmt.Println()
+	configureEmbeddings(cfg, reader)
+
+	// Step 4: User info
+	fmt.Println()
+	printStep(4, "Your information (optional)")
 	fmt.Println()
 
-	promptColor.Print("Your name (for work logs): ")
-	name, _ := reader.ReadString('\n')
-	name = strings.TrimSpace(name)
-	if name != "" {
-		cfg.UserName = name
+	promptColor.Print("GitHub username (for identifying your commits): ")
+	githubUser, _ := reader.ReadString('\n')
+	githubUser = strings.TrimSpace(githubUser)
+	if githubUser != "" {
+		cfg.GitHubUsername = githubUser
 	}
 
 	promptColor.Print("Your email (for filtering commits): ")
@@ -180,6 +191,13 @@ func runOnboardLegacy() error {
 	email = strings.TrimSpace(email)
 	if email != "" {
 		cfg.UserEmail = email
+	}
+
+	promptColor.Print("Your name (for work logs): ")
+	name, _ := reader.ReadString('\n')
+	name = strings.TrimSpace(name)
+	if name != "" {
+		cfg.UserName = name
 	}
 
 	// Save config
@@ -199,9 +217,9 @@ func runOnboardLegacy() error {
 	s.Stop()
 	successColor.Println("Configuration saved!")
 
-	// Step 4: Quick tutorial
+	// Step 5: Quick tutorial
 	fmt.Println()
-	printStep(4, "Quick Tutorial")
+	printStep(5, "Quick Tutorial")
 	fmt.Println()
 
 	printTutorial()
@@ -240,41 +258,66 @@ func printStep(num int, title string) {
 }
 
 func configureOllama(cfg *config.Config, reader *bufio.Reader) {
+	defaultURL := constants.GetDefaultBaseURL(constants.ProviderOllama)
+	defaultModel := constants.GetDefaultModel(constants.ProviderOllama)
+
 	fmt.Println()
 	infoColor.Println("Ollama runs locally on your machine.")
 	fmt.Println()
 
 	promptColor.Print("Ollama URL (press Enter for default): ")
-	dimColor.Print("[http://localhost:11434] ")
+	dimColor.Printf("[%s] ", defaultURL)
 	url, _ := reader.ReadString('\n')
 	url = strings.TrimSpace(url)
 	if url != "" {
 		cfg.OllamaBaseURL = url
 	} else {
-		cfg.OllamaBaseURL = "http://localhost:11434"
+		cfg.OllamaBaseURL = defaultURL
 	}
 
-	promptColor.Print("Default model (press Enter for default): ")
-	dimColor.Print("[llama3.2] ")
-	model, _ := reader.ReadString('\n')
-	model = strings.TrimSpace(model)
-	if model != "" {
-		cfg.OllamaModel = model
-	} else {
-		cfg.OllamaModel = "llama3.2"
+	// Model selection
+	fmt.Println()
+	infoColor.Println("Select a model (or press Enter for default):")
+	fmt.Println()
+
+	models := constants.GetLLMModels(constants.ProviderOllama)
+	for _, m := range models {
+		accentColor.Printf("  [%s] ", m.ID)
+		infoColor.Printf("%-20s", m.Model)
+		dimColor.Printf(" - %s\n", m.Description)
 	}
+
+	fmt.Println()
+	promptColor.Print("Select model: ")
+	dimColor.Printf("[1] ")
+	modelChoice, _ := reader.ReadString('\n')
+	modelChoice = strings.TrimSpace(modelChoice)
+
+	selectedModel := defaultModel
+	for _, m := range models {
+		if m.ID == modelChoice {
+			selectedModel = m.Model
+			break
+		}
+	}
+
+	cfg.OllamaModel = selectedModel
+	cfg.DefaultModel = selectedModel
 
 	fmt.Println()
 	infoColor.Println("Make sure Ollama is running:")
 	dimColor.Print("  $ ")
 	infoColor.Println("ollama serve")
 	dimColor.Print("  $ ")
-	infoColor.Println("ollama pull llama3.2")
+	infoColor.Printf("ollama pull %s\n", selectedModel)
 }
 
 func configureAnthropic(cfg *config.Config, reader *bufio.Reader) error {
+	setupInfo := constants.GetProviderSetupInfo(constants.ProviderAnthropic)
+	defaultModel := constants.GetDefaultModel(constants.ProviderAnthropic)
+
 	fmt.Println()
-	infoColor.Println("Get your API key from: console.anthropic.com")
+	infoColor.Println(setupInfo.SetupHint)
 	fmt.Println()
 
 	promptColor.Print("Anthropic API Key: ")
@@ -288,16 +331,47 @@ func configureAnthropic(cfg *config.Config, reader *bufio.Reader) error {
 
 	cfg.AnthropicAPIKey = key
 
+	// Model selection
+	fmt.Println()
+	infoColor.Println("Select a model (or press Enter for default):")
+	fmt.Println()
+
+	models := constants.GetLLMModels(constants.ProviderAnthropic)
+	for _, m := range models {
+		accentColor.Printf("  [%s] ", m.ID)
+		infoColor.Printf("%-35s", m.Model)
+		dimColor.Printf(" - %s\n", m.Description)
+	}
+
+	fmt.Println()
+	promptColor.Print("Select model: ")
+	dimColor.Printf("[1] ")
+	modelChoice, _ := reader.ReadString('\n')
+	modelChoice = strings.TrimSpace(modelChoice)
+
+	selectedModel := defaultModel
+	for _, m := range models {
+		if m.ID == modelChoice {
+			selectedModel = m.Model
+			break
+		}
+	}
+
+	cfg.DefaultModel = selectedModel
+
 	fmt.Println()
 	successColor.Println("Anthropic configured!")
-	dimColor.Println("Default model: claude-3-5-sonnet-20241022")
+	dimColor.Printf("Model: %s\n", selectedModel)
 
 	return nil
 }
 
 func configureOpenAI(cfg *config.Config, reader *bufio.Reader) error {
+	setupInfo := constants.GetProviderSetupInfo(constants.ProviderOpenAI)
+	defaultModel := constants.GetDefaultModel(constants.ProviderOpenAI)
+
 	fmt.Println()
-	infoColor.Println("Get your API key from: platform.openai.com")
+	infoColor.Println(setupInfo.SetupHint)
 	fmt.Println()
 
 	promptColor.Print("OpenAI API Key: ")
@@ -311,16 +385,102 @@ func configureOpenAI(cfg *config.Config, reader *bufio.Reader) error {
 
 	cfg.OpenAIAPIKey = key
 
+	// Model selection
+	fmt.Println()
+	infoColor.Println("Select a model (or press Enter for default):")
+	fmt.Println()
+
+	models := constants.GetLLMModels(constants.ProviderOpenAI)
+	for _, m := range models {
+		accentColor.Printf("  [%s] ", m.ID)
+		infoColor.Printf("%-25s", m.Model)
+		dimColor.Printf(" - %s\n", m.Description)
+	}
+
+	fmt.Println()
+	promptColor.Print("Select model: ")
+	dimColor.Printf("[1] ")
+	modelChoice, _ := reader.ReadString('\n')
+	modelChoice = strings.TrimSpace(modelChoice)
+
+	selectedModel := defaultModel
+	for _, m := range models {
+		if m.ID == modelChoice {
+			selectedModel = m.Model
+			break
+		}
+	}
+
+	cfg.DefaultModel = selectedModel
+
 	fmt.Println()
 	successColor.Println("OpenAI configured!")
-	dimColor.Println("Default model: gpt-4o-mini")
+	dimColor.Printf("Model: %s\n", selectedModel)
+
+	return nil
+}
+
+func configureOpenRouter(cfg *config.Config, reader *bufio.Reader) error {
+	setupInfo := constants.GetProviderSetupInfo(constants.ProviderOpenRouter)
+	defaultModel := constants.GetDefaultModel(constants.ProviderOpenRouter)
+
+	fmt.Println()
+	infoColor.Println(setupInfo.SetupHint)
+	fmt.Println()
+
+	promptColor.Print("OpenRouter API Key: ")
+	key, _ := reader.ReadString('\n')
+	key = strings.TrimSpace(key)
+
+	if key == "" {
+		errorColor.Println("API key is required for OpenRouter")
+		return fmt.Errorf("API key required")
+	}
+
+	cfg.OpenRouterAPIKey = key
+
+	// Model selection
+	fmt.Println()
+	infoColor.Println("Select a model (or press Enter for auto-routing):")
+	fmt.Println()
+
+	models := constants.GetLLMModels(constants.ProviderOpenRouter)
+	for _, m := range models {
+		accentColor.Printf("  [%s] ", m.ID)
+		infoColor.Printf("%-45s", m.Model)
+		dimColor.Printf(" - %s\n", m.Description)
+	}
+
+	fmt.Println()
+	promptColor.Printf("Select model (1-%d): ", len(models))
+	dimColor.Print("[1] ")
+	modelChoice, _ := reader.ReadString('\n')
+	modelChoice = strings.TrimSpace(modelChoice)
+
+	selectedModel := defaultModel
+	for _, m := range models {
+		if m.ID == modelChoice {
+			selectedModel = m.Model
+			break
+		}
+	}
+
+	cfg.DefaultModel = selectedModel
+
+	fmt.Println()
+	successColor.Println("OpenRouter configured!")
+	dimColor.Printf("Model: %s\n", selectedModel)
 
 	return nil
 }
 
 func configureBedrock(cfg *config.Config, reader *bufio.Reader) error {
+	setupInfo := constants.GetProviderSetupInfo(constants.ProviderBedrock)
+	defaultModel := constants.GetDefaultModel(constants.ProviderBedrock)
+	defaultRegion := constants.GetDefaultAWSRegion()
+
 	fmt.Println()
-	infoColor.Println("AWS Bedrock requires IAM credentials with Bedrock access.")
+	infoColor.Println(setupInfo.SetupHint)
 	fmt.Println()
 
 	promptColor.Print("AWS Access Key ID: ")
@@ -342,22 +502,137 @@ func configureBedrock(cfg *config.Config, reader *bufio.Reader) error {
 	}
 
 	promptColor.Print("AWS Region (press Enter for default): ")
-	dimColor.Print("[us-east-1] ")
+	dimColor.Printf("[%s] ", defaultRegion)
 	region, _ := reader.ReadString('\n')
 	region = strings.TrimSpace(region)
 	if region == "" {
-		region = "us-east-1"
+		region = defaultRegion
 	}
 
 	cfg.AWSAccessKeyID = accessKey
 	cfg.AWSSecretAccessKey = secretKey
 	cfg.AWSRegion = region
 
+	// Model selection
+	fmt.Println()
+	infoColor.Println("Select a model (or press Enter for default):")
+	fmt.Println()
+
+	models := constants.GetLLMModels(constants.ProviderBedrock)
+	for _, m := range models {
+		accentColor.Printf("  [%s] ", m.ID)
+		infoColor.Printf("%-45s", m.Model)
+		dimColor.Printf(" - %s\n", m.Description)
+	}
+
+	fmt.Println()
+	promptColor.Print("Select model: ")
+	dimColor.Printf("[1] ")
+	modelChoice, _ := reader.ReadString('\n')
+	modelChoice = strings.TrimSpace(modelChoice)
+
+	selectedModel := defaultModel
+	for _, m := range models {
+		if m.ID == modelChoice {
+			selectedModel = m.Model
+			break
+		}
+	}
+
+	cfg.DefaultModel = selectedModel
+
 	fmt.Println()
 	successColor.Println("AWS Bedrock configured!")
-	dimColor.Println("Default model: anthropic.claude-3-5-sonnet-20241022-v2:0")
+	dimColor.Printf("Model: %s\n", selectedModel)
 
 	return nil
+}
+
+func configureEmbeddings(cfg *config.Config, reader *bufio.Reader) {
+	infoColor.Println("Embeddings are used for semantic search and code similarity.")
+	fmt.Println()
+
+	// Display embedding provider options
+	for _, p := range constants.AllEmbeddingProviders {
+		accentColor.Printf("  [%s] ", p.Key)
+		infoColor.Printf("%-30s", p.Name)
+		dimColor.Printf(" - %s\n", p.Description)
+	}
+
+	fmt.Println()
+	promptColor.Printf("Select embedding provider (1-%d): ", len(constants.AllEmbeddingProviders))
+	dimColor.Print("[1] ")
+	choice, _ := reader.ReadString('\n')
+	choice = strings.TrimSpace(choice)
+
+	// Find embedding provider by key
+	var selectedEmbedProvider constants.Provider
+	for _, p := range constants.AllEmbeddingProviders {
+		if p.Key == choice {
+			selectedEmbedProvider = p.Provider
+			break
+		}
+	}
+
+	if selectedEmbedProvider == "" {
+		// "Same as LLM provider" or default
+		llmProvider := constants.Provider(cfg.DefaultProvider)
+		if constants.ProviderSupportsEmbeddings(llmProvider) {
+			cfg.EmbeddingProvider = cfg.DefaultProvider
+		} else {
+			errorColor.Printf("Error: %s doesn't support embeddings. Please select a dedicated embedding provider.\n", cfg.DefaultProvider)
+			return
+		}
+	} else {
+		cfg.EmbeddingProvider = string(selectedEmbedProvider)
+
+		// Prompt for API key if needed
+		setupInfo := constants.GetProviderSetupInfo(selectedEmbedProvider)
+		if setupInfo.NeedsAPIKey {
+			existingKey := getExistingAPIKeyForProvider(cfg, selectedEmbedProvider)
+			if existingKey == "" {
+				promptColor.Printf("%s API Key (for embeddings): ", strings.Title(string(selectedEmbedProvider)))
+				key, _ := reader.ReadString('\n')
+				setAPIKeyForProvider(cfg, selectedEmbedProvider, strings.TrimSpace(key))
+			}
+		}
+	}
+
+	cfg.DefaultEmbedModel = constants.GetDefaultEmbeddingModel(constants.Provider(cfg.EmbeddingProvider))
+
+	fmt.Println()
+	successColor.Printf("Embedding provider: %s\n", cfg.EmbeddingProvider)
+	dimColor.Printf("Embedding model: %s\n", cfg.DefaultEmbedModel)
+}
+
+// getExistingAPIKeyForProvider returns the current API key for a provider from config
+func getExistingAPIKeyForProvider(cfg *config.Config, provider constants.Provider) string {
+	switch provider {
+	case constants.ProviderOpenAI:
+		return cfg.OpenAIAPIKey
+	case constants.ProviderOpenRouter:
+		return cfg.OpenRouterAPIKey
+	case constants.ProviderVoyageAI:
+		return cfg.VoyageAIAPIKey
+	case constants.ProviderAnthropic:
+		return cfg.AnthropicAPIKey
+	default:
+		return ""
+	}
+}
+
+// setAPIKeyForProvider sets the API key for a provider in config
+func setAPIKeyForProvider(cfg *config.Config, provider constants.Provider, key string) {
+	switch provider {
+	case constants.ProviderOpenAI:
+		cfg.OpenAIAPIKey = key
+	case constants.ProviderOpenRouter:
+		cfg.OpenRouterAPIKey = key
+	case constants.ProviderVoyageAI:
+		cfg.VoyageAIAPIKey = key
+	case constants.ProviderAnthropic:
+		cfg.AnthropicAPIKey = key
+	}
 }
 
 func printTutorial() {

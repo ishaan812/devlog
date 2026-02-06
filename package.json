@@ -1,0 +1,32 @@
+{
+  "name": "devlog",
+  "version": "1.0.0",
+  "description": "AI-powered development activity tracker and code intelligence tool",
+  "bin": {
+    "devlog": "./bin/devlog"
+  },
+  "scripts": {
+    "postinstall": "node install.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ishaan812/devlog.git"
+  },
+  "keywords": [
+    "git",
+    "cli",
+    "devlog",
+    "activity-tracker",
+    "ai",
+    "llm"
+  ],
+  "author": "ishaan812",
+  "license": "MIT",
+  "files": [
+    "bin/",
+    "install.js"
+  ],
+  "engines": {
+    "node": ">=14"
+  }
+}

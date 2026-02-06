@@ -90,27 +90,35 @@ func runList(cmd *cobra.Command, args []string) error {
 			}
 
 			db.SetActiveProfile(name)
-			if dbRepo, err := db.GetRepository(); err == nil {
-				ctx := context.Background()
-				commitResults, _ := dbRepo.ExecuteQuery(ctx, `SELECT COUNT(*) as cnt FROM commits`)
-				codebaseResults, _ := dbRepo.ExecuteQuery(ctx, `SELECT COUNT(*) as cnt FROM codebases`)
-				var commitCount, codebaseCount int64
-				if len(commitResults) > 0 {
-					if v, ok := commitResults[0]["cnt"].(int64); ok {
-						commitCount = v
-					}
+			dbRepo, err := db.GetRepository()
+			if err != nil {
+				return fmt.Errorf("failed to get repository for profile %s: %w", name, err)
+			}
+			ctx := context.Background()
+			commitResults, err := dbRepo.ExecuteQuery(ctx, `SELECT COUNT(*) as cnt FROM commits`)
+			if err != nil {
+				return fmt.Errorf("failed to query commit count for profile %s: %w", name, err)
+			}
+			codebaseResults, err := dbRepo.ExecuteQuery(ctx, `SELECT COUNT(*) as cnt FROM codebases`)
+			if err != nil {
+				return fmt.Errorf("failed to query codebase count for profile %s: %w", name, err)
+			}
+			var commitCount, codebaseCount int64
+			if len(commitResults) > 0 {
+				if v, ok := commitResults[0]["cnt"].(int64); ok {
+					commitCount = v
 				}
-				if len(codebaseResults) > 0 {
-					if v, ok := codebaseResults[0]["cnt"].(int64); ok {
-						codebaseCount = v
-					}
+			}
+			if len(codebaseResults) > 0 {
+				if v, ok := codebaseResults[0]["cnt"].(int64); ok {
+					codebaseCount = v
 				}
-				if commitCount > 0 || codebaseCount > 0 {
-					dimColor.Printf("      ")
-					infoColor.Printf("%d commits", commitCount)
-					dimColor.Printf(" in ")
-					infoColor.Printf("%d repos\n", codebaseCount)
-				}
+			}
+			if commitCount > 0 || codebaseCount > 0 {
+				dimColor.Printf("      ")
+				infoColor.Printf("%d commits", commitCount)
+				dimColor.Printf(" in ")
+				infoColor.Printf("%d repos\n", codebaseCount)
 			}
 		}
 	}
@@ -209,9 +217,19 @@ func runListRepos(cmd *cobra.Command, args []string) error {
 
 	for _, repoPath := range profile.Repos {
 		infoColor.Printf("  • %s\n", repoPath)
-		if codebase, _ := dbRepo.GetCodebaseByPath(ctx, repoPath); codebase != nil {
-			commitCount, _ := dbRepo.GetCommitCount(ctx, codebase.ID)
-			fileCount, _ := dbRepo.GetFileChangeCount(ctx, codebase.ID)
+		codebase, err := dbRepo.GetCodebaseByPath(ctx, repoPath)
+		if err != nil {
+			return fmt.Errorf("failed to get codebase for %s: %w", repoPath, err)
+		}
+		if codebase != nil {
+			commitCount, err := dbRepo.GetCommitCount(ctx, codebase.ID)
+			if err != nil {
+				return fmt.Errorf("failed to get commit count for %s: %w", repoPath, err)
+			}
+			fileCount, err := dbRepo.GetFileChangeCount(ctx, codebase.ID)
+			if err != nil {
+				return fmt.Errorf("failed to get file change count for %s: %w", repoPath, err)
+			}
 			dimColor.Printf("    %d commits, %d file changes\n", commitCount, fileCount)
 			if codebase.Summary != "" {
 				dimColor.Printf("    %s\n", truncate(codebase.Summary, 60))

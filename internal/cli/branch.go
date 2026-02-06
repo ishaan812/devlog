@@ -100,7 +100,11 @@ func runBranchList(cmd *cobra.Command, args []string) error {
 
 	codebasePath := branchCodebase
 	if codebasePath == "" {
-		codebasePath, _ = filepath.Abs(".")
+		var absErr error
+		codebasePath, absErr = filepath.Abs(".")
+		if absErr != nil {
+			return fmt.Errorf("failed to resolve current directory: %w", absErr)
+		}
 	}
 
 	dbRepo, err := db.GetRepository()
@@ -183,7 +187,11 @@ func runBranchShow(cmd *cobra.Command, args []string) error {
 
 	codebasePath := branchCodebase
 	if codebasePath == "" {
-		codebasePath, _ = filepath.Abs(".")
+		var absErr error
+		codebasePath, absErr = filepath.Abs(".")
+		if absErr != nil {
+			return fmt.Errorf("failed to resolve current directory: %w", absErr)
+		}
 	}
 
 	dbRepo, err := db.GetRepository()
@@ -305,7 +313,11 @@ func runBranchStory(cmd *cobra.Command, args []string) error {
 
 	codebasePath := branchCodebase
 	if codebasePath == "" {
-		codebasePath, _ = filepath.Abs(".")
+		var absErr error
+		codebasePath, absErr = filepath.Abs(".")
+		if absErr != nil {
+			return fmt.Errorf("failed to resolve current directory: %w", absErr)
+		}
 	}
 
 	dbRepo, err := db.GetRepository()
@@ -372,7 +384,11 @@ func runBranchSetDefault(cmd *cobra.Command, args []string) error {
 
 	codebasePath := branchCodebase
 	if codebasePath == "" {
-		codebasePath, _ = filepath.Abs(".")
+		var absErr error
+		codebasePath, absErr = filepath.Abs(".")
+		if absErr != nil {
+			return fmt.Errorf("failed to resolve current directory: %w", absErr)
+		}
 	}
 
 	dbRepo, err := db.GetRepository()

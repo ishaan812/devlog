@@ -131,7 +131,10 @@ func (r *Repository) ListBranches() ([]BranchInfo, error) {
 		return nil, fmt.Errorf("failed to list branches: %w", err)
 	}
 
-	defaultBranch, _ := r.GetDefaultBranch()
+	defaultBranch, err := r.GetDefaultBranch()
+	if err != nil {
+		return nil, fmt.Errorf("failed to detect default branch: %w", err)
+	}
 	var branches []BranchInfo
 
 	err = iter.ForEach(func(ref *plumbing.Reference) error {
@@ -236,6 +239,11 @@ func (r *Repository) GetCommitsOnBranch(branchName, baseBranch string) ([]string
 		return nil, err
 	}
 
+	// If no base branch specified, return all commits on this branch
+	if baseBranch == "" {
+		return r.getAllCommitHashes(branchHash, "")
+	}
+
 	// If same as base branch, return empty
 	if branchName == baseBranch {
 		return nil, nil
@@ -244,8 +252,7 @@ func (r *Repository) GetCommitsOnBranch(branchName, baseBranch string) ([]string
 	// Find merge base
 	mergeBase, err := r.GetMergeBase(branchName, baseBranch)
 	if err != nil {
-		// If no merge base, return all commits on the branch
-		return r.getAllCommitHashes(branchHash, "")
+		return nil, fmt.Errorf("failed to find merge base between %s and %s: %w", branchName, baseBranch, err)
 	}
 
 	// Get commits from branch head to merge base

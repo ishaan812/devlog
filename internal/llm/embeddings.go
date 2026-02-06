@@ -27,9 +27,6 @@ func NewOllamaEmbedder(baseURL, model string) *OllamaEmbedder {
 	if baseURL == "" {
 		baseURL = "http://localhost:11434"
 	}
-	if model == "" {
-		model = "nomic-embed-text"
-	}
 	return &OllamaEmbedder{
 		baseURL: baseURL,
 		model:   model,
@@ -115,9 +112,6 @@ func NewOpenAIEmbedder(baseURL, apiKey, model string) *OpenAIEmbedder {
 	if baseURL == "" {
 		baseURL = "https://api.openai.com/v1"
 	}
-	if model == "" {
-		model = "text-embedding-3-small"
-	}
 	return &OpenAIEmbedder{
 		baseURL: baseURL,
 		apiKey:  apiKey,
@@ -202,15 +196,21 @@ func (e *OpenAIEmbedder) Dimensions() int {
 	return 1536 // text-embedding-3-small, ada-002
 }
 
-// NewEmbedder creates an embedding client based on config
+// NewEmbedder creates an embedding client based on config.
+// Returns an error if the provider is unsupported or the embedding model is not configured.
 func NewEmbedder(cfg Config) (EmbeddingClient, error) {
+	embeddingModel := cfg.EmbeddingModel
+	if embeddingModel == "" {
+		return nil, fmt.Errorf("no embedding model specified for provider %q; run 'devlog onboard' to configure", cfg.Provider)
+	}
+
 	switch cfg.Provider {
 	case ProviderOllama:
 		baseURL := cfg.BaseURL
 		if baseURL == "" {
 			baseURL = "http://localhost:11434"
 		}
-		return NewOllamaEmbedder(baseURL, "nomic-embed-text"), nil
+		return NewOllamaEmbedder(baseURL, embeddingModel), nil
 
 	case ProviderOpenAI:
 		if cfg.APIKey == "" {
@@ -220,10 +220,84 @@ func NewEmbedder(cfg Config) (EmbeddingClient, error) {
 		if baseURL == "" {
 			baseURL = "https://api.openai.com/v1"
 		}
-		return NewOpenAIEmbedder(baseURL, cfg.APIKey, "text-embedding-3-small"), nil
+		return NewOpenAIEmbedder(baseURL, cfg.APIKey, embeddingModel), nil
+
+	case ProviderOpenRouter:
+		if cfg.APIKey == "" {
+			return nil, fmt.Errorf("OpenRouter API key is required for embeddings")
+		}
+		return NewOpenRouterEmbedder(cfg.APIKey, embeddingModel), nil
+
+	case ProviderVoyageAI:
+		if cfg.APIKey == "" {
+			return nil, fmt.Errorf("Voyage AI API key is required for embeddings")
+		}
+		return NewVoyageAIEmbedder(cfg.APIKey, embeddingModel), nil
 
 	default:
-		// Fall back to Ollama for other providers
-		return NewOllamaEmbedder("http://localhost:11434", "nomic-embed-text"), nil
+		return nil, fmt.Errorf("unsupported embedding provider: %q; supported providers: ollama, openai, openrouter, voyageai", cfg.Provider)
+	}
+}
+
+// EmbeddingProviders returns providers that support embeddings
+type EmbeddingProvider struct {
+	Name   string
+	Models []string
+}
+
+// AvailableEmbeddingProviders returns the list of embedding providers with their models
+func AvailableEmbeddingProviders() []EmbeddingProvider {
+	return []EmbeddingProvider{
+		{
+			Name: "ollama",
+			Models: []string{
+				"nomic-embed-text",
+				"mxbai-embed-large",
+				"all-minilm",
+			},
+		},
+		{
+			Name: "openai",
+			Models: []string{
+				"text-embedding-3-small",
+				"text-embedding-3-large",
+				"text-embedding-ada-002",
+			},
+		},
+		{
+			Name: "openrouter",
+			Models: []string{
+				"openai/text-embedding-3-small",
+				"openai/text-embedding-3-large",
+			},
+		},
+		{
+			Name: "voyageai",
+			Models: []string{
+				"voyage-3.5",
+				"voyage-3.5-lite",
+				"voyage-3-large",
+				"voyage-code-3",
+				"voyage-finance-2",
+				"voyage-law-2",
+			},
+		},
+	}
+}
+
+// DefaultEmbeddingModel returns the default embedding model for a provider.
+// Returns empty string for unsupported providers.
+func DefaultEmbeddingModel(provider Provider) string {
+	switch provider {
+	case ProviderOllama:
+		return "nomic-embed-text"
+	case ProviderOpenAI:
+		return "text-embedding-3-small"
+	case ProviderOpenRouter:
+		return "openai/text-embedding-3-small"
+	case ProviderVoyageAI:
+		return "voyage-3.5"
+	default:
+		return ""
 	}
 }

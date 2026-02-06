@@ -3,6 +3,8 @@ package llm
 import (
 	"context"
 	"fmt"
+
+	"github.com/ishaan812/devlog/internal/constants"
 )
 
 // Message represents a chat message.
@@ -18,19 +20,24 @@ type Client interface {
 }
 
 // Provider represents an LLM provider type.
-type Provider string
+// This is an alias to the constants.Provider type for backwards compatibility
+type Provider = constants.Provider
 
+// Re-export provider constants for backwards compatibility
 const (
-	ProviderOllama    Provider = "ollama"
-	ProviderOpenAI    Provider = "openai"
-	ProviderAnthropic Provider = "anthropic"
-	ProviderBedrock   Provider = "bedrock"
+	ProviderOllama     = constants.ProviderOllama
+	ProviderOpenAI     = constants.ProviderOpenAI
+	ProviderAnthropic  = constants.ProviderAnthropic
+	ProviderBedrock    = constants.ProviderBedrock
+	ProviderOpenRouter = constants.ProviderOpenRouter
+	ProviderVoyageAI   = constants.ProviderVoyageAI
 )
 
 // Config holds configuration for creating an LLM client.
 type Config struct {
 	Provider           Provider
 	Model              string
+	EmbeddingModel     string // Embedding model to use
 	BaseURL            string
 	APIKey             string
 	AWSRegion          string
@@ -67,19 +74,16 @@ func WithAWSCredentials(accessKeyID, secretAccessKey, region string) Option {
 
 func defaultConfig(provider Provider) *Config {
 	cfg := &Config{Provider: provider}
-	switch provider {
-	case ProviderOllama:
-		cfg.BaseURL = "http://localhost:11434"
-		cfg.Model = "llama3.2"
-	case ProviderOpenAI:
-		cfg.BaseURL = "https://api.openai.com/v1"
-		cfg.Model = "gpt-4o-mini"
-	case ProviderAnthropic:
-		cfg.Model = "claude-sonnet-4-5-20250929"
-	case ProviderBedrock:
-		cfg.AWSRegion = "us-east-1"
-		cfg.Model = "anthropic.claude-sonnet-4-5-20250929-v1:0"
+
+	// Get defaults from constants package
+	modelConfig, ok := constants.DefaultModels[provider]
+	if ok {
+		cfg.Model = modelConfig.LLMModel
+		cfg.EmbeddingModel = modelConfig.EmbeddingModel
+		cfg.BaseURL = modelConfig.BaseURL
+		cfg.AWSRegion = modelConfig.AWSRegion
 	}
+
 	return cfg
 }
 
@@ -134,17 +138,16 @@ func NewBedrockClientWithOptions(accessKeyID, secretAccessKey string, opts ...Op
 
 // NewClient creates an LLM client from config.
 func NewClient(cfg Config) (Client, error) {
+	if cfg.Model == "" {
+		return nil, fmt.Errorf("no model specified for provider %q; run 'devlog onboard' to configure", cfg.Provider)
+	}
 	switch cfg.Provider {
 	case ProviderOllama:
 		baseURL := cfg.BaseURL
 		if baseURL == "" {
 			baseURL = "http://localhost:11434"
 		}
-		model := cfg.Model
-		if model == "" {
-			model = "llama3.2"
-		}
-		return NewOllamaClient(baseURL, model), nil
+		return NewOllamaClient(baseURL, cfg.Model), nil
 	case ProviderOpenAI:
 		if cfg.APIKey == "" {
 			return nil, fmt.Errorf("OpenAI API key is required")
@@ -153,55 +156,55 @@ func NewClient(cfg Config) (Client, error) {
 		if baseURL == "" {
 			baseURL = "https://api.openai.com/v1"
 		}
-		model := cfg.Model
-		if model == "" {
-			model = "gpt-4o-mini"
-		}
-		return NewOpenAIClient(baseURL, cfg.APIKey, model), nil
+		return NewOpenAIClient(baseURL, cfg.APIKey, cfg.Model), nil
 	case ProviderAnthropic:
 		if cfg.APIKey == "" {
 			return nil, fmt.Errorf("Anthropic API key is required")
 		}
-		model := cfg.Model
-		if model == "" {
-			model = "claude-sonnet-4-5-20250929"
-		}
-		return NewAnthropicClient(cfg.APIKey, model), nil
+		return NewAnthropicClient(cfg.APIKey, cfg.Model), nil
 	case ProviderBedrock:
 		if cfg.AWSAccessKeyID == "" || cfg.AWSSecretAccessKey == "" {
 			return nil, fmt.Errorf("AWS credentials are required for Bedrock")
 		}
-		region := cfg.AWSRegion
-		if region == "" {
-			region = "us-east-1"
+		if cfg.AWSRegion == "" {
+			return nil, fmt.Errorf("AWS region is required for Bedrock; run 'devlog onboard' to configure")
 		}
-		model := cfg.Model
-		if model == "" {
-			model = "anthropic.claude-sonnet-4-5-20250929-v1:0"
+		return NewBedrockClient(cfg.AWSAccessKeyID, cfg.AWSSecretAccessKey, cfg.AWSRegion, cfg.Model), nil
+	case ProviderOpenRouter:
+		if cfg.APIKey == "" {
+			return nil, fmt.Errorf("OpenRouter API key is required")
 		}
-		return NewBedrockClient(cfg.AWSAccessKeyID, cfg.AWSSecretAccessKey, region, model), nil
+		return NewOpenRouterClient(cfg.APIKey, cfg.Model), nil
 	default:
 		return nil, fmt.Errorf("unknown provider: %s", cfg.Provider)
 	}
 }
 
-// AvailableProviders returns supported providers.
+// AvailableProviders returns supported LLM providers.
 func AvailableProviders() []Provider {
-	return []Provider{ProviderOllama, ProviderOpenAI, ProviderAnthropic, ProviderBedrock}
+	var providers []Provider
+	for _, p := range constants.AllProviders {
+		if p.SupportsLLM {
+			providers = append(providers, Provider(p.Name))
+		}
+	}
+	return providers
 }
 
 // ProviderDescription returns a description for a provider.
 func ProviderDescription(p Provider) string {
-	switch p {
-	case ProviderOllama:
-		return "Ollama (local, free)"
-	case ProviderOpenAI:
-		return "OpenAI (GPT-4, GPT-3.5)"
-	case ProviderAnthropic:
-		return "Anthropic (Claude)"
-	case ProviderBedrock:
-		return "AWS Bedrock (Claude via AWS)"
-	default:
-		return string(p)
+	return constants.ProviderDescription(p)
+}
+
+// NewOpenRouterClientWithOptions creates an OpenRouter client with options.
+func NewOpenRouterClientWithOptions(apiKey string, opts ...Option) (Client, error) {
+	if apiKey == "" {
+		return nil, fmt.Errorf("OpenRouter API key is required")
 	}
+	cfg := defaultConfig(ProviderOpenRouter)
+	cfg.APIKey = apiKey
+	for _, opt := range opts {
+		opt(cfg)
+	}
+	return NewOpenRouterClient(cfg.APIKey, cfg.Model), nil
 }

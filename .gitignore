@@ -6,3 +6,8 @@ worklog*
 .agents/
 .env*
 devlog
+
+# npm
+node_modules/
+release/
+*.tgz

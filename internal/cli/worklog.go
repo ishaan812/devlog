@@ -95,8 +95,7 @@ func runWorklog(cmd *cobra.Command, args []string) error {
 
 	cfg, err := config.Load()
 	if err != nil {
-		VerboseLog("Warning: failed to load config: %v", err)
-		cfg = &config.Config{DefaultProvider: "ollama"}
+		return fmt.Errorf("failed to load config: %w\n\nRun 'devlog onboard' to set up your configuration", err)
 	}
 
 	dbRepo, err := db.GetRepository()
@@ -104,7 +103,10 @@ func runWorklog(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to initialize database: %w", err)
 	}
 
-	codebasePath, _ := filepath.Abs(".")
+	codebasePath, err := filepath.Abs(".")
+	if err != nil {
+		return fmt.Errorf("failed to resolve current directory: %w", err)
+	}
 	codebase, err := dbRepo.GetCodebaseByPath(ctx, codebasePath)
 	if err != nil || codebase == nil {
 		VerboseLog("No codebase found at current path, querying all commits")
@@ -132,14 +134,17 @@ func runWorklog(cmd *cobra.Command, args []string) error {
 	if !worklogNoLLM {
 		client, err = createWorklogClient(cfg)
 		if err != nil {
-			VerboseLog("LLM not available, generating without summaries: %v", err)
+			return fmt.Errorf("failed to create LLM client: %w\n\nTo skip LLM summaries, use: --no-llm", err)
 		}
 	}
 
 	var markdown string
 	switch worklogGroupBy {
 	case "branch":
-		groups := groupByBranch(ctx, dbRepo, commits)
+		groups, groupErr := groupByBranch(ctx, dbRepo, commits)
+		if groupErr != nil {
+			return groupErr
+		}
 		markdown, err = generateBranchWorklogMarkdown(groups, client, cfg)
 	default:
 		groups := groupByDate(commits)
@@ -219,7 +224,10 @@ func queryCommitsForWorklog(ctx context.Context, dbRepo *db.SQLRepository, codeb
 		}
 
 		if id := getString(row, "id"); id != "" {
-			fileChanges, _ := dbRepo.GetFileChangesByCommit(ctx, id)
+			fileChanges, err := dbRepo.GetFileChangesByCommit(ctx, id)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get file changes for commit %s: %w", id, err)
+			}
 			for _, fc := range fileChanges {
 				cd.Additions += fc.Additions
 				cd.Deletions += fc.Deletions
@@ -267,7 +275,7 @@ func groupByDate(commits []commitData) []dayGroup {
 	return groups
 }
 
-func groupByBranch(ctx context.Context, dbRepo *db.SQLRepository, commits []commitData) []branchGroup {
+func groupByBranch(ctx context.Context, dbRepo *db.SQLRepository, commits []commitData) ([]branchGroup, error) {
 	branchMap := make(map[string]*branchGroup)
 	branchOrder := []string{}
 
@@ -278,7 +286,10 @@ func groupByBranch(ctx context.Context, dbRepo *db.SQLRepository, commits []comm
 		}
 
 		if _, exists := branchMap[branchID]; !exists {
-			branch, _ := dbRepo.GetBranchByID(ctx, branchID)
+			branch, err := dbRepo.GetBranchByID(ctx, branchID)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get branch %s: %w", branchID, err)
+			}
 			branchMap[branchID] = &branchGroup{Branch: branch, Commits: []commitData{}}
 			branchOrder = append(branchOrder, branchID)
 		}
@@ -290,7 +301,7 @@ func groupByBranch(ctx context.Context, dbRepo *db.SQLRepository, commits []comm
 		groups = append(groups, *branchMap[id])
 	}
 
-	return groups
+	return groups, nil
 }
 
 func createWorklogClient(cfg *config.Config) (llm.Client, error) {
@@ -299,14 +310,20 @@ func createWorklogClient(cfg *config.Config) (llm.Client, error) {
 		selectedProvider = cfg.DefaultProvider
 	}
 	if selectedProvider == "" {
-		selectedProvider = "ollama"
+		return nil, fmt.Errorf("no provider configured; run 'devlog onboard' first")
 	}
-	llmCfg := llm.Config{Provider: llm.Provider(selectedProvider), Model: worklogModel}
+	selectedModel := worklogModel // from CLI flag
+	if selectedModel == "" {
+		selectedModel = cfg.DefaultModel
+	}
+	llmCfg := llm.Config{Provider: llm.Provider(selectedProvider), Model: selectedModel}
 	switch llmCfg.Provider {
 	case llm.ProviderOpenAI:
 		llmCfg.APIKey = cfg.GetAPIKey("openai")
 	case llm.ProviderAnthropic:
 		llmCfg.APIKey = cfg.GetAPIKey("anthropic")
+	case llm.ProviderOpenRouter:
+		llmCfg.APIKey = cfg.GetAPIKey("openrouter")
 	case llm.ProviderBedrock:
 		llmCfg.AWSAccessKeyID = cfg.AWSAccessKeyID
 		llmCfg.AWSSecretAccessKey = cfg.AWSSecretAccessKey
@@ -315,7 +332,8 @@ func createWorklogClient(cfg *config.Config) (llm.Client, error) {
 		if cfg.OllamaBaseURL != "" {
 			llmCfg.BaseURL = cfg.OllamaBaseURL
 		}
-		if worklogModel == "" && cfg.OllamaModel != "" {
+		// Ollama uses its own model field as override
+		if selectedModel == "" && cfg.OllamaModel != "" {
 			llmCfg.Model = cfg.OllamaModel
 		}
 	}
@@ -386,16 +404,13 @@ func generateWorklogMarkdown(groups []dayGroup, client llm.Client, cfg *config.C
 			// Generate summarized updates using LLM
 			if client != nil {
 				updatesSummary, err := generateDayBranchUpdates(commits, client)
-				if err == nil && updatesSummary != "" {
+				if err != nil {
+					return "", fmt.Errorf("failed to generate day/branch updates: %w", err)
+				}
+				if updatesSummary != "" {
 					sb.WriteString(updatesSummary)
 					sb.WriteString("\n")
-				} else {
-					// Fallback to commit messages
-					writeFallbackUpdates(&sb, commits)
 				}
-			} else {
-				// No LLM - use commit messages
-				writeFallbackUpdates(&sb, commits)
 			}
 			sb.WriteString("\n")
 
@@ -410,9 +425,6 @@ func generateWorklogMarkdown(groups []dayGroup, client llm.Client, cfg *config.C
 			for _, c := range commits {
 				commitTime := c.CommittedAt.Format("15:04")
 				message := strings.Split(strings.TrimSpace(c.Message), "\n")[0]
-				if len(message) > 70 {
-					message = message[:67] + "..."
-				}
 				sb.WriteString(fmt.Sprintf("- **%s** `%s` %s", commitTime, c.Hash[:7], message))
 				if c.Additions > 0 || c.Deletions > 0 {
 					sb.WriteString(fmt.Sprintf(" (+%d/-%d)", c.Additions, c.Deletions))
@@ -470,16 +482,13 @@ func generateBranchWorklogMarkdown(groups []branchGroup, client llm.Client, cfg 
 		// Generate a consolidated summary using LLM if available
 		if client != nil {
 			branchSummary, err := generateBranchSummary(group, client)
-			if err == nil && branchSummary != "" {
+			if err != nil {
+				return "", fmt.Errorf("failed to generate branch summary: %w", err)
+			}
+			if branchSummary != "" {
 				sb.WriteString(branchSummary)
 				sb.WriteString("\n\n")
-			} else {
-				// Fallback to bullet points if LLM fails
-				writeBranchSummaryBullets(&sb, group)
 			}
-		} else {
-			// No LLM - use bullet points from commit summaries
-			writeBranchSummaryBullets(&sb, group)
 		}
 
 		// Daily Activity section within this branch
@@ -514,9 +523,6 @@ func generateBranchWorklogMarkdown(groups []branchGroup, client llm.Client, cfg 
 			for _, c := range dayCommits {
 				commitTime := c.CommittedAt.Format("15:04")
 				message := strings.Split(strings.TrimSpace(c.Message), "\n")[0]
-				if len(message) > 70 {
-					message = message[:67] + "..."
-				}
 				sb.WriteString(fmt.Sprintf("- **%s** `%s` %s", commitTime, c.Hash[:7], message))
 				if c.Additions > 0 || c.Deletions > 0 {
 					sb.WriteString(fmt.Sprintf(" (+%d/-%d)", c.Additions, c.Deletions))
@@ -539,29 +545,6 @@ func generateBranchWorklogMarkdown(groups []branchGroup, client llm.Client, cfg 
 	return sb.String(), nil
 }
 
-func writeBranchSummaryBullets(sb *strings.Builder, group branchGroup) {
-	// Collect summaries from commits as bullet points
-	summaryBullets := []string{}
-	for _, c := range group.Commits {
-		if c.Summary != "" {
-			summaryBullets = append(summaryBullets, c.Summary)
-		}
-	}
-
-	if len(summaryBullets) > 0 {
-		for _, summary := range summaryBullets {
-			fmt.Fprintf(sb, "- %s\n", summary)
-		}
-	} else {
-		// Fall back to commit messages if no summaries
-		for _, c := range group.Commits {
-			message := strings.Split(strings.TrimSpace(c.Message), "\n")[0]
-			fmt.Fprintf(sb, "- %s\n", message)
-		}
-	}
-	sb.WriteString("\n")
-}
-
 func generateBranchSummary(group branchGroup, client llm.Client) (string, error) {
 	// Collect all summaries and messages
 	var summaries []string
@@ -579,15 +562,24 @@ func generateBranchSummary(group branchGroup, client llm.Client) (string, error)
 
 	prompt := fmt.Sprintf(`Summarize the following commit descriptions into a concise overview of the work done on this branch.
 Write 2-4 sentences as a cohesive paragraph. Focus on the key accomplishments and changes.
-Do NOT start sentences with "This commit" or similar phrases. Write in a direct, professional style.
+
+CRITICAL RULES:
+- NEVER use phrases like "This commit", "The commit", "This change", "The change"
+- Start sentences with active verbs (Added, Implemented, Refactored, Fixed, Updated, etc.)
+- Write in active voice, not passive voice
+- Be direct and specific about what was done
+
 
 Commit descriptions:
 %s`, strings.Join(summaries, "\n\n"))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-
-	return client.Complete(ctx, prompt)
+	result, err := client.Complete(ctx, prompt)
+	if err != nil {
+		return "", err
+	}
+	return result, nil
 }
 
 func generateDayBranchUpdates(commits []commitData, client llm.Client) (string, error) {
@@ -608,56 +600,45 @@ func generateDayBranchUpdates(commits []commitData, client llm.Client) (string, 
 	// For a single commit, make a concise bullet point
 	if len(descriptions) == 1 {
 		prompt := fmt.Sprintf(`Rewrite this commit description as a concise, engaging bullet point (1-2 sentences max).
-Start with an action verb. Do NOT start with "This commit" or "The commit".
-Output ONLY the plain text (no bullet prefix like "- " or "• ").
+
+CRITICAL RULES:
+- Start with an action verb (Added, Implemented, Fixed, Refactored, etc.)
+- NEVER use "This commit", "The commit", "This change", or "The change"
+- Write in active voice
+- Output ONLY the plain text (no bullet prefix like "- " or "• ")
 
 Description: %s`, descriptions[0])
-
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-
 		result, err := client.Complete(ctx, prompt)
 		if err != nil {
 			return "", err
 		}
-		// Clean up any bullet prefixes the LLM might have added
+		// Clean up any bullet prefixes and bad phrases
 		result = strings.TrimSpace(result)
 		result = strings.TrimPrefix(result, "- ")
 		result = strings.TrimPrefix(result, "• ")
 		result = strings.TrimPrefix(result, "* ")
 		return fmt.Sprintf("- %s", result), nil
 	}
-
 	// For multiple commits, create summarized bullet points
 	prompt := fmt.Sprintf(`Summarize these commit descriptions into 2-4 concise bullet points highlighting the key updates.
-Each bullet should be 1 sentence, starting with an action verb (Added, Improved, Fixed, Updated, etc.).
-Do NOT start with "This commit" or use passive voice. Be specific and technical.
-Output ONLY the bullet points, each on its own line starting with "- ".
-
+CRITICAL RULES:
+- Each bullet should be 1 sentence, starting with an action verb (Added, Improved, Fixed, Updated, Refactored, etc.)
+- NEVER start with "This commit", "The commit", "This change", or "The change"
+- Write in active voice, not passive voice
+- Be specific and technical
+- Output ONLY the bullet points, each on its own line starting with "- "
+ Be concise and to the point. 
 Commit descriptions:
 %s`, strings.Join(descriptions, "\n\n"))
-
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-
-	return client.Complete(ctx, prompt)
-}
-
-// writeFallbackUpdates writes commit messages as bullet points when LLM is not available.
-func writeFallbackUpdates(sb *strings.Builder, commits []commitData) {
-	for _, c := range commits {
-		if c.Summary != "" {
-			// Truncate long summaries
-			summary := c.Summary
-			if len(summary) > 150 {
-				summary = summary[:147] + "..."
-			}
-			fmt.Fprintf(sb, "- %s\n", summary)
-		} else {
-			message := strings.Split(strings.TrimSpace(c.Message), "\n")[0]
-			fmt.Fprintf(sb, "- %s\n", message)
-		}
+	result, err := client.Complete(ctx, prompt)
+	if err != nil {
+		return "", err
 	}
+	return result, nil
 }
 
 func generateOverallSummary(groups []dayGroup, client llm.Client) (string, error) {
@@ -678,7 +659,14 @@ func generateOverallSummary(groups []dayGroup, client llm.Client) (string, error
 		messages = messages[:50]
 	}
 
-	prompt := fmt.Sprintf(`Summarize the following git commit messages into a brief, professional summary of work accomplished. Write 2-3 sentences highlighting the main themes and accomplishments. Be concise.
+	prompt := fmt.Sprintf(`Summarize the following git commit messages into a brief, professional summary of work accomplished.
+Write 2-3 sentences highlighting the main themes and accomplishments.
+
+CRITICAL RULES:
+- NEVER use "This commit", "The commit", "This change", or "The change"
+- Start sentences with action verbs (Added, Implemented, Refactored, Fixed, etc.)
+- Write in active voice
+- Be concise and specific
 
 Commit messages:
 %s`, strings.Join(messages, "\n"))
@@ -686,5 +674,9 @@ Commit messages:
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	return client.Complete(ctx, prompt)
+	result, err := client.Complete(ctx, prompt)
+	if err != nil {
+		return "", err
+	}
+	return result, nil
 }

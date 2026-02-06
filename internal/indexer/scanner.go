@@ -3,6 +3,7 @@ package indexer
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -137,10 +138,13 @@ func ScanCodebase(rootPath string, maxFileSize int64) (*ScanResult, error) {
 
 	err = filepath.WalkDir(absPath, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return nil // Skip errors
+			return fmt.Errorf("walk error at %s: %w", path, err)
 		}
 
-		relPath, _ := filepath.Rel(absPath, path)
+		relPath, err := filepath.Rel(absPath, path)
+		if err != nil {
+			return fmt.Errorf("failed to get relative path for %s: %w", path, err)
+		}
 		if relPath == "." {
 			return nil
 		}

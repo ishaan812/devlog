@@ -2,9 +2,7 @@ package tui
 
 import (
 	"fmt"
-	"net/http"
 	"strings"
-	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -12,36 +10,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/ishaan812/devlog/internal/config"
-)
-
-// Styles
-var (
-	titleStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color("86")).
-			MarginBottom(1)
-
-	selectedStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("86")).
-			Bold(true)
-
-	normalStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("252"))
-
-	dimStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("241"))
-
-	successStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("82")).
-			Bold(true)
-
-	errorStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("196"))
-
-	inputStyle = lipgloss.NewStyle().
-			BorderStyle(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("86")).
-			Padding(0, 1)
+	"github.com/ishaan812/devlog/internal/constants"
 )
 
 // Steps in the onboarding flow
@@ -49,28 +18,18 @@ type step int
 
 const (
 	stepWelcome          step = iota
-	stepExistingProfiles      // NEW: show existing profiles
+	stepExistingProfiles      // show existing profiles
 	stepProfileName
 	stepProfileDesc
 	stepProvider
 	stepProviderConfig
+	stepModelSelection    // model selection
+	stepEmbeddingProvider // embedding provider selection
+	stepEmbeddingConfig   // embedding model configuration
 	stepGitHubUsername
 	stepUserEmail
 	stepSuccess
 )
-
-// Provider options
-type providerOption struct {
-	name        string
-	description string
-}
-
-var providers = []providerOption{
-	{"ollama", "Local, free, private - requires Ollama installed"},
-	{"anthropic", "Claude AI - high quality, requires API key"},
-	{"openai", "GPT models - widely used, requires API key"},
-	{"bedrock", "AWS Bedrock - enterprise, requires AWS credentials"},
-}
 
 // Model for the onboarding TUI
 type Model struct {
@@ -94,13 +53,6 @@ type Model struct {
 	useExisting      bool
 }
 
-// Messages
-type tickMsg time.Time
-type testResultMsg struct {
-	success bool
-	message string
-}
-
 // NewModel creates a new onboarding model
 func NewModel() Model {
 	ti := textinput.New()
@@ -113,17 +65,25 @@ func NewModel() Model {
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("86"))
 
 	// Load existing config to check for profiles
-	existingCfg, _ := config.Load()
+	existingCfg, loadErr := config.Load()
 	var existingProfiles []string
-	if existingCfg != nil && existingCfg.Profiles != nil {
-		for name := range existingCfg.Profiles {
-			existingProfiles = append(existingProfiles, name)
+	var cfg *config.Config
+
+	if loadErr != nil {
+		// Config doesn't exist yet or is unreadable — start fresh
+		cfg = &config.Config{}
+	} else {
+		cfg = existingCfg
+		if existingCfg.Profiles != nil {
+			for name := range existingCfg.Profiles {
+				existingProfiles = append(existingProfiles, name)
+			}
 		}
 	}
 
 	return Model{
 		step:             stepWelcome,
-		config:           &config.Config{},
+		config:           cfg,
 		textInput:        ti,
 		spinner:          s,
 		existingProfiles: existingProfiles,
@@ -135,59 +95,6 @@ func (m Model) Init() tea.Cmd {
 		textinput.Blink,
 		tickCmd(),
 	)
-}
-
-func tickCmd() tea.Cmd {
-	return tea.Tick(time.Millisecond*100, func(t time.Time) tea.Msg {
-		return tickMsg(t)
-	})
-}
-
-func testProvider(provider, apiKey, baseURL string) tea.Cmd {
-	return func() tea.Msg {
-		switch provider {
-		case "ollama":
-			url := baseURL
-			if url == "" {
-				url = "http://localhost:11434"
-			}
-			resp, err := http.Get(url + "/api/tags")
-			if err != nil {
-				return testResultMsg{false, "Cannot connect to Ollama. Is it running?"}
-			}
-			defer resp.Body.Close()
-			if resp.StatusCode == 200 {
-				return testResultMsg{true, "Connected to Ollama!"}
-			}
-			return testResultMsg{false, fmt.Sprintf("Ollama returned status %d", resp.StatusCode)}
-
-		case "anthropic":
-			if apiKey == "" {
-				return testResultMsg{false, "API key is required"}
-			}
-			// Simple validation - just check it looks like an API key
-			if !strings.HasPrefix(apiKey, "sk-ant-") {
-				return testResultMsg{false, "Invalid API key format (should start with sk-ant-)"}
-			}
-			return testResultMsg{true, "API key format valid!"}
-
-		case "openai":
-			if apiKey == "" {
-				return testResultMsg{false, "API key is required"}
-			}
-			if !strings.HasPrefix(apiKey, "sk-") {
-				return testResultMsg{false, "Invalid API key format (should start with sk-)"}
-			}
-			return testResultMsg{true, "API key format valid!"}
-
-		case "bedrock":
-			if apiKey == "" {
-				return testResultMsg{false, "AWS Access Key ID is required"}
-			}
-			return testResultMsg{true, "AWS credentials configured!"}
-		}
-		return testResultMsg{true, "Configuration saved!"}
-	}
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -205,11 +112,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "up", "k":
 			if m.step == stepProvider && m.selectedIdx > 0 {
 				m.selectedIdx--
+			} else if m.step == stepModelSelection && m.selectedIdx > 0 {
+				m.selectedIdx--
+			} else if m.step == stepEmbeddingProvider && m.selectedIdx > 0 {
+				m.selectedIdx--
 			} else if m.step == stepExistingProfiles && m.selectedIdx > 0 {
 				m.selectedIdx--
 			}
 		case "down", "j":
-			if m.step == stepProvider && m.selectedIdx < len(providers)-1 {
+			if m.step == stepProvider && m.selectedIdx < len(getLLMProviders())-1 {
+				m.selectedIdx++
+			} else if m.step == stepModelSelection && m.selectedIdx < len(getModelOptions(constants.Provider(m.config.DefaultProvider)))-1 {
+				m.selectedIdx++
+			} else if m.step == stepEmbeddingProvider && m.selectedIdx < len(getEmbeddingProviders())-1 {
 				m.selectedIdx++
 			} else if m.step == stepExistingProfiles && m.selectedIdx < len(m.existingProfiles) {
 				// +1 for "create new" option
@@ -250,7 +165,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// Update text input
 	if m.step == stepProfileName || m.step == stepProfileDesc ||
-		m.step == stepProviderConfig || m.step == stepGitHubUsername || m.step == stepUserEmail {
+		m.step == stepProviderConfig || m.step == stepModelSelection ||
+		m.step == stepEmbeddingConfig || m.step == stepGitHubUsername ||
+		m.step == stepUserEmail {
 		m.textInput, cmd = m.textInput.Update(msg)
 	}
 
@@ -282,11 +199,13 @@ func (m Model) handleEnter() (tea.Model, tea.Cmd) {
 			m.useExisting = true
 			m.profileName = m.existingProfiles[m.selectedIdx-1]
 			// Load existing config
-			existingCfg, _ := config.Load()
-			if existingCfg != nil {
-				m.config = existingCfg
-				m.config.ActiveProfile = m.profileName
+			existingCfg, loadErr := config.Load()
+			if loadErr != nil {
+				m.err = fmt.Errorf("failed to load existing config: %w", loadErr)
+				return m, nil
 			}
+			m.config = existingCfg
+			m.config.ActiveProfile = m.profileName
 			m.step = stepProvider
 		}
 		return m, nil
@@ -307,7 +226,8 @@ func (m Model) handleEnter() (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case stepProvider:
-		m.config.DefaultProvider = providers[m.selectedIdx].name
+		providers := getLLMProviders()
+		m.config.DefaultProvider = strings.ToLower(providers[m.selectedIdx].Name)
 		m.step = stepProviderConfig
 		m.prepareStep()
 		return m, nil
@@ -325,6 +245,8 @@ func (m Model) handleEnter() (tea.Model, tea.Cmd) {
 			m.config.AnthropicAPIKey = value
 		case "openai":
 			m.config.OpenAIAPIKey = value
+		case "openrouter":
+			m.config.OpenRouterAPIKey = value
 		case "bedrock":
 			m.config.AWSAccessKeyID = value
 		}
@@ -335,6 +257,49 @@ func (m Model) handleEnter() (tea.Model, tea.Cmd) {
 			m.spinner.Tick,
 			testProvider(m.config.DefaultProvider, value, m.config.OllamaBaseURL),
 		)
+
+	case stepModelSelection:
+		models := getModelOptions(constants.Provider(m.config.DefaultProvider))
+		if m.selectedIdx < len(models) {
+			m.config.DefaultModel = models[m.selectedIdx].Model
+		}
+		m.step = stepEmbeddingProvider
+		m.selectedIdx = 0
+		return m, nil
+
+	case stepEmbeddingProvider:
+		embProviders := getEmbeddingProviders()
+		selectedProvider := embProviders[m.selectedIdx].Provider
+		if selectedProvider == "" {
+			// "Same as LLM provider"
+			m.config.EmbeddingProvider = m.config.DefaultProvider
+		} else {
+			m.config.EmbeddingProvider = string(selectedProvider)
+		}
+		m.step = stepEmbeddingConfig
+		m.prepareStep()
+		return m, nil
+
+	case stepEmbeddingConfig:
+		value := strings.TrimSpace(m.textInput.Value())
+		if value != "" {
+			m.config.DefaultEmbedModel = value
+		} else {
+			embProvider := constants.Provider(m.config.EmbeddingProvider)
+			if !constants.ProviderSupportsEmbeddings(embProvider) {
+				m.err = fmt.Errorf("%s doesn't support embeddings; please go back and select a dedicated embedding provider", m.config.EmbeddingProvider)
+				return m, nil
+			}
+			defaultModel := constants.GetDefaultEmbeddingModel(embProvider)
+			if defaultModel == "" {
+				m.err = fmt.Errorf("no default embedding model for provider %s; please specify a model", m.config.EmbeddingProvider)
+				return m, nil
+			}
+			m.config.DefaultEmbedModel = defaultModel
+		}
+		m.step = stepGitHubUsername
+		m.prepareStep()
+		return m, nil
 
 	case stepGitHubUsername:
 		m.config.GitHubUsername = strings.TrimSpace(m.textInput.Value())
@@ -355,7 +320,14 @@ func (m Model) handleEnter() (tea.Model, tea.Cmd) {
 
 func (m Model) advanceStep() (tea.Model, tea.Cmd) {
 	if m.step == stepProviderConfig {
-		m.step = stepGitHubUsername
+		// Show model selection if provider has multiple model options
+		if constants.ProviderHasModelSelection(constants.Provider(m.config.DefaultProvider)) {
+			m.step = stepModelSelection
+			m.selectedIdx = 0
+		} else {
+			m.step = stepEmbeddingProvider
+			m.selectedIdx = 0
+		}
 		m.prepareStep()
 	}
 	return m, nil
@@ -374,18 +346,14 @@ func (m *Model) prepareStep() {
 		m.textInput.Placeholder = "My development profile"
 		m.textInput.SetValue("")
 	case stepProviderConfig:
-		switch m.config.DefaultProvider {
-		case "ollama":
-			m.textInput.Placeholder = "http://localhost:11434"
-		case "anthropic":
-			m.textInput.Placeholder = "sk-ant-..."
+		setupInfo := constants.GetProviderSetupInfo(constants.Provider(m.config.DefaultProvider))
+		m.textInput.Placeholder = setupInfo.Placeholder
+		if setupInfo.NeedsAPIKey {
 			m.textInput.EchoMode = textinput.EchoPassword
-		case "openai":
-			m.textInput.Placeholder = "sk-..."
-			m.textInput.EchoMode = textinput.EchoPassword
-		case "bedrock":
-			m.textInput.Placeholder = "AWS Access Key ID"
 		}
+	case stepEmbeddingConfig:
+		m.textInput.EchoMode = textinput.EchoNormal
+		m.textInput.Placeholder = constants.GetDefaultEmbeddingModel(constants.Provider(m.config.EmbeddingProvider))
 	case stepGitHubUsername:
 		m.textInput.Placeholder = "your-github-username"
 		m.textInput.EchoMode = textinput.EchoNormal
@@ -436,6 +404,12 @@ func (m Model) View() string {
 		s.WriteString(m.viewProvider())
 	case stepProviderConfig:
 		s.WriteString(m.viewProviderConfig())
+	case stepModelSelection:
+		s.WriteString(m.viewModelSelection())
+	case stepEmbeddingProvider:
+		s.WriteString(m.viewEmbeddingProvider())
+	case stepEmbeddingConfig:
+		s.WriteString(m.viewEmbeddingConfig())
 	case stepGitHubUsername:
 		s.WriteString(m.viewGitHubUsername())
 	case stepUserEmail:
@@ -446,6 +420,8 @@ func (m Model) View() string {
 
 	return s.String()
 }
+
+// ── Onboard-specific views ─────────────────────────────────────────────────
 
 func (m Model) viewWelcome() string {
 	// Animated banner
@@ -519,146 +495,102 @@ func (m Model) viewExistingProfiles() string {
 }
 
 func (m Model) viewProfileName() string {
-	var s strings.Builder
-	s.WriteString("\n")
-	s.WriteString(titleStyle.Render("Step 1: Create a Profile"))
-	s.WriteString("\n\n")
-	s.WriteString(normalStyle.Render("Profiles keep your data organized. You might have"))
-	s.WriteString("\n")
-	s.WriteString(normalStyle.Render("separate profiles for personal and work projects."))
-	s.WriteString("\n\n")
-	s.WriteString(dimStyle.Render("Profile name:"))
-	s.WriteString("\n")
-	s.WriteString(inputStyle.Render(m.textInput.View()))
-	s.WriteString("\n\n")
-	s.WriteString(dimStyle.Render("Press Enter to continue, Esc to go back"))
-	s.WriteString("\n")
-	return s.String()
+	body := normalStyle.Render("Profiles keep your data organized. You might have") + "\n" +
+		normalStyle.Render("separate profiles for personal and work projects.") + "\n\n" +
+		dimStyle.Render("Profile name:")
+	return RenderTextInput("Step 1: Create a Profile", body, m.textInput, nil, "Press Enter to continue, Esc to go back")
 }
 
 func (m Model) viewProfileDesc() string {
-	var s strings.Builder
-	s.WriteString("\n")
-	s.WriteString(titleStyle.Render("Step 1: Create a Profile"))
-	s.WriteString("\n\n")
-	s.WriteString(dimStyle.Render(fmt.Sprintf("Profile: %s", m.profileName)))
-	s.WriteString("\n\n")
-	s.WriteString(dimStyle.Render("Description (optional):"))
-	s.WriteString("\n")
-	s.WriteString(inputStyle.Render(m.textInput.View()))
-	s.WriteString("\n\n")
-	s.WriteString(dimStyle.Render("Press Enter to continue, Esc to go back"))
-	s.WriteString("\n")
-	return s.String()
+	body := dimStyle.Render(fmt.Sprintf("Profile: %s", m.profileName)) + "\n\n" +
+		dimStyle.Render("Description (optional):")
+	return RenderTextInput("Step 1: Create a Profile", body, m.textInput, nil, "Press Enter to continue, Esc to go back")
 }
 
 func (m Model) viewProvider() string {
-	var s strings.Builder
-	s.WriteString("\n")
-	s.WriteString(titleStyle.Render("Step 2: Choose LLM Provider"))
-	s.WriteString("\n\n")
-	s.WriteString(normalStyle.Render("DevLog uses an LLM to generate summaries and answer questions."))
-	s.WriteString("\n\n")
-
-	for i, p := range providers {
-		cursor := "  "
-		style := normalStyle
-		if i == m.selectedIdx {
-			cursor = "> "
-			style = selectedStyle
-		}
-		s.WriteString(style.Render(fmt.Sprintf("%s%s", cursor, p.name)))
-		s.WriteString("\n")
-		s.WriteString(dimStyle.Render(fmt.Sprintf("    %s", p.description)))
-		s.WriteString("\n")
-	}
-
-	s.WriteString("\n")
-	s.WriteString(dimStyle.Render("Use arrow keys to select, Enter to confirm"))
-	s.WriteString("\n")
-	return s.String()
+	return RenderSelectList(
+		"Step 2: Choose LLM Provider",
+		normalStyle.Render("DevLog uses an LLM to generate summaries and answer questions."),
+		LLMProviderItems(),
+		m.selectedIdx,
+		false, 0,
+		"Use arrow keys to select, Enter to confirm",
+	)
 }
 
 func (m Model) viewProviderConfig() string {
-	var s strings.Builder
-	s.WriteString("\n")
-	s.WriteString(titleStyle.Render(fmt.Sprintf("Step 3: Configure %s", strings.Title(m.config.DefaultProvider))))
-	s.WriteString("\n\n")
+	providerName := titleCase(m.config.DefaultProvider)
+	setupInfo := constants.GetProviderSetupInfo(constants.Provider(m.config.DefaultProvider))
 
-	switch m.config.DefaultProvider {
-	case "ollama":
-		s.WriteString(normalStyle.Render("Enter Ollama base URL (leave empty for default):"))
-	case "anthropic":
-		s.WriteString(normalStyle.Render("Enter your Anthropic API key:"))
-		s.WriteString("\n")
-		s.WriteString(dimStyle.Render("Get one at: https://console.anthropic.com/"))
-	case "openai":
-		s.WriteString(normalStyle.Render("Enter your OpenAI API key:"))
-		s.WriteString("\n")
-		s.WriteString(dimStyle.Render("Get one at: https://platform.openai.com/api-keys"))
-	case "bedrock":
-		s.WriteString(normalStyle.Render("Enter your AWS Access Key ID:"))
-	}
-
-	s.WriteString("\n\n")
-	s.WriteString(inputStyle.Render(m.textInput.View()))
-	s.WriteString("\n")
-
-	if m.testing {
-		s.WriteString("\n")
-		s.WriteString(m.spinner.View())
-		s.WriteString(" Testing connection...")
-		s.WriteString("\n")
-	} else if m.testResult != "" {
-		s.WriteString("\n")
-		if m.testSuccess {
-			s.WriteString(successStyle.Render("  " + m.testResult))
-		} else {
-			s.WriteString(errorStyle.Render("  " + m.testResult))
+	var body string
+	if setupInfo.NeedsAPIKey {
+		body = normalStyle.Render(fmt.Sprintf("Enter your %s API key:", providerName))
+		if setupInfo.APIKeyURL != "" {
+			body += "\n" + dimStyle.Render(fmt.Sprintf("Get one at: %s", setupInfo.APIKeyURL))
 		}
-		s.WriteString("\n")
+	} else {
+		body = normalStyle.Render(fmt.Sprintf("Enter %s base URL (leave empty for default):", providerName)) +
+			"\n" + dimStyle.Render(setupInfo.SetupHint)
+	}
+	body += "\n" // extra spacing before input
+
+	test := &TestState{
+		Testing:     m.testing,
+		Spinner:     m.spinner,
+		TestResult:  m.testResult,
+		TestSuccess: m.testSuccess,
 	}
 
-	s.WriteString("\n")
-	s.WriteString(dimStyle.Render("Press Enter to test and continue"))
-	s.WriteString("\n")
-	return s.String()
+	return RenderTextInput(
+		fmt.Sprintf("Step 3: Configure %s", providerName),
+		body, m.textInput, test,
+		"Press Enter to test and continue",
+	)
+}
+
+func (m Model) viewModelSelection() string {
+	return RenderSelectList(
+		fmt.Sprintf("Step 3b: Select %s Model", titleCase(m.config.DefaultProvider)),
+		normalStyle.Render("Choose a model for your LLM:"),
+		ModelItems(constants.Provider(m.config.DefaultProvider)),
+		m.selectedIdx,
+		true, 45,
+		"↑/↓ or k/j to navigate, Enter to select",
+	)
+}
+
+func (m Model) viewEmbeddingProvider() string {
+	return RenderSelectList(
+		"Step 4: Choose Embedding Provider",
+		normalStyle.Render("Embeddings are used for semantic search and similarity."),
+		EmbeddingProviderItems(),
+		m.selectedIdx,
+		false, 0,
+		"Use arrow keys to select, Enter to confirm",
+	)
+}
+
+func (m Model) viewEmbeddingConfig() string {
+	body := dimStyle.Render(fmt.Sprintf("Provider: %s", m.config.EmbeddingProvider)) + "\n\n" +
+		normalStyle.Render("Enter embedding model (leave empty for default):")
+	return RenderTextInput("Step 4: Configure Embeddings", body, m.textInput, nil, "Press Enter to continue")
 }
 
 func (m Model) viewGitHubUsername() string {
-	var s strings.Builder
-	s.WriteString("\n")
-	s.WriteString(titleStyle.Render("Step 4: GitHub Username"))
-	s.WriteString("\n\n")
-	s.WriteString(normalStyle.Render("This is used to identify your commits in git history."))
-	s.WriteString("\n")
-	s.WriteString(dimStyle.Render("(Matches commits with emails like username@users.noreply.github.com)"))
-	s.WriteString("\n\n")
-	s.WriteString(dimStyle.Render("GitHub username:"))
-	s.WriteString("\n")
-	s.WriteString(inputStyle.Render(m.textInput.View()))
-	s.WriteString("\n\n")
-	s.WriteString(dimStyle.Render("Press Enter to continue"))
-	s.WriteString("\n")
-	return s.String()
+	body := normalStyle.Render("This is used to identify your commits in git history.") + "\n" +
+		dimStyle.Render("(Matches commits with emails like username@users.noreply.github.com)") + "\n\n" +
+		dimStyle.Render("GitHub username:")
+	return RenderTextInput("Step 5: GitHub Username", body, m.textInput, nil, "Press Enter to continue")
 }
 
 func (m Model) viewUserEmail() string {
-	var s strings.Builder
-	s.WriteString("\n")
-	s.WriteString(titleStyle.Render("Step 4: Your Info"))
-	s.WriteString("\n\n")
+	var bodyParts []string
 	if m.config.GitHubUsername != "" {
-		s.WriteString(dimStyle.Render(fmt.Sprintf("GitHub: %s", m.config.GitHubUsername)))
-		s.WriteString("\n\n")
+		bodyParts = append(bodyParts, dimStyle.Render(fmt.Sprintf("GitHub: %s", m.config.GitHubUsername)))
 	}
-	s.WriteString(dimStyle.Render("Your email (optional, for additional git matching):"))
-	s.WriteString("\n")
-	s.WriteString(inputStyle.Render(m.textInput.View()))
-	s.WriteString("\n\n")
-	s.WriteString(dimStyle.Render("Press Enter to finish"))
-	s.WriteString("\n")
-	return s.String()
+	bodyParts = append(bodyParts, dimStyle.Render("Your email (optional, for additional git matching):"))
+	body := strings.Join(bodyParts, "\n\n")
+	return RenderTextInput("Step 5: Your Info", body, m.textInput, nil, "Press Enter to finish")
 }
 
 func (m Model) viewSuccess() string {

@@ -91,7 +91,11 @@ func runSearch(cmd *cobra.Command, args []string) error {
 
 	codebasePath := searchCodebase
 	if codebasePath == "" {
-		codebasePath, _ = filepath.Abs(".")
+		var absErr error
+		codebasePath, absErr = filepath.Abs(".")
+		if absErr != nil {
+			return fmt.Errorf("failed to resolve current directory: %w", absErr)
+		}
 	}
 
 	codebase, err := dbRepo.GetCodebaseByPath(ctx, codebasePath)
@@ -149,27 +153,38 @@ func searchFiles(ctx context.Context, dbRepo *db.SQLRepository, codebase *db.Cod
 	useSemanticSearch := !searchKeyword && dbRepo.HasEmbeddings(ctx, codebase.ID)
 
 	if useSemanticSearch {
-		cfg, _ := config.Load()
+		cfg, err := config.Load()
+		if err != nil {
+			return fmt.Errorf("failed to load config for semantic search: %w", err)
+		}
 		embedder, err := createEmbedder(cfg)
 		if err != nil {
-			VerboseLog("Embedder not available, falling back to keyword search: %v", err)
-			useSemanticSearch = false
-		} else {
-			queryEmbedding, err := embedder.Embed(ctx, query)
-			if err != nil {
-				VerboseLog("Failed to embed query, falling back to keyword search: %v", err)
-				useSemanticSearch = false
-			} else {
-				files, _ = dbRepo.SemanticSearchFiles(ctx, codebase.ID, queryEmbedding, searchLimit)
-				matchingFolders, _ = dbRepo.SemanticSearchFolders(ctx, codebase.ID, queryEmbedding, 5)
-			}
+			return fmt.Errorf("failed to create embedder: %w", err)
+		}
+		queryEmbedding, err := embedder.Embed(ctx, query)
+		if err != nil {
+			return fmt.Errorf("failed to embed query: %w", err)
+		}
+		files, err = dbRepo.SemanticSearchFiles(ctx, codebase.ID, queryEmbedding, searchLimit)
+		if err != nil {
+			return fmt.Errorf("semantic file search failed: %w", err)
+		}
+		matchingFolders, err = dbRepo.SemanticSearchFolders(ctx, codebase.ID, queryEmbedding, 5)
+		if err != nil {
+			return fmt.Errorf("semantic folder search failed: %w", err)
 		}
 	}
 
 	if !useSemanticSearch {
-		files, _ = searchFilesWithFilters(ctx, dbRepo, codebase.ID, query)
-
-		folders, _ := dbRepo.GetFoldersByCodebase(ctx, codebase.ID)
+		var err error
+		files, err = searchFilesWithFilters(ctx, dbRepo, codebase.ID, query)
+		if err != nil {
+			return fmt.Errorf("keyword file search failed: %w", err)
+		}
+		folders, err := dbRepo.GetFoldersByCodebase(ctx, codebase.ID)
+		if err != nil {
+			return fmt.Errorf("folder search failed: %w", err)
+		}
 		queryLower := strings.ToLower(query)
 		for _, f := range folders {
 			if strings.Contains(strings.ToLower(f.Summary), queryLower) ||
@@ -369,18 +384,26 @@ func applyFileFilters(files []db.FileIndex) []db.FileIndex {
 }
 
 func createEmbedder(cfg *config.Config) (llm.EmbeddingClient, error) {
-	provider := cfg.DefaultProvider
+	provider := cfg.EmbeddingProvider
 	if provider == "" {
-		provider = "ollama"
+		provider = cfg.DefaultProvider
+	}
+	if provider == "" {
+		return nil, fmt.Errorf("no embedding provider configured; run 'devlog onboard' first")
 	}
 
 	llmCfg := llm.Config{
-		Provider: llm.Provider(provider),
+		Provider:       llm.Provider(provider),
+		EmbeddingModel: cfg.DefaultEmbedModel,
 	}
 
 	switch llmCfg.Provider {
 	case llm.ProviderOpenAI:
 		llmCfg.APIKey = cfg.GetAPIKey("openai")
+	case llm.ProviderOpenRouter:
+		llmCfg.APIKey = cfg.GetAPIKey("openrouter")
+	case llm.ProviderVoyageAI:
+		llmCfg.APIKey = cfg.GetAPIKey("voyageai")
 	case llm.ProviderOllama:
 		if cfg.OllamaBaseURL != "" {
 			llmCfg.BaseURL = cfg.OllamaBaseURL

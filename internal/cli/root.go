@@ -34,19 +34,17 @@ Use 'devlog profile' to manage profiles.`,
 		// Load config to get profile settings
 		cfg, err := config.Load()
 		if err != nil {
-			VerboseLog("Warning: failed to load config: %v", err)
-			// Continue with defaults
-			cfg = &config.Config{}
+			return fmt.Errorf("failed to load config: %w", err)
 		}
 
 		// Migrate old database if needed
 		if err := config.MigrateOldDB(); err != nil {
-			VerboseLog("Warning: failed to migrate old database: %v", err)
+			return fmt.Errorf("failed to migrate old database: %w", err)
 		}
 
 		// Ensure default profile exists
 		if err := cfg.EnsureDefaultProfile(); err != nil {
-			VerboseLog("Warning: failed to ensure default profile: %v", err)
+			return fmt.Errorf("failed to ensure default profile: %w", err)
 		}
 
 		// Determine which profile to use
@@ -65,7 +63,7 @@ Use 'devlog profile' to manage profiles.`,
 
 		// Save config if we created the default profile
 		if err := cfg.Save(); err != nil {
-			VerboseLog("Warning: failed to save config: %v", err)
+			return fmt.Errorf("failed to save config: %w", err)
 		}
 
 		return nil

@@ -1,0 +1,31 @@
+# Source files not needed in npm package
+internal/
+cmd/
+guides/
+scripts/
+
+# Build artifacts
+release/
+*.tgz
+
+# Go files
+*.go
+go.mod
+go.sum
+Makefile
+.golangci.yml
+
+# Git
+.git/
+.gitignore
+
+# Development
+.cursor/
+.agents/
+.claude/
+.env*
+worklog*
+TOUR.md
+
+# Docs (keep README)
+docs/

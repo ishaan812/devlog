@@ -46,11 +46,12 @@ var profileCreateCmd = &cobra.Command{
 }
 
 var profileUseCmd = &cobra.Command{
-	Use:   "use <name>",
-	Short: "Switch to a profile",
-	Long:  `Switch to an existing profile. All subsequent commands will use this profile.`,
-	Args:  cobra.ExactArgs(1),
-	RunE:  runProfileUse,
+	Use:     "use <name>",
+	Aliases: []string{"switch"},
+	Short:   "Switch to a profile",
+	Long:    `Switch to an existing profile. All subsequent commands will use this profile.`,
+	Args:    cobra.ExactArgs(1),
+	RunE:    runProfileUse,
 }
 
 var profileDeleteCmd = &cobra.Command{

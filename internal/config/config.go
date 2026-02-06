@@ -29,12 +29,16 @@ type Profile struct {
 // Config holds all configuration for devlog.
 type Config struct {
 	// Provider configuration
-	DefaultProvider string `json:"default_provider"`
-	DefaultModel    string `json:"default_model"`
+	DefaultProvider   string `json:"default_provider"`
+	DefaultModel      string `json:"default_model"`
+	DefaultEmbedModel string `json:"default_embed_model,omitempty"`
+	EmbeddingProvider string `json:"embedding_provider,omitempty"` // Can be different from DefaultProvider
 
 	// API Keys
-	AnthropicAPIKey string `json:"anthropic_api_key,omitempty"`
-	OpenAIAPIKey    string `json:"openai_api_key,omitempty"`
+	AnthropicAPIKey  string `json:"anthropic_api_key,omitempty"`
+	OpenAIAPIKey     string `json:"openai_api_key,omitempty"`
+	OpenRouterAPIKey string `json:"openrouter_api_key,omitempty"`
+	VoyageAIAPIKey   string `json:"voyageai_api_key,omitempty"`
 
 	// Bedrock config
 	AWSRegion          string `json:"aws_region,omitempty"`
@@ -88,14 +92,10 @@ func WithAWSConfig(region, accessKeyID, secretAccessKey string) Option {
 	}
 }
 
-// defaultConfig returns a new Config with default values.
+// defaultConfig returns a new Config with empty fields.
+// Users must run 'devlog onboard' to populate the configuration.
 func defaultConfig() *Config {
-	return &Config{
-		DefaultProvider: "ollama",
-		OllamaBaseURL:   "http://localhost:11434",
-		OllamaModel:     "llama3.2",
-		AWSRegion:       "us-east-1",
-	}
+	return &Config{}
 }
 
 // GetConfigPath returns the default configuration file path.
@@ -195,6 +195,16 @@ func (c *Config) GetAPIKey(provider string) string {
 			return c.OpenAIAPIKey
 		}
 		return os.Getenv("OPENAI_API_KEY")
+	case "openrouter":
+		if c.OpenRouterAPIKey != "" {
+			return c.OpenRouterAPIKey
+		}
+		return os.Getenv("OPENROUTER_API_KEY")
+	case "voyageai":
+		if c.VoyageAIAPIKey != "" {
+			return c.VoyageAIAPIKey
+		}
+		return os.Getenv("VOYAGEAI_API_KEY")
 	case "bedrock":
 		return c.AWSAccessKeyID
 	default:
@@ -211,6 +221,10 @@ func (c *Config) HasProvider(provider string) bool {
 		return c.GetAPIKey("anthropic") != ""
 	case "openai":
 		return c.GetAPIKey("openai") != ""
+	case "openrouter":
+		return c.GetAPIKey("openrouter") != ""
+	case "voyageai":
+		return c.GetAPIKey("voyageai") != ""
 	case "bedrock":
 		return c.AWSAccessKeyID != "" && c.AWSSecretAccessKey != ""
 	default:

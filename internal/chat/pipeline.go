@@ -50,14 +50,7 @@ func (p *Pipeline) Ask(ctx context.Context, question string) (string, error) {
 	// Step 2: Execute query
 	results, err := p.ExecuteQuery(sqlQuery)
 	if err != nil {
-		// Try to recover with a simpler query
-		if p.verbose {
-			fmt.Printf("[DEBUG] Query failed, trying fallback: %v\n", err)
-		}
-		results, err = p.fallbackQuery(ctx, question)
-		if err != nil {
-			return "", fmt.Errorf("failed to execute query: %w", err)
-		}
+		return "", fmt.Errorf("failed to execute generated SQL query: %w", err)
 	}
 	if p.verbose {
 		fmt.Printf("[DEBUG] Query returned %d results\n", len(results))
@@ -135,20 +128,10 @@ func (p *Pipeline) ParseTimeFilter(ctx context.Context, question string) (*TimeF
 
 	var filter TimeFilter
 	if err := json.Unmarshal([]byte(response), &filter); err != nil {
-		// Default to no filter on parse error
-		return &TimeFilter{Type: "none"}, nil
+		return nil, fmt.Errorf("failed to parse time filter from LLM response %q: %w", response, err)
 	}
 
 	return &filter, nil
-}
-
-func (p *Pipeline) fallbackQuery(ctx context.Context, question string) ([]map[string]any, error) {
-	query := `
-		SELECT c.hash, c.message, c.author_email, c.committed_at, c.stats
-		FROM commits c ORDER BY c.committed_at DESC LIMIT 20
-	`
-	repo := db.NewRepository(p.database)
-	return repo.ExecuteQuery(ctx, query)
 }
 
 func cleanSQL(response string) string {
