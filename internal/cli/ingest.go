@@ -301,7 +301,14 @@ func ingestGitHistory(absPath string, cfg *config.Config) error {
 		if err != nil {
 			return fmt.Errorf("invalid date format (use YYYY-MM-DD): %w", err)
 		}
-		dimColor.Printf("  Since %s...\n", sinceDate.Format("Jan 2, 2006"))
+		// Load timezone for display
+		loc := time.UTC
+		if tzName := cfg.GetTimezone(); tzName != "" {
+			if tzLoc, err := time.LoadLocation(tzName); err == nil {
+				loc = tzLoc
+			}
+		}
+		dimColor.Printf("  Since %s...\n", sinceDate.In(loc).Format("Jan 2, 2006"))
 	} else {
 		sinceDate = time.Now().AddDate(0, 0, -ingestDays)
 		dimColor.Printf("  Last %d days...\n", ingestDays)
@@ -1017,7 +1024,7 @@ func indexCodebase(absPath string, cfg *config.Config) error {
 		}
 
 		if err := dbRepo.UpsertFileIndex(ctx, file); err != nil {
-			VerboseLog("Warning: failed to save file %s: %v", fileInfo.Path, err)
+			return fmt.Errorf("failed to save file %s: %w", fileInfo.Path, err)
 		}
 
 		fileCount++
@@ -1052,7 +1059,7 @@ func indexCodebase(absPath string, cfg *config.Config) error {
 		}
 
 		if err := dbRepo.UpsertFileIndex(ctx, file); err != nil {
-			VerboseLog("Warning: failed to save file %s: %v", fileInfo.Path, err)
+			return fmt.Errorf("failed to save unchanged file %s: %w", fileInfo.Path, err)
 		}
 	}
 

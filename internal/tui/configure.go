@@ -23,6 +23,7 @@ const (
 	configStepLLMModelSelection
 	configStepEmbeddingProvider
 	configStepEmbeddingConfig
+	configStepTimezone
 	configStepUserInfo
 	configStepAPIKeys
 	configStepReview
@@ -73,10 +74,11 @@ func NewConfigModel(cfg *config.Config) ConfigModel {
 		{"1", "LLM Provider", "Change language model provider"},
 		{"2", "LLM Model", "Change language model"},
 		{"3", "Embedding Provider", "Change embedding settings"},
-		{"4", "User Information", "Update name, email, GitHub username"},
-		{"5", "API Keys", "Update API keys"},
-		{"6", "Review Settings", "View current configuration"},
-		{"7", "Save & Exit", "Save changes and exit"},
+		{"4", "Timezone", "Change timezone for time tracking"},
+		{"5", "User Information", "Update name, email, GitHub username"},
+		{"6", "API Keys", "Update API keys"},
+		{"7", "Review Settings", "View current configuration"},
+		{"8", "Save & Exit", "Save changes and exit"},
 		{"0", "Cancel", "Exit without saving"},
 	}
 
@@ -118,6 +120,8 @@ func (m ConfigModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.selectedIdx--
 			} else if m.step == configStepEmbeddingProvider && m.selectedIdx > 0 {
 				m.selectedIdx--
+			} else if m.step == configStepTimezone && m.selectedIdx > 0 {
+				m.selectedIdx--
 			} else if m.step == configStepAPIKeys && m.selectedIdx > 0 {
 				m.selectedIdx--
 			}
@@ -129,6 +133,8 @@ func (m ConfigModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else if m.step == configStepLLMModelSelection && m.selectedIdx < len(getModelOptions(constants.Provider(m.config.DefaultProvider)))-1 {
 				m.selectedIdx++
 			} else if m.step == configStepEmbeddingProvider && m.selectedIdx < len(getEmbeddingProviders())-1 {
+				m.selectedIdx++
+			} else if m.step == configStepTimezone && m.selectedIdx < len(getTimezoneOptions())-1 {
 				m.selectedIdx++
 			} else if m.step == configStepAPIKeys && m.selectedIdx < 6 {
 				m.selectedIdx++
@@ -210,15 +216,18 @@ func (m ConfigModel) handleEnter() (tea.Model, tea.Cmd) {
 			m.step = configStepEmbeddingProvider
 			m.selectedIdx = 0
 		case "4":
+			m.step = configStepTimezone
+			m.selectedIdx = 0
+		case "5":
 			m.step = configStepUserInfo
 			m.prepareStep()
-		case "5":
+		case "6":
 			m.step = configStepAPIKeys
 			m.selectedIdx = 0
 			m.prepareStep()
-		case "6":
-			m.step = configStepReview
 		case "7":
+			m.step = configStepReview
+		case "8":
 			// Save and exit
 			return m.finishConfiguration()
 		case "0":
@@ -313,6 +322,23 @@ func (m ConfigModel) handleEnter() (tea.Model, tea.Cmd) {
 		} else {
 			// Set default based on provider
 			m.config.DefaultEmbedModel = constants.GetDefaultEmbeddingModel(constants.Provider(m.config.EmbeddingProvider))
+		}
+		m.step = configStepMenu
+		m.selectedIdx = 0
+		return m, nil
+
+	case configStepTimezone:
+		timezones := getTimezoneOptions()
+		if m.selectedIdx < len(timezones) {
+			selectedTZ := timezones[m.selectedIdx].IANAName
+			if selectedTZ != "" {
+				// Update timezone for active profile
+				if m.config.Profiles != nil && m.config.ActiveProfile != "" {
+					if profile := m.config.Profiles[m.config.ActiveProfile]; profile != nil {
+						profile.Timezone = selectedTZ
+					}
+				}
+			}
 		}
 		m.step = configStepMenu
 		m.selectedIdx = 0
@@ -440,6 +466,8 @@ func (m ConfigModel) View() string {
 		s.WriteString(m.viewEmbeddingProvider())
 	case configStepEmbeddingConfig:
 		s.WriteString(m.viewEmbeddingConfig())
+	case configStepTimezone:
+		s.WriteString(m.viewTimezone())
 	case configStepUserInfo:
 		s.WriteString(m.viewUserInfo())
 	case configStepAPIKeys:
@@ -582,6 +610,30 @@ func (m ConfigModel) viewEmbeddingConfig() string {
 		"Configure Embedding Model",
 		body, m.textInput, nil,
 		"Press Enter to save • Esc to cancel",
+	)
+}
+
+func (m ConfigModel) viewTimezone() string {
+	var currentTZ string
+	if m.config.Profiles != nil && m.config.ActiveProfile != "" {
+		if profile := m.config.Profiles[m.config.ActiveProfile]; profile != nil {
+			currentTZ = profile.Timezone
+		}
+	}
+	if currentTZ == "" {
+		currentTZ = "UTC"
+	}
+
+	header := dimStyle.Render(fmt.Sprintf("Current: %s", currentTZ)) + "\n\n" +
+		normalStyle.Render("Select a new timezone:")
+
+	return RenderSelectList(
+		"Configure Timezone",
+		header,
+		TimezoneItems(),
+		m.selectedIdx,
+		false, 0,
+		"↑/↓: navigate • enter: select • esc: back",
 	)
 }
 

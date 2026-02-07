@@ -88,6 +88,19 @@ type branchGroup struct {
 	Commits []commitData
 }
 
+// getProfileTimezone returns the timezone location for the active profile
+func getProfileTimezone(cfg *config.Config) *time.Location {
+	loc := time.UTC // Default to UTC
+	if cfg.Profiles != nil && cfg.ActiveProfile != "" {
+		if profile := cfg.Profiles[cfg.ActiveProfile]; profile != nil && profile.Timezone != "" {
+			if tzLoc, err := time.LoadLocation(profile.Timezone); err == nil {
+				loc = tzLoc
+			}
+		}
+	}
+	return loc
+}
+
 func runWorklog(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 	titleColor := color.New(color.FgHiCyan, color.Bold)
@@ -97,6 +110,9 @@ func runWorklog(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w\n\nRun 'devlog onboard' to set up your configuration", err)
 	}
+
+	// Get timezone for the active profile
+	loc := getProfileTimezone(cfg)
 
 	dbRepo, err := db.GetRepository()
 	if err != nil {
@@ -112,7 +128,7 @@ func runWorklog(cmd *cobra.Command, args []string) error {
 		VerboseLog("No codebase found at current path, querying all commits")
 	}
 
-	endDate := time.Now()
+	endDate := time.Now().In(loc)
 	startDate := endDate.AddDate(0, 0, -worklogDays)
 
 	commits, err := queryCommitsForWorklog(ctx, dbRepo, codebase, startDate, endDate, cfg)
@@ -145,10 +161,10 @@ func runWorklog(cmd *cobra.Command, args []string) error {
 		if groupErr != nil {
 			return groupErr
 		}
-		markdown, err = generateBranchWorklogMarkdown(groups, client, cfg)
+		markdown, err = generateBranchWorklogMarkdown(groups, client, cfg, loc)
 	default:
-		groups := groupByDate(commits)
-		markdown, err = generateWorklogMarkdown(groups, client, cfg)
+		groups := groupByDate(commits, loc)
+		markdown, err = generateWorklogMarkdown(groups, client, cfg, loc)
 	}
 
 	if err != nil {
@@ -250,17 +266,19 @@ func getString(m map[string]any, key string) string {
 	return ""
 }
 
-func groupByDate(commits []commitData) []dayGroup {
+func groupByDate(commits []commitData, loc *time.Location) []dayGroup {
 	dateMap := make(map[string][]commitData)
 
 	for _, c := range commits {
-		dateKey := c.CommittedAt.Format("2006-01-02")
+		// Convert commit time to user's timezone
+		localTime := c.CommittedAt.In(loc)
+		dateKey := localTime.Format("2006-01-02")
 		dateMap[dateKey] = append(dateMap[dateKey], c)
 	}
 
 	var groups []dayGroup
 	for dateStr, dayCommits := range dateMap {
-		date, _ := time.Parse("2006-01-02", dateStr)
+		date, _ := time.ParseInLocation("2006-01-02", dateStr, loc)
 		groups = append(groups, dayGroup{
 			Date:    date,
 			Commits: dayCommits,
@@ -342,7 +360,7 @@ func createWorklogClient(cfg *config.Config) (llm.Client, error) {
 	return llm.NewClient(llmCfg)
 }
 
-func generateWorklogMarkdown(groups []dayGroup, client llm.Client, cfg *config.Config) (string, error) {
+func generateWorklogMarkdown(groups []dayGroup, client llm.Client, cfg *config.Config, loc *time.Location) (string, error) {
 	var sb strings.Builder
 
 	// Header
@@ -355,11 +373,11 @@ func generateWorklogMarkdown(groups []dayGroup, client llm.Client, cfg *config.C
 	}
 
 	sb.WriteString(fmt.Sprintf("# Work Log - %s\n\n", userName))
-	sb.WriteString(fmt.Sprintf("*Generated on %s*\n\n", time.Now().Format("January 2, 2006")))
+	sb.WriteString(fmt.Sprintf("*Generated on %s*\n\n", time.Now().In(loc).Format("January 2, 2006")))
 
 	if len(groups) > 0 {
-		startDate := groups[len(groups)-1].Date
-		endDate := groups[0].Date
+		startDate := groups[len(groups)-1].Date.In(loc)
+		endDate := groups[0].Date.In(loc)
 		sb.WriteString(fmt.Sprintf("**Period:** %s - %s\n\n", startDate.Format("Jan 2"), endDate.Format("Jan 2, 2006")))
 	}
 
@@ -380,7 +398,7 @@ func generateWorklogMarkdown(groups []dayGroup, client llm.Client, cfg *config.C
 
 	// Daily breakdown - Date first, then branches within each date
 	for _, group := range groups {
-		dayName := group.Date.Format("Monday, January 2, 2006")
+		dayName := group.Date.In(loc).Format("Monday, January 2, 2006")
 		sb.WriteString(fmt.Sprintf("# %s\n\n", dayName))
 
 		// Group commits by branch
@@ -428,7 +446,7 @@ func generateWorklogMarkdown(groups []dayGroup, client llm.Client, cfg *config.C
 			})
 
 			for _, c := range commits {
-				commitTime := c.CommittedAt.Format("15:04")
+				commitTime := c.CommittedAt.In(loc).Format("15:04")
 				message := strings.Split(strings.TrimSpace(c.Message), "\n")[0]
 				sb.WriteString(fmt.Sprintf("- **%s** `%s` %s", commitTime, c.Hash[:7], message))
 				if c.Additions > 0 || c.Deletions > 0 {
@@ -447,7 +465,7 @@ func generateWorklogMarkdown(groups []dayGroup, client llm.Client, cfg *config.C
 	return sb.String(), nil
 }
 
-func generateBranchWorklogMarkdown(groups []branchGroup, client llm.Client, cfg *config.Config) (string, error) {
+func generateBranchWorklogMarkdown(groups []branchGroup, client llm.Client, cfg *config.Config, loc *time.Location) (string, error) {
 	var sb strings.Builder
 
 	// Header
@@ -460,7 +478,7 @@ func generateBranchWorklogMarkdown(groups []branchGroup, client llm.Client, cfg 
 	}
 
 	sb.WriteString(fmt.Sprintf("# Work Log - %s\n\n", userName))
-	sb.WriteString(fmt.Sprintf("*Generated on %s*\n\n", time.Now().Format("January 2, 2006")))
+	sb.WriteString(fmt.Sprintf("*Generated on %s*\n\n", time.Now().In(loc).Format("January 2, 2006")))
 	sb.WriteString(fmt.Sprintf("**Period:** Last %d days\n\n", worklogDays))
 	sb.WriteString("---\n\n")
 
@@ -500,10 +518,11 @@ func generateBranchWorklogMarkdown(groups []branchGroup, client llm.Client, cfg 
 		sb.WriteString("## Daily Activity\n\n")
 		sb.WriteString(fmt.Sprintf("**%d commits** | +%d / -%d lines\n\n", len(group.Commits), totalAdditions, totalDeletions))
 
-		// Group commits by date
+		// Group commits by date (in user's timezone)
 		commitsByDate := make(map[string][]commitData)
 		for _, c := range group.Commits {
-			dateKey := c.CommittedAt.Format("2006-01-02")
+			localTime := c.CommittedAt.In(loc)
+			dateKey := localTime.Format("2006-01-02")
 			commitsByDate[dateKey] = append(commitsByDate[dateKey], c)
 		}
 
@@ -523,10 +542,10 @@ func generateBranchWorklogMarkdown(groups []branchGroup, client llm.Client, cfg 
 				return dayCommits[i].CommittedAt.After(dayCommits[j].CommittedAt)
 			})
 
-			sb.WriteString(fmt.Sprintf("### %s\n\n", date.Format("Monday, January 2, 2006")))
+			sb.WriteString(fmt.Sprintf("### %s\n\n", date.In(loc).Format("Monday, January 2, 2006")))
 
 			for _, c := range dayCommits {
-				commitTime := c.CommittedAt.Format("15:04")
+				commitTime := c.CommittedAt.In(loc).Format("15:04")
 				message := strings.Split(strings.TrimSpace(c.Message), "\n")[0]
 				sb.WriteString(fmt.Sprintf("- **%s** `%s` %s", commitTime, c.Hash[:7], message))
 				if c.Additions > 0 || c.Deletions > 0 {

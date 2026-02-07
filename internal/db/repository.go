@@ -587,38 +587,26 @@ func (r *SQLRepository) UpdateBranchCursor(ctx context.Context, codebaseID, bran
 
 // UpsertFolder creates or updates a folder.
 func (r *SQLRepository) UpsertFolder(ctx context.Context, folder *Folder) error {
-	// First try to update existing folder to preserve folder_id and foreign key references
-	result, err := r.db.ExecContext(ctx, `
-		UPDATE folders 
-		SET name = $3, depth = $4, parent_path = $5, summary = $6, purpose = $7, 
-		    file_count = $8, indexed_at = $9, embedding = $10
-		WHERE codebase_id = $1 AND path = $2`,
-		folder.CodebaseID, folder.Path, folder.Name, folder.Depth, NullString(folder.ParentPath),
-		NullString(folder.Summary), NullString(folder.Purpose), folder.FileCount, 
-		NullTime(folder.IndexedAt), NullString(EmbeddingToJSON(folder.Embedding)))
-	
+	// Use INSERT ON CONFLICT on the unique constraint (codebase_id, path)
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO folders (id, codebase_id, path, name, depth, parent_path, summary, purpose, file_count, indexed_at, embedding)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		ON CONFLICT (codebase_id, path) DO UPDATE SET
+			name = EXCLUDED.name,
+			depth = EXCLUDED.depth,
+			parent_path = EXCLUDED.parent_path,
+			summary = EXCLUDED.summary,
+			purpose = EXCLUDED.purpose,
+			file_count = EXCLUDED.file_count,
+			indexed_at = EXCLUDED.indexed_at,
+			embedding = EXCLUDED.embedding`,
+		folder.ID, folder.CodebaseID, folder.Path, folder.Name, folder.Depth, NullString(folder.ParentPath),
+		NullString(folder.Summary), NullString(folder.Purpose), folder.FileCount, NullTime(folder.IndexedAt),
+		NullString(EmbeddingToJSON(folder.Embedding)))
 	if err != nil {
-		return fmt.Errorf("update folder: %w", err)
+		return fmt.Errorf("upsert folder: %w", err)
 	}
 
-	// If no rows were updated, insert new folder
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("check rows affected: %w", err)
-	}
-
-	if rowsAffected == 0 {
-		_, err := r.db.ExecContext(ctx, `
-			INSERT INTO folders (id, codebase_id, path, name, depth, parent_path, summary, purpose, file_count, indexed_at, embedding)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-			folder.ID, folder.CodebaseID, folder.Path, folder.Name, folder.Depth, NullString(folder.ParentPath),
-			NullString(folder.Summary), NullString(folder.Purpose), folder.FileCount, NullTime(folder.IndexedAt),
-			NullString(EmbeddingToJSON(folder.Embedding)))
-		if err != nil {
-			return fmt.Errorf("insert folder: %w", err)
-		}
-	}
-	
 	return nil
 }
 
@@ -719,42 +707,34 @@ func (r *SQLRepository) DeleteFoldersByPaths(ctx context.Context, codebaseID str
 
 // UpsertFileIndex creates or updates a file index.
 func (r *SQLRepository) UpsertFileIndex(ctx context.Context, file *FileIndex) error {
-	// First try to update existing file to preserve file_id and any future foreign key references
-	result, err := r.db.ExecContext(ctx, `
-		UPDATE file_indexes 
-		SET folder_id = $3, name = $4, extension = $5, language = $6, size_bytes = $7, 
-		    line_count = $8, summary = $9, purpose = $10, key_exports = $11, 
-		    dependencies = $12, content_hash = $13, indexed_at = $14, embedding = $15
-		WHERE codebase_id = $1 AND path = $2`,
-		file.CodebaseID, file.Path, NullString(file.FolderID), file.Name, NullString(file.Extension),
-		NullString(file.Language), file.SizeBytes, file.LineCount, NullString(file.Summary), 
-		NullString(file.Purpose), ToJSON(file.KeyExports), ToJSON(file.Dependencies), 
-		NullString(file.ContentHash), NullTime(file.IndexedAt), NullString(EmbeddingToJSON(file.Embedding)))
-	
+	// Use INSERT ON CONFLICT on the unique constraint (codebase_id, path).
+	// Note: DuckDB does not allow updating columns with FK/PK/INDEX constraints
+	// in ON CONFLICT DO UPDATE, so folder_id is excluded from the update set.
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO file_indexes (id, codebase_id, folder_id, path, name, extension, language,
+			size_bytes, line_count, summary, purpose, key_exports, dependencies, content_hash, indexed_at, embedding)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+		ON CONFLICT (codebase_id, path) DO UPDATE SET
+			name = EXCLUDED.name,
+			extension = EXCLUDED.extension,
+			language = EXCLUDED.language,
+			size_bytes = EXCLUDED.size_bytes,
+			line_count = EXCLUDED.line_count,
+			summary = EXCLUDED.summary,
+			purpose = EXCLUDED.purpose,
+			key_exports = EXCLUDED.key_exports,
+			dependencies = EXCLUDED.dependencies,
+			content_hash = EXCLUDED.content_hash,
+			indexed_at = EXCLUDED.indexed_at,
+			embedding = EXCLUDED.embedding`,
+		file.ID, file.CodebaseID, NullString(file.FolderID), file.Path, file.Name, NullString(file.Extension),
+		NullString(file.Language), file.SizeBytes, file.LineCount, NullString(file.Summary), NullString(file.Purpose),
+		ToJSON(file.KeyExports), ToJSON(file.Dependencies), NullString(file.ContentHash), NullTime(file.IndexedAt),
+		NullString(EmbeddingToJSON(file.Embedding)))
 	if err != nil {
-		return fmt.Errorf("update file index: %w", err)
+		return fmt.Errorf("upsert file index: %w", err)
 	}
 
-	// If no rows were updated, insert new file
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("check rows affected: %w", err)
-	}
-
-	if rowsAffected == 0 {
-		_, err := r.db.ExecContext(ctx, `
-			INSERT INTO file_indexes (id, codebase_id, folder_id, path, name, extension, language,
-				size_bytes, line_count, summary, purpose, key_exports, dependencies, content_hash, indexed_at, embedding)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
-			file.ID, file.CodebaseID, NullString(file.FolderID), file.Path, file.Name, NullString(file.Extension),
-			NullString(file.Language), file.SizeBytes, file.LineCount, NullString(file.Summary), NullString(file.Purpose),
-			ToJSON(file.KeyExports), ToJSON(file.Dependencies), NullString(file.ContentHash), NullTime(file.IndexedAt),
-			NullString(EmbeddingToJSON(file.Embedding)))
-		if err != nil {
-			return fmt.Errorf("insert file index: %w", err)
-		}
-	}
-	
 	return nil
 }
 
@@ -898,10 +878,28 @@ func (r *SQLRepository) GetCodebaseStats(ctx context.Context, codebaseID string)
 	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM folders WHERE codebase_id = $1`, codebaseID).Scan(&stats.FolderCount); err != nil {
 		return nil, fmt.Errorf("count folders: %w", err)
 	}
+	
+	// Query file stats with explicit handling
+	var fileCount sql.NullInt64
+	var totalSize sql.NullInt64
+	var totalLines sql.NullInt64
+	
 	if err := r.db.QueryRowContext(ctx, `
-		SELECT COALESCE(COUNT(*), 0), COALESCE(SUM(size_bytes), 0), COALESCE(SUM(line_count), 0)
-		FROM file_indexes WHERE codebase_id = $1`, codebaseID).Scan(&stats.FileCount, &stats.TotalSize, &stats.TotalLines); err != nil {
+		SELECT COUNT(*) as file_count, 
+		       COALESCE(SUM(size_bytes), 0) as total_size, 
+		       COALESCE(SUM(line_count), 0) as total_lines
+		FROM file_indexes WHERE codebase_id = $1`, codebaseID).Scan(&fileCount, &totalSize, &totalLines); err != nil {
 		return nil, fmt.Errorf("get file stats: %w", err)
+	}
+	
+	if fileCount.Valid {
+		stats.FileCount = fileCount.Int64
+	}
+	if totalSize.Valid {
+		stats.TotalSize = totalSize.Int64
+	}
+	if totalLines.Valid {
+		stats.TotalLines = totalLines.Int64
 	}
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT language, COUNT(*) as count FROM file_indexes

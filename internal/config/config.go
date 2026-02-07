@@ -22,8 +22,9 @@ type Profile struct {
 	Name             string                          `json:"name"`
 	Description      string                          `json:"description,omitempty"`
 	CreatedAt        string                          `json:"created_at"`
-	Repos            []string                        `json:"repos"`             // Repo paths in this profile
-	BranchSelections map[string]*RepoBranchSelection `json:"branch_selections"` // Saved branch selections per repo path
+	Timezone         string                          `json:"timezone,omitempty"` // IANA timezone (e.g. "America/New_York")
+	Repos            []string                        `json:"repos"`              // Repo paths in this profile
+	BranchSelections map[string]*RepoBranchSelection `json:"branch_selections"`  // Saved branch selections per repo path
 }
 
 // Config holds all configuration for devlog.
@@ -501,4 +502,14 @@ func (c *Config) ListProfiles() []string {
 		names = append(names, name)
 	}
 	return names
+}
+
+// GetTimezone returns the timezone for the active profile, defaulting to UTC
+func (c *Config) GetTimezone() string {
+	if c.Profiles != nil && c.ActiveProfile != "" {
+		if profile := c.Profiles[c.ActiveProfile]; profile != nil && profile.Timezone != "" {
+			return profile.Timezone
+		}
+	}
+	return "UTC"
 }

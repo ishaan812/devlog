@@ -1,31 +1,73 @@
-# DevLog
+<div align="center">
 
-> Your AI-powered development activity tracker and code intelligence tool.
+```
+     _            _
+  __| | _____   _| | ___   __ _
+ / _` |/ _ \ \ / / |/ _ \ / _` |
+| (_| |  __/\ V /| | (_) | (_| |
+ \__,_|\___| \_/ |_|\___/ \__, |
+                           |___/
+```
 
-DevLog transforms your git history and codebase into a queryable knowledge base. Automaically generate professional work logs, Ask questions in natural language,  and search your code semantically—all from the command line.
+### Stop forgetting what you shipped.
 
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![Go Version](https://img.shields.io/badge/go-%3E%3D1.21-blue.svg)
+Open-source, local-first AI work logging for developers who juggle<br>too many repos, too many branches, and too many standups.
 
-## Why DevLog?
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Go Version](https://img.shields.io/badge/go-%3E%3D1.21-blue.svg)](https://go.dev)
+[![Open Source](https://img.shields.io/badge/open%20source-%E2%9C%93-brightgreen.svg)](https://github.com/ishaan812/devlog)
+[![npm](https://img.shields.io/badge/npm-devlog-red.svg)](https://www.npmjs.com/package/devlog)
 
-- **"What did I work on last week?"** — Get instant summaries without digging through git logs or having to traverse through different repos and branches
-- **"Where is the authentication logic?"** — Semantic search finds code by meaning, not just keywords
-- **Generate standup reports** — Create professional markdown work logs in seconds
-- **Privacy-first** — Run locally with Ollama, or use cloud providers
-- **Multi-repo Multi-branch support** — Profiles keep work and personal projects separate
+</div>
+
+You ship code across 5 repos, 12 branches, and 3 teams. Monday morning standup hits and you're scrolling through `git log` trying to remember what you did last Thursday.
+
+**DevLog fixes that.** It ingests your git history across every repo and branch you work on, and turns it into smart, structured work logs — automatically. No more "I think I worked on the auth thing?" Ask DevLog and get an answer in seconds.
+
+---
+
+### The 30-second pitch
+
+```bash
+npm install -g devlog       # Install
+devlog onboard              # Set up (works with free local Ollama)
+devlog ingest               # Point it at your repos
+devlog worklog --days 7     # Get your week's work, organized by branch
+```
+
+That's it. Professional markdown work logs, generated from your actual commits. Multi-repo, multi-branch, zero effort.
+
+---
+
+## Why Developers Love DevLog
+
+### You context-switch constantly
+You're on `feature/payments` in the morning, hotfixing `prod` after lunch, reviewing PRs on a backend service, then back to payments. DevLog tracks all of it — across repos and branches — so you don't have to.
+
+### Your standups are painful
+"What did I do yesterday?" shouldn't require 10 minutes of archaeology through git logs in 4 different terminals. DevLog generates a clean, branch-organized summary in one command.
+
+### You work across multiple repos
+Frontend, backend, shared libraries, infrastructure — DevLog ingests them all into one unified timeline. One command to see everything you shipped.
+
+### You care about privacy (and your wallet)
+DevLog is **local-first**. Run it with [Ollama](https://ollama.ai) and your data never leaves your machine. No subscriptions, no telemetry, no cloud dependency. Need better summaries? Plug in Anthropic, OpenAI, or OpenRouter for pennies per query.
+
+---
 
 ## Features
 
 | Feature | Description |
 |---------|-------------|
+| **Smart Work Logs** | Auto-generated markdown summaries organized by branch, date, and repo — ready for standups, PRs, or performance reviews |
+| **Multi-Repo Ingestion** | Ingest as many repos as you want into a single profile. See your full picture. |
+| **Multi-Branch Tracking** | Branch-aware ingestion remembers your selections per repo. Track `main`, `develop`, and every feature branch. |
+| **Local-First AI** | Works completely offline with Ollama. Your code and history stay on your machine. |
+| **Cheap Cloud Fallback** | Optionally use Anthropic, OpenAI, OpenRouter, or AWS Bedrock — most queries cost fractions of a cent |
 | **Natural Language Queries** | Ask questions about your git history in plain English |
-| **Semantic Code Search** | Find code by describing what it does |
-| **Smart Work Logs** | Auto-generated markdown summaries organized by branch and date |
-| **Multiple LLM Providers** | Ollama (local), Anthropic, OpenAI, or AWS Bedrock |
-| **Profile System** | Isolated databases for different work contexts |
-| **Branch-aware Ingestion** | Remembers your branch selections per repo |
-| **Incremental Updates** | Fast re-runs that only process new commits |
+| **Semantic Code Search** | Find code by describing what it does, not just grepping keywords |
+| **Profile System** | Isolated databases for work vs. personal, or per-client contexts |
+| **Incremental Updates** | Re-runs only process new commits. Fast even on large repos. |
 | **Codebase Visualization** | Generate structure diagrams and collaboration graphs |
 
 ## Quick Start
@@ -35,14 +77,15 @@ DevLog transforms your git history and codebase into a queryable knowledge base.
 npm install -g devlog
 # or: go install github.com/ishaan812/devlog/cmd/devlog@latest
 
-# 2. Run the setup wizard
+# 2. Run the setup wizard (picks up Ollama automatically)
 devlog onboard
 
-# 3. Ingest your repository
-cd ~/projects/myapp
-devlog ingest
+# 3. Ingest your repositories
+devlog ingest ~/projects/frontend
+devlog ingest ~/projects/backend
+devlog ingest ~/projects/shared-lib
 
-# 4. Start asking questions!
+# 4. See what you actually shipped
 devlog worklog --days 7
 devlog ask "What did I work on this week?"
 devlog search "error handling"
@@ -115,7 +158,37 @@ On first run, you'll select which branches to track. DevLog remembers your selec
 devlog worklog --days 7
 ```
 
-Generates a professional markdown work log:
+One command. Every repo. Every branch. Organized and summarized:
+
+```markdown
+# Work Log - yourname
+
+*Generated on February 4, 2026*
+
+# Monday, February 3, 2026
+
+## repo: frontend | Branch: feature/payments
+
+### Updates
+- Built the checkout flow with Stripe integration
+- Added client-side form validation for card inputs
+
+### Commits
+- **16:45** `f8a9b0c` Add Stripe checkout component (+320/-15)
+- **14:20** `c3d4e5f` Add card validation helpers (+95/-10)
+
+## repo: backend | Branch: feature/auth
+
+### Updates
+- Implemented JWT-based authentication with refresh tokens
+- Added role-based access control middleware
+
+### Commits
+- **11:30** `a1b2c3d` Add JWT authentication (+250/-30)
+- **09:15** `d4e5f6g` Implement RBAC middleware (+180/-20)
+```
+
+That's your standup, done. Copy-paste it, email it, or drop it in Slack.
 
 ### 4. Query Your Activity
 
@@ -128,24 +201,6 @@ devlog ask "Which files have I changed the most?"
 # Semantic code search
 devlog search "database connection pooling"
 devlog search "user authentication flow"
-```
-
-```markdown
-# Work Log - yourname
-
-*Generated on February 4, 2026*
-
-# Monday, February 3, 2026
-
-## Branch: feature/auth
-
-### Updates
-- Implemented JWT-based authentication with refresh tokens
-- Added role-based access control middleware
-
-### Commits
-- **14:30** `a1b2c3d` Add JWT authentication (+250/-30)
-- **11:15** `d4e5f6g` Implement RBAC middleware (+180/-20)
 ```
 
 ## Commands Reference
@@ -248,32 +303,33 @@ devlog clear                       # Interactive confirmation
 devlog clear --force               # Skip confirmation
 ```
 
-## LLM Providers
+## LLM Providers — Use What You Already Have
 
-DevLog supports multiple LLM providers. Choose based on your needs:
+DevLog doesn't lock you into an expensive API. Start free and local, upgrade if you want.
 
 | Provider | Privacy | Cost | Best For |
 |----------|---------|------|----------|
-| **Ollama** | 🟢 Local | Free | Privacy-conscious users |
-| **Anthropic** | 🟡 Cloud | Paid | Best quality responses |
+| **Ollama** | 🟢 Fully local | Free | Default. Your data never leaves your machine. |
+| **OpenRouter** | 🟡 Cloud | ~$0.001/query | Cheap access to dozens of models |
+| **Anthropic** | 🟡 Cloud | Paid | Best quality summaries |
 | **OpenAI** | 🟡 Cloud | Paid | Wide model selection |
 | **Bedrock** | 🟡 Cloud | Paid | AWS-integrated workflows |
 
-### Setting Up Ollama (Recommended)
+### Setting Up Ollama (Recommended — Free & Private)
 
-1. Install Ollama from [ollama.ai](https://ollama.ai)
-2. Pull a model:
-   ```bash
-   ollama pull llama3.2
-   ```
-3. Start the server:
-   ```bash
-   ollama serve
-   ```
-4. Run DevLog setup:
-   ```bash
-   devlog onboard
-   ```
+```bash
+# 1. Install Ollama (ollama.ai)
+# 2. Pull a model
+ollama pull llama3.2
+
+# 3. Start the server
+ollama serve
+
+# 4. DevLog will detect it automatically
+devlog onboard
+```
+
+No API keys. No accounts. No usage limits. Just your machine.
 
 ### Using Cloud Providers
 
@@ -332,18 +388,19 @@ Fill in missing summaries after fast ingestion:
 devlog ingest --fill-summaries
 ```
 
-### Multiple Repos
+### Multiple Repos, One Timeline
 
-Ingest multiple repos into one profile:
+Ingest every repo you touch — DevLog unifies them:
 ```bash
 devlog ingest ~/projects/frontend
 devlog ingest ~/projects/backend
 devlog ingest ~/projects/shared-lib
+devlog worklog --days 7  # See everything in one report
 ```
 
-### Work vs Personal
+### Work vs Personal — Completely Isolated
 
-Keep work and personal projects separate:
+Profiles give you separate databases. No bleed between contexts:
 ```bash
 devlog profile create work "Work projects"
 devlog profile use work
@@ -420,6 +477,13 @@ Skip AI summaries for faster initial ingestion:
 devlog ingest --skip-summaries
 ```
 
+## Who Is This For?
+
+- **Individual developers** who work across multiple repos and branches and need clean work logs for standups, weekly reports, or performance reviews
+- **Freelancers & contractors** who bill by the hour and need to show clients what was delivered
+- **Open source maintainers** who want to generate changelogs and activity summaries
+- **Anyone tired of `git log --oneline | head -50`** as a standup prep strategy
+
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
@@ -430,4 +494,4 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ---
 
-**Made with ❤️ for developers who want to understand their work better.**
+**Built for developers who ship faster than they can remember.** Star the repo if DevLog saves your next standup.

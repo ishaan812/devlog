@@ -11,6 +11,7 @@ import (
 	"github.com/manifoldco/promptui"
 	"github.com/spf13/cobra"
 
+	"github.com/ishaan812/devlog/internal/config"
 	"github.com/ishaan812/devlog/internal/db"
 	"github.com/ishaan812/devlog/internal/git"
 )
@@ -185,6 +186,11 @@ func runBranchShow(cmd *cobra.Command, args []string) error {
 	infoColor := color.New(color.FgWhite)
 	dimColor := color.New(color.FgHiBlack)
 
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
 	codebasePath := branchCodebase
 	if codebasePath == "" {
 		var absErr error
@@ -258,14 +264,22 @@ func runBranchShow(cmd *cobra.Command, args []string) error {
 	}
 
 	// Timestamps
+	// Load timezone for display
+	loc := time.UTC
+	if tzName := cfg.GetTimezone(); tzName != "" {
+		if tzLoc, err := time.LoadLocation(tzName); err == nil {
+			loc = tzLoc
+		}
+	}
+
 	if !branch.CreatedAt.IsZero() {
 		dimColor.Print("  Created:     ")
-		dimColor.Printf("%s\n", branch.CreatedAt.Format("Jan 2, 2006"))
+		dimColor.Printf("%s\n", branch.CreatedAt.In(loc).Format("Jan 2, 2006"))
 	}
 
 	if !branch.UpdatedAt.IsZero() {
 		dimColor.Print("  Updated:     ")
-		dimColor.Printf("%s\n", branch.UpdatedAt.Format("Jan 2, 2006 15:04"))
+		dimColor.Printf("%s\n", branch.UpdatedAt.In(loc).Format("Jan 2, 2006 15:04"))
 	}
 
 	// Story

@@ -57,10 +57,7 @@ func (c *OpenRouterClient) Complete(ctx context.Context, prompt string) (string,
 func (c *OpenRouterClient) ChatComplete(ctx context.Context, messages []Message) (string, error) {
 	openRouterMessages := make([]openRouterMessage, len(messages))
 	for i, m := range messages {
-		openRouterMessages[i] = openRouterMessage{
-			Role:    m.Role,
-			Content: m.Content,
-		}
+		openRouterMessages[i] = openRouterMessage(m)
 	}
 
 	reqBody := openRouterChatRequest{

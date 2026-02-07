@@ -21,6 +21,7 @@ const (
 	stepExistingProfiles      // show existing profiles
 	stepProfileName
 	stepProfileDesc
+	stepTimezone // timezone selection
 	stepProvider
 	stepProviderConfig
 	stepModelSelection    // model selection
@@ -37,6 +38,7 @@ type Model struct {
 	config        *config.Config
 	profileName   string
 	profileDesc   string
+	timezone      string
 	selectedIdx   int
 	textInput     textinput.Model
 	spinner       spinner.Model
@@ -110,7 +112,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter":
 			return m.handleEnter()
 		case "up", "k":
-			if m.step == stepProvider && m.selectedIdx > 0 {
+			if m.step == stepTimezone && m.selectedIdx > 0 {
+				m.selectedIdx--
+			} else if m.step == stepProvider && m.selectedIdx > 0 {
 				m.selectedIdx--
 			} else if m.step == stepModelSelection && m.selectedIdx > 0 {
 				m.selectedIdx--
@@ -120,7 +124,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.selectedIdx--
 			}
 		case "down", "j":
-			if m.step == stepProvider && m.selectedIdx < len(getLLMProviders())-1 {
+			if m.step == stepTimezone && m.selectedIdx < len(getTimezoneOptions())-1 {
+				m.selectedIdx++
+			} else if m.step == stepProvider && m.selectedIdx < len(getLLMProviders())-1 {
 				m.selectedIdx++
 			} else if m.step == stepModelSelection && m.selectedIdx < len(getModelOptions(constants.Provider(m.config.DefaultProvider)))-1 {
 				m.selectedIdx++
@@ -222,7 +228,20 @@ func (m Model) handleEnter() (tea.Model, tea.Cmd) {
 
 	case stepProfileDesc:
 		m.profileDesc = strings.TrimSpace(m.textInput.Value())
+		m.step = stepTimezone
+		m.selectedIdx = 0
+		return m, nil
+
+	case stepTimezone:
+		timezones := getTimezoneOptions()
+		if m.selectedIdx < len(timezones) {
+			m.timezone = timezones[m.selectedIdx].IANAName
+		}
+		if m.timezone == "" {
+			m.timezone = "UTC"
+		}
 		m.step = stepProvider
+		m.selectedIdx = 0
 		return m, nil
 
 	case stepProvider:
@@ -376,6 +395,11 @@ func (m Model) finishOnboarding() (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// Set timezone for the profile
+	if m.config.Profiles != nil && m.config.Profiles[m.profileName] != nil {
+		m.config.Profiles[m.profileName].Timezone = m.timezone
+	}
+
 	// Set as active profile
 	m.config.ActiveProfile = m.profileName
 	m.config.OnboardingComplete = true
@@ -402,6 +426,8 @@ func (m Model) View() string {
 		s.WriteString(m.viewProfileName())
 	case stepProfileDesc:
 		s.WriteString(m.viewProfileDesc())
+	case stepTimezone:
+		s.WriteString(m.viewTimezone())
 	case stepProvider:
 		s.WriteString(m.viewProvider())
 	case stepProviderConfig:
@@ -507,6 +533,17 @@ func (m Model) viewProfileDesc() string {
 	body := dimStyle.Render(fmt.Sprintf("Profile: %s", m.profileName)) + "\n\n" +
 		dimStyle.Render("Description (optional):")
 	return RenderTextInput("Step 1: Create a Profile", body, m.textInput, nil, "Press Enter to continue, Esc to go back")
+}
+
+func (m Model) viewTimezone() string {
+	return RenderSelectList(
+		"Step 2: Choose Timezone",
+		normalStyle.Render("Select your timezone for accurate time tracking and reports."),
+		TimezoneItems(),
+		m.selectedIdx,
+		false, 0,
+		"Use arrow keys to select, Enter to confirm",
+	)
 }
 
 func (m Model) viewProvider() string {

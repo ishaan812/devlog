@@ -124,6 +124,11 @@ func getModelOptions(provider constants.Provider) []constants.ModelOption {
 	return constants.GetLLMModels(provider)
 }
 
+// getTimezoneOptions returns available timezone options.
+func getTimezoneOptions() []constants.TimezoneOption {
+	return constants.CommonTimezones
+}
+
 // ── Item converters (providers/models → SelectItems) ───────────────────────
 
 // LLMProviderItems converts LLM provider info to SelectItems.
@@ -152,6 +157,16 @@ func EmbeddingProviderItems() []SelectItem {
 	items := make([]SelectItem, len(providers))
 	for i, p := range providers {
 		items[i] = SelectItem{Label: p.Name, Description: p.Description}
+	}
+	return items
+}
+
+// TimezoneItems converts timezone options to SelectItems.
+func TimezoneItems() []SelectItem {
+	timezones := getTimezoneOptions()
+	items := make([]SelectItem, len(timezones))
+	for i, tz := range timezones {
+		items[i] = SelectItem{Label: tz.Name, Description: tz.Description}
 	}
 	return items
 }
