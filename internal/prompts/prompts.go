@@ -30,6 +30,9 @@ var worklogDayUpdatesPromptTemplate string
 //go:embed worklog_branch_summary.md
 var worklogBranchSummaryPromptTemplate string
 
+//go:embed commit_message.md
+var commitMessagePromptTemplate string
+
 func BuildFileSummaryPrompt(filePath, language, content string) string {
 	return fmt.Sprintf(strings.TrimSpace(fileSummaryPromptTemplate), filePath, language, content)
 }
@@ -60,4 +63,8 @@ func BuildWorklogDayUpdatesPrompt(projectContext, commits string) string {
 
 func BuildWorklogBranchSummaryPrompt(projectContext, commits, stats string) string {
 	return fmt.Sprintf(strings.TrimSpace(worklogBranchSummaryPromptTemplate), projectContext, commits, stats)
+}
+
+func BuildCommitMessagePrompt(projectContext, diff string) string {
+	return fmt.Sprintf(strings.TrimSpace(commitMessagePromptTemplate), projectContext, diff)
 }
