@@ -324,6 +324,8 @@ func createWorklogClient(cfg *config.Config) (llm.Client, error) {
 		llmCfg.APIKey = cfg.GetAPIKey("anthropic")
 	case llm.ProviderOpenRouter:
 		llmCfg.APIKey = cfg.GetAPIKey("openrouter")
+	case llm.ProviderGemini:
+		llmCfg.APIKey = cfg.GetAPIKey("gemini")
 	case llm.ProviderBedrock:
 		llmCfg.AWSAccessKeyID = cfg.AWSAccessKeyID
 		llmCfg.AWSSecretAccessKey = cfg.AWSSecretAccessKey
@@ -571,7 +573,7 @@ func generateBranchSummary(group branchGroup, client llm.Client) (string, error)
 
 Summary:`, strings.Join(summaries, "\n\n"))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	result, err := client.Complete(ctx, prompt)
 	if err != nil {
@@ -604,7 +606,7 @@ func generateDayBranchUpdates(commits []commitData, client llm.Client) (string, 
 </description>
 
 Sentence:`, descriptions[0])
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 		defer cancel()
 		result, err := client.Complete(ctx, prompt)
 		if err != nil {
@@ -624,7 +626,7 @@ Sentence:`, descriptions[0])
 </commits>
 
 Bullets:`, strings.Join(descriptions, "\n\n"))
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	result, err := client.Complete(ctx, prompt)
 	if err != nil {
@@ -659,7 +661,7 @@ func generateOverallSummary(groups []dayGroup, client llm.Client) (string, error
 
 Summary:`, strings.Join(messages, "\n"))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
 	result, err := client.Complete(ctx, prompt)

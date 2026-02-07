@@ -57,7 +57,7 @@ type Model struct {
 func NewModel() Model {
 	ti := textinput.New()
 	ti.Focus()
-	ti.CharLimit = 64
+	ti.CharLimit = 700
 	ti.Width = 40
 
 	s := spinner.New()
@@ -247,6 +247,8 @@ func (m Model) handleEnter() (tea.Model, tea.Cmd) {
 			m.config.OpenAIAPIKey = value
 		case "openrouter":
 			m.config.OpenRouterAPIKey = value
+		case "gemini":
+			m.config.GeminiAPIKey = value
 		case "bedrock":
 			m.config.AWSAccessKeyID = value
 		}

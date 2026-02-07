@@ -89,7 +89,7 @@ func (s *Summarizer) SummarizeFile(ctx context.Context, file FileInfo) (*FileSum
 
 	prompt := fmt.Sprintf(fileSummaryPrompt, file.Path, file.Language, content)
 
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
 
 	response, err := s.client.Complete(ctx, prompt)
@@ -121,7 +121,7 @@ func (s *Summarizer) SummarizeFolder(ctx context.Context, folder *FolderInfo) (*
 		strings.Join(fileNames, ", "),
 		strings.Join(subfolderNames, ", "))
 
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
 
 	response, err := s.client.Complete(ctx, prompt)
@@ -155,7 +155,7 @@ func (s *Summarizer) SummarizeCodebase(ctx context.Context, result *ScanResult) 
 		strings.Join(mainFolders, ", "),
 		len(result.Files))
 
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
 
 	response, err := s.client.Complete(ctx, prompt)

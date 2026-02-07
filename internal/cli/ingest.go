@@ -1110,6 +1110,8 @@ func createLLMClient(cfg *config.Config) (llm.Client, error) {
 		llmCfg.APIKey = cfg.GetAPIKey("anthropic")
 	case llm.ProviderOpenRouter:
 		llmCfg.APIKey = cfg.GetAPIKey("openrouter")
+	case llm.ProviderGemini:
+		llmCfg.APIKey = cfg.GetAPIKey("gemini")
 	case llm.ProviderBedrock:
 		llmCfg.AWSAccessKeyID = cfg.AWSAccessKeyID
 		llmCfg.AWSSecretAccessKey = cfg.AWSSecretAccessKey
@@ -1238,7 +1240,7 @@ Use past tense active voice. Start directly with a verb like "Added", "Fixed", "
 
 Summary:`, sb.String())
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
 	return client.Complete(ctx, prompt)
@@ -1259,8 +1261,8 @@ func generateEmbeddings(ctx context.Context, dbRepo *db.SQLRepository, codebaseI
 
 	// Collect items that need embeddings
 	type embeddable struct {
-		text     string
-		fileIdx  int // -1 if folder
+		text      string
+		fileIdx   int // -1 if folder
 		folderIdx int // -1 if file
 	}
 	var items []embeddable

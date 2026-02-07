@@ -130,7 +130,7 @@ func (m ConfigModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.selectedIdx++
 			} else if m.step == configStepEmbeddingProvider && m.selectedIdx < len(getEmbeddingProviders())-1 {
 				m.selectedIdx++
-			} else if m.step == configStepAPIKeys && m.selectedIdx < 5 {
+			} else if m.step == configStepAPIKeys && m.selectedIdx < 6 {
 				m.selectedIdx++
 			}
 		case "esc":
@@ -253,6 +253,10 @@ func (m ConfigModel) handleEnter() (tea.Model, tea.Cmd) {
 			if value != "" {
 				m.config.OpenRouterAPIKey = value
 			}
+		case constants.ProviderGemini:
+			if value != "" {
+				m.config.GeminiAPIKey = value
+			}
 		case constants.ProviderBedrock:
 			if value != "" {
 				m.config.AWSAccessKeyID = value
@@ -331,10 +335,12 @@ func (m ConfigModel) handleEnter() (tea.Model, tea.Cmd) {
 			case 2:
 				m.config.OpenRouterAPIKey = value
 			case 3:
-				m.config.VoyageAIAPIKey = value
+				m.config.GeminiAPIKey = value
 			case 4:
-				m.config.AWSAccessKeyID = value
+				m.config.VoyageAIAPIKey = value
 			case 5:
+				m.config.AWSAccessKeyID = value
+			case 6:
 				m.config.AWSSecretAccessKey = value
 			}
 		}
@@ -396,6 +402,8 @@ func (m ConfigModel) getExistingAPIKey(provider constants.Provider) string {
 		return m.config.OpenAIAPIKey
 	case constants.ProviderOpenRouter:
 		return m.config.OpenRouterAPIKey
+	case constants.ProviderGemini:
+		return m.config.GeminiAPIKey
 	case constants.ProviderVoyageAI:
 		return m.config.VoyageAIAPIKey
 	case constants.ProviderBedrock:
@@ -622,6 +630,7 @@ func (m ConfigModel) viewAPIKeys() string {
 		{"Anthropic", m.config.AnthropicAPIKey},
 		{"OpenAI", m.config.OpenAIAPIKey},
 		{"OpenRouter", m.config.OpenRouterAPIKey},
+		{"Gemini", m.config.GeminiAPIKey},
 		{"Voyage AI", m.config.VoyageAIAPIKey},
 		{"AWS Access Key", m.config.AWSAccessKeyID},
 		{"AWS Secret Key", m.config.AWSSecretAccessKey},
@@ -703,7 +712,7 @@ func (m ConfigModel) viewReview() string {
 
 	// API Keys (masked)
 	hasAPIKeys := m.config.AnthropicAPIKey != "" || m.config.OpenAIAPIKey != "" ||
-		m.config.OpenRouterAPIKey != "" || m.config.VoyageAIAPIKey != "" || m.config.AWSAccessKeyID != ""
+		m.config.OpenRouterAPIKey != "" || m.config.GeminiAPIKey != "" || m.config.VoyageAIAPIKey != "" || m.config.AWSAccessKeyID != ""
 
 	if hasAPIKeys {
 		s.WriteString(successStyle.Render("API Keys:"))
@@ -718,6 +727,10 @@ func (m ConfigModel) viewReview() string {
 		}
 		if m.config.OpenRouterAPIKey != "" {
 			s.WriteString(dimStyle.Render(fmt.Sprintf("  OpenRouter: %s", maskKey(m.config.OpenRouterAPIKey))))
+			s.WriteString("\n")
+		}
+		if m.config.GeminiAPIKey != "" {
+			s.WriteString(dimStyle.Render(fmt.Sprintf("  Gemini: %s", maskKey(m.config.GeminiAPIKey))))
 			s.WriteString("\n")
 		}
 		if m.config.VoyageAIAPIKey != "" {

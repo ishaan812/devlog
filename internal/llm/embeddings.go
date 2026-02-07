@@ -228,6 +228,16 @@ func NewEmbedder(cfg Config) (EmbeddingClient, error) {
 		}
 		return NewOpenRouterEmbedder(cfg.APIKey, embeddingModel), nil
 
+	case ProviderGemini:
+		if cfg.APIKey == "" {
+			return nil, fmt.Errorf("Gemini API key is required for embeddings")
+		}
+		baseURL := cfg.BaseURL
+		if baseURL == "" {
+			baseURL = "https://generativelanguage.googleapis.com/v1beta"
+		}
+		return NewGeminiEmbedder(baseURL, cfg.APIKey, embeddingModel), nil
+
 	case ProviderVoyageAI:
 		if cfg.APIKey == "" {
 			return nil, fmt.Errorf("Voyage AI API key is required for embeddings")
@@ -235,7 +245,7 @@ func NewEmbedder(cfg Config) (EmbeddingClient, error) {
 		return NewVoyageAIEmbedder(cfg.APIKey, embeddingModel), nil
 
 	default:
-		return nil, fmt.Errorf("unsupported embedding provider: %q; supported providers: ollama, openai, openrouter, voyageai", cfg.Provider)
+		return nil, fmt.Errorf("unsupported embedding provider: %q; supported providers: ollama, openai, openrouter, gemini, voyageai", cfg.Provider)
 	}
 }
 
@@ -272,6 +282,13 @@ func AvailableEmbeddingProviders() []EmbeddingProvider {
 			},
 		},
 		{
+			Name: "gemini",
+			Models: []string{
+				"gemini-embedding-001",
+				"text-embedding-004",
+			},
+		},
+		{
 			Name: "voyageai",
 			Models: []string{
 				"voyage-3.5",
@@ -295,6 +312,8 @@ func DefaultEmbeddingModel(provider Provider) string {
 		return "text-embedding-3-small"
 	case ProviderOpenRouter:
 		return "openai/text-embedding-3-small"
+	case ProviderGemini:
+		return "gemini-embedding-001"
 	case ProviderVoyageAI:
 		return "voyage-3.5"
 	default:

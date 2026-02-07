@@ -12,6 +12,7 @@ const (
 	ProviderAnthropic  Provider = "anthropic"
 	ProviderOpenRouter Provider = "openrouter"
 	ProviderBedrock    Provider = "bedrock"
+	ProviderGemini     Provider = "gemini"
 	ProviderVoyageAI   Provider = "voyageai" // Embeddings only
 )
 
@@ -56,6 +57,13 @@ var AllProviders = []ProviderInfo{
 	},
 	{
 		Key:                "5",
+		Name:               "Gemini",
+		Description:        "Google Gemini — Flash, Pro, 1M context",
+		SupportsLLM:        true,
+		SupportsEmbeddings: true,
+	},
+	{
+		Key:                "6",
 		Name:               "Bedrock",
 		Description:        "Claude via AWS (enterprise)",
 		SupportsLLM:        true,
@@ -99,6 +107,12 @@ var AllEmbeddingProviders = []EmbeddingProviderInfo{
 	},
 	{
 		Key:         "5",
+		Name:        "Gemini",
+		Description: "Google Gemini embeddings (gemini-embedding-001)",
+		Provider:    ProviderGemini,
+	},
+	{
+		Key:         "6",
 		Name:        "Voyage AI",
 		Description: "Voyage AI embeddings (voyage-3.5) - Recommended by Anthropic",
 		Provider:    ProviderVoyageAI,
@@ -148,6 +162,8 @@ func ProviderDescription(provider Provider) string {
 		return "AWS Bedrock (Claude via AWS)"
 	case ProviderOpenRouter:
 		return "OpenRouter (unified API, multiple models)"
+	case ProviderGemini:
+		return "Google Gemini (Flash, Pro, 1M context)"
 	case ProviderVoyageAI:
 		return "Voyage AI (embeddings specialist)"
 	default:
@@ -202,6 +218,14 @@ func GetProviderSetupInfo(provider Provider) ProviderSetupInfo {
 			Placeholder: "AWS Access Key ID",
 			SetupHint:   "AWS Bedrock requires IAM credentials with Bedrock access.",
 			NeedsAPIKey: true,
+		}
+	case ProviderGemini:
+		return ProviderSetupInfo{
+			APIKeyURL:    "https://aistudio.google.com/apikey",
+			APIKeyPrefix: "AI",
+			Placeholder:  "AIza...",
+			SetupHint:    "Get your API key from: aistudio.google.com/apikey",
+			NeedsAPIKey:  true,
 		}
 	case ProviderVoyageAI:
 		return ProviderSetupInfo{

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 )
 
@@ -83,21 +84,25 @@ func (c *OpenRouterClient) ChatComplete(ctx context.Context, messages []Message)
 
 	resp, err := c.client.Do(req)
 	if err != nil {
+		printCurlCommand("POST", c.baseURL+"/chat/completions", req.Header, jsonBody)
 		return "", fmt.Errorf("failed to send request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
+		printCurlCommand("POST", c.baseURL+"/chat/completions", req.Header, jsonBody)
 		return "", fmt.Errorf("failed to read response: %w", err)
 	}
 
 	var result openRouterChatResponse
 	if err := json.Unmarshal(body, &result); err != nil {
+		printCurlCommand("POST", c.baseURL+"/chat/completions", req.Header, jsonBody)
 		return "", fmt.Errorf("failed to unmarshal response: %w", err)
 	}
 
 	if result.Error != nil {
+		printCurlCommand("POST", c.baseURL+"/chat/completions", req.Header, jsonBody)
 		return "", fmt.Errorf("OpenRouter API error: %s (code %d)", result.Error.Message, result.Error.Code)
 	}
 
@@ -171,21 +176,25 @@ func (e *OpenRouterEmbedder) EmbedBatch(ctx context.Context, texts []string) ([]
 
 	resp, err := e.client.Do(req)
 	if err != nil {
+		printCurlCommand("POST", e.baseURL+"/embeddings", req.Header, jsonBody)
 		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
+		printCurlCommand("POST", e.baseURL+"/embeddings", req.Header, jsonBody)
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
 	var result openRouterEmbedResponse
 	if err := json.Unmarshal(body, &result); err != nil {
+		printCurlCommand("POST", e.baseURL+"/embeddings", req.Header, jsonBody)
 		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
 	}
 
 	if result.Error != nil {
+		printCurlCommand("POST", e.baseURL+"/embeddings", req.Header, jsonBody)
 		return nil, fmt.Errorf("OpenRouter API error: %s (code %d)", result.Error.Message, result.Error.Code)
 	}
 
@@ -207,4 +216,26 @@ func (e *OpenRouterEmbedder) Dimensions() int {
 	}
 	// Default for most models
 	return 1536
+}
+
+// printCurlCommand prints the equivalent curl command for debugging
+func printCurlCommand(method, url string, headers http.Header, body []byte) {
+	fmt.Fprintf(os.Stderr, "\n[DEBUG] Equivalent curl command:\n")
+	fmt.Fprintf(os.Stderr, "curl --location '%s' \\\n", url)
+
+	for key, values := range headers {
+		for _, value := range values {
+			fmt.Fprintf(os.Stderr, "  --header '%s: %s' \\\n", key, value)
+		}
+	}
+
+	if len(body) > 0 {
+		// Pretty print JSON for readability
+		var prettyJSON bytes.Buffer
+		if err := json.Indent(&prettyJSON, body, "", "  "); err == nil {
+			fmt.Fprintf(os.Stderr, "  --data '%s'\n\n", prettyJSON.String())
+		} else {
+			fmt.Fprintf(os.Stderr, "  --data '%s'\n\n", string(body))
+		}
+	}
 }

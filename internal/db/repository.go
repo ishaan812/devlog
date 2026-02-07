@@ -235,19 +235,21 @@ func (r *SQLRepository) GetAllCodebases(ctx context.Context) ([]Codebase, error)
 
 // UpsertBranch creates or updates a branch.
 func (r *SQLRepository) UpsertBranch(ctx context.Context, branch *Branch) error {
-	if _, err := r.db.ExecContext(ctx, `DELETE FROM branches WHERE codebase_id = $1 AND name = $2`, branch.CodebaseID, branch.Name); err != nil {
-		return fmt.Errorf("delete existing branch: %w", err)
-	}
 	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO branches (id, codebase_id, name, is_default, base_branch, summary, story, status,
 			first_commit_hash, last_commit_hash, commit_count, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+		ON CONFLICT (codebase_id, name) DO UPDATE SET
+			is_default = EXCLUDED.is_default, base_branch = EXCLUDED.base_branch,
+			summary = EXCLUDED.summary, story = EXCLUDED.story, status = EXCLUDED.status,
+			first_commit_hash = EXCLUDED.first_commit_hash, last_commit_hash = EXCLUDED.last_commit_hash,
+			commit_count = EXCLUDED.commit_count, updated_at = EXCLUDED.updated_at`,
 		branch.ID, branch.CodebaseID, branch.Name, branch.IsDefault, NullString(branch.BaseBranch),
 		NullString(branch.Summary), NullString(branch.Story), NullString(branch.Status),
 		NullString(branch.FirstCommitHash), NullString(branch.LastCommitHash), branch.CommitCount,
 		NullTime(branch.CreatedAt), NullTime(branch.UpdatedAt))
 	if err != nil {
-		return fmt.Errorf("insert branch: %w", err)
+		return fmt.Errorf("upsert branch: %w", err)
 	}
 	return nil
 }
@@ -585,18 +587,38 @@ func (r *SQLRepository) UpdateBranchCursor(ctx context.Context, codebaseID, bran
 
 // UpsertFolder creates or updates a folder.
 func (r *SQLRepository) UpsertFolder(ctx context.Context, folder *Folder) error {
-	if _, err := r.db.ExecContext(ctx, `DELETE FROM folders WHERE codebase_id = $1 AND path = $2`, folder.CodebaseID, folder.Path); err != nil {
-		return fmt.Errorf("delete existing folder: %w", err)
-	}
-	_, err := r.db.ExecContext(ctx, `
-		INSERT INTO folders (id, codebase_id, path, name, depth, parent_path, summary, purpose, file_count, indexed_at, embedding)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-		folder.ID, folder.CodebaseID, folder.Path, folder.Name, folder.Depth, NullString(folder.ParentPath),
-		NullString(folder.Summary), NullString(folder.Purpose), folder.FileCount, NullTime(folder.IndexedAt),
-		NullString(EmbeddingToJSON(folder.Embedding)))
+	// First try to update existing folder to preserve folder_id and foreign key references
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE folders 
+		SET name = $3, depth = $4, parent_path = $5, summary = $6, purpose = $7, 
+		    file_count = $8, indexed_at = $9, embedding = $10
+		WHERE codebase_id = $1 AND path = $2`,
+		folder.CodebaseID, folder.Path, folder.Name, folder.Depth, NullString(folder.ParentPath),
+		NullString(folder.Summary), NullString(folder.Purpose), folder.FileCount, 
+		NullTime(folder.IndexedAt), NullString(EmbeddingToJSON(folder.Embedding)))
+	
 	if err != nil {
-		return fmt.Errorf("insert folder: %w", err)
+		return fmt.Errorf("update folder: %w", err)
 	}
+
+	// If no rows were updated, insert new folder
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check rows affected: %w", err)
+	}
+
+	if rowsAffected == 0 {
+		_, err := r.db.ExecContext(ctx, `
+			INSERT INTO folders (id, codebase_id, path, name, depth, parent_path, summary, purpose, file_count, indexed_at, embedding)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+			folder.ID, folder.CodebaseID, folder.Path, folder.Name, folder.Depth, NullString(folder.ParentPath),
+			NullString(folder.Summary), NullString(folder.Purpose), folder.FileCount, NullTime(folder.IndexedAt),
+			NullString(EmbeddingToJSON(folder.Embedding)))
+		if err != nil {
+			return fmt.Errorf("insert folder: %w", err)
+		}
+	}
+	
 	return nil
 }
 
@@ -697,20 +719,42 @@ func (r *SQLRepository) DeleteFoldersByPaths(ctx context.Context, codebaseID str
 
 // UpsertFileIndex creates or updates a file index.
 func (r *SQLRepository) UpsertFileIndex(ctx context.Context, file *FileIndex) error {
-	if _, err := r.db.ExecContext(ctx, `DELETE FROM file_indexes WHERE codebase_id = $1 AND path = $2`, file.CodebaseID, file.Path); err != nil {
-		return fmt.Errorf("delete existing file index: %w", err)
-	}
-	_, err := r.db.ExecContext(ctx, `
-		INSERT INTO file_indexes (id, codebase_id, folder_id, path, name, extension, language,
-			size_bytes, line_count, summary, purpose, key_exports, dependencies, content_hash, indexed_at, embedding)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
-		file.ID, file.CodebaseID, NullString(file.FolderID), file.Path, file.Name, NullString(file.Extension),
-		NullString(file.Language), file.SizeBytes, file.LineCount, NullString(file.Summary), NullString(file.Purpose),
-		ToJSON(file.KeyExports), ToJSON(file.Dependencies), NullString(file.ContentHash), NullTime(file.IndexedAt),
-		NullString(EmbeddingToJSON(file.Embedding)))
+	// First try to update existing file to preserve file_id and any future foreign key references
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE file_indexes 
+		SET folder_id = $3, name = $4, extension = $5, language = $6, size_bytes = $7, 
+		    line_count = $8, summary = $9, purpose = $10, key_exports = $11, 
+		    dependencies = $12, content_hash = $13, indexed_at = $14, embedding = $15
+		WHERE codebase_id = $1 AND path = $2`,
+		file.CodebaseID, file.Path, NullString(file.FolderID), file.Name, NullString(file.Extension),
+		NullString(file.Language), file.SizeBytes, file.LineCount, NullString(file.Summary), 
+		NullString(file.Purpose), ToJSON(file.KeyExports), ToJSON(file.Dependencies), 
+		NullString(file.ContentHash), NullTime(file.IndexedAt), NullString(EmbeddingToJSON(file.Embedding)))
+	
 	if err != nil {
-		return fmt.Errorf("insert file index: %w", err)
+		return fmt.Errorf("update file index: %w", err)
 	}
+
+	// If no rows were updated, insert new file
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check rows affected: %w", err)
+	}
+
+	if rowsAffected == 0 {
+		_, err := r.db.ExecContext(ctx, `
+			INSERT INTO file_indexes (id, codebase_id, folder_id, path, name, extension, language,
+				size_bytes, line_count, summary, purpose, key_exports, dependencies, content_hash, indexed_at, embedding)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
+			file.ID, file.CodebaseID, NullString(file.FolderID), file.Path, file.Name, NullString(file.Extension),
+			NullString(file.Language), file.SizeBytes, file.LineCount, NullString(file.Summary), NullString(file.Purpose),
+			ToJSON(file.KeyExports), ToJSON(file.Dependencies), NullString(file.ContentHash), NullTime(file.IndexedAt),
+			NullString(EmbeddingToJSON(file.Embedding)))
+		if err != nil {
+			return fmt.Errorf("insert file index: %w", err)
+		}
+	}
+	
 	return nil
 }
 

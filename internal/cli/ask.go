@@ -99,6 +99,11 @@ func runAsk(cmd *cobra.Command, args []string) error {
 		if llmCfg.APIKey == "" {
 			return fmt.Errorf("OpenRouter API key not configured. Run 'devlog onboard' or set OPENROUTER_API_KEY")
 		}
+	case llm.ProviderGemini:
+		llmCfg.APIKey = cfg.GetAPIKey("gemini")
+		if llmCfg.APIKey == "" {
+			return fmt.Errorf("Gemini API key not configured. Run 'devlog onboard' or set GEMINI_API_KEY")
+		}
 	case llm.ProviderBedrock:
 		llmCfg.AWSAccessKeyID = cfg.AWSAccessKeyID
 		llmCfg.AWSSecretAccessKey = cfg.AWSSecretAccessKey

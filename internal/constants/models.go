@@ -29,6 +29,11 @@ var DefaultModels = map[Provider]ModelConfig{
 		EmbeddingModel: "openai/text-embedding-3-small",
 		BaseURL:        "https://openrouter.ai/api/v1",
 	},
+	ProviderGemini: {
+		LLMModel:       "gemini-3-flash-preview",
+		EmbeddingModel: "gemini-embedding-001",
+		BaseURL:        "", // SDK handles endpoint
+	},
 	ProviderBedrock: {
 		LLMModel:       "anthropic.claude-opus-4-6-20260205-v1:0",
 		EmbeddingModel: "",
@@ -69,13 +74,13 @@ func GetEmbeddingModels(provider Provider) []ModelOption {
 // llmModels contains selectable LLM models per provider
 var llmModels = map[Provider][]ModelOption{
 	ProviderOllama: {
-		{ID: "1", Model: "llama3.1", Description: "Meta Llama 3.1 (default, recommended)"},
+		{ID: "1", Model: "llama3.2", Description: "Meta Llama 3.2 (default, recommended) "},
 		{ID: "2", Model: "deepseek-r1", Description: "DeepSeek R1 (strong reasoning)"},
 		{ID: "3", Model: "qwen3", Description: "Qwen3 (dense & MoE)"},
 		{ID: "4", Model: "gemma3", Description: "Gemma 3 (best single GPU)"},
 		{ID: "5", Model: "phi-4", Description: "Phi-4 14B (Microsoft)"},
 		{ID: "6", Model: "qwen3-coder-next", Description: "Qwen3 Coder (coding specialist)"},
-		{ID: "7", Model: "llama3.2", Description: "Meta Llama 3.2 (lightweight)"},
+		{ID: "7", Model: "llama3.1", Description: "Meta Llama 3.1 (lightweight) "},
 		{ID: "8", Model: "kimi-k2.5", Description: "Kimi K2.5 (multimodal, agentic)"},
 	},
 	ProviderOpenAI: {
@@ -102,6 +107,13 @@ var llmModels = map[Provider][]ModelOption{
 		{ID: "9", Model: "deepseek/deepseek-v3.2", Description: "DeepSeek V3.2 (very cheap, ~90% GPT-5)"},
 		{ID: "10", Model: "moonshot/kimi-k2.5-0127", Description: "Kimi K2.5 (multimodal, agentic)"},
 	},
+	ProviderGemini: {
+		{ID: "1", Model: "gemini-3-flash-preview", Description: "Gemini 3 Flash (default, fast & balanced)"},
+		{ID: "2", Model: "gemini-3-pro-preview", Description: "Gemini 3 Pro (advanced reasoning with thinking)"},
+		{ID: "3", Model: "gemini-2.5-flash", Description: "Gemini 2.5 Flash (stable)"},
+		{ID: "4", Model: "gemini-2.5-pro", Description: "Gemini 2.5 Pro (stable, coding)"},
+		{ID: "5", Model: "gemini-2.0-flash", Description: "Gemini 2.0 Flash (legacy, multimodal)"},
+	},
 	ProviderBedrock: {
 		{ID: "1", Model: "anthropic.claude-sonnet-4-5-20250929-v1:0", Description: "Claude Sonnet 4.5 (balanced)"},
 		{ID: "2", Model: "anthropic.claude-opus-4-6-20260205-v1:0", Description: "Claude Opus 4.6 (most powerful)"},
@@ -124,6 +136,10 @@ var embeddingModels = map[Provider][]ModelOption{
 	ProviderOpenRouter: {
 		{ID: "1", Model: "openai/text-embedding-3-small", Description: "OpenAI Ada v3 Small (default)"},
 		{ID: "2", Model: "openai/text-embedding-3-large", Description: "OpenAI Ada v3 Large"},
+	},
+	ProviderGemini: {
+		{ID: "1", Model: "gemini-embedding-001", Description: "Gemini Embedding 001 (default, 3072 dims)"},
+		{ID: "2", Model: "text-embedding-004", Description: "Text Embedding 004 (768 dims, lightweight)"},
 	},
 	ProviderVoyageAI: {
 		{ID: "1", Model: "voyage-3.5", Description: "Voyage 3.5 (default, recommended)"},

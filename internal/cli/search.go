@@ -402,6 +402,8 @@ func createEmbedder(cfg *config.Config) (llm.EmbeddingClient, error) {
 		llmCfg.APIKey = cfg.GetAPIKey("openai")
 	case llm.ProviderOpenRouter:
 		llmCfg.APIKey = cfg.GetAPIKey("openrouter")
+	case llm.ProviderGemini:
+		llmCfg.APIKey = cfg.GetAPIKey("gemini")
 	case llm.ProviderVoyageAI:
 		llmCfg.APIKey = cfg.GetAPIKey("voyageai")
 	case llm.ProviderOllama:

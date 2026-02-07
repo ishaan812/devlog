@@ -30,6 +30,7 @@ const (
 	ProviderAnthropic  = constants.ProviderAnthropic
 	ProviderBedrock    = constants.ProviderBedrock
 	ProviderOpenRouter = constants.ProviderOpenRouter
+	ProviderGemini     = constants.ProviderGemini
 	ProviderVoyageAI   = constants.ProviderVoyageAI
 )
 
@@ -175,6 +176,15 @@ func NewClient(cfg Config) (Client, error) {
 			return nil, fmt.Errorf("OpenRouter API key is required")
 		}
 		return NewOpenRouterClient(cfg.APIKey, cfg.Model), nil
+	case ProviderGemini:
+		if cfg.APIKey == "" {
+			return nil, fmt.Errorf("Gemini API key is required")
+		}
+		baseURL := cfg.BaseURL
+		if baseURL == "" {
+			baseURL = "https://generativelanguage.googleapis.com/v1beta"
+		}
+		return NewGeminiClient(baseURL, cfg.APIKey, cfg.Model), nil
 	default:
 		return nil, fmt.Errorf("unknown provider: %s", cfg.Provider)
 	}
@@ -194,6 +204,19 @@ func AvailableProviders() []Provider {
 // ProviderDescription returns a description for a provider.
 func ProviderDescription(p Provider) string {
 	return constants.ProviderDescription(p)
+}
+
+// NewGeminiClientWithOptions creates a Gemini client with options.
+func NewGeminiClientWithOptions(apiKey string, opts ...Option) (Client, error) {
+	if apiKey == "" {
+		return nil, fmt.Errorf("Gemini API key is required")
+	}
+	cfg := defaultConfig(ProviderGemini)
+	cfg.APIKey = apiKey
+	for _, opt := range opts {
+		opt(cfg)
+	}
+	return NewGeminiClient(cfg.BaseURL, cfg.APIKey, cfg.Model), nil
 }
 
 // NewOpenRouterClientWithOptions creates an OpenRouter client with options.

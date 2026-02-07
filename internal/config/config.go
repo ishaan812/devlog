@@ -38,6 +38,7 @@ type Config struct {
 	AnthropicAPIKey  string `json:"anthropic_api_key,omitempty"`
 	OpenAIAPIKey     string `json:"openai_api_key,omitempty"`
 	OpenRouterAPIKey string `json:"openrouter_api_key,omitempty"`
+	GeminiAPIKey     string `json:"gemini_api_key,omitempty"`
 	VoyageAIAPIKey   string `json:"voyageai_api_key,omitempty"`
 
 	// Bedrock config
@@ -200,6 +201,11 @@ func (c *Config) GetAPIKey(provider string) string {
 			return c.OpenRouterAPIKey
 		}
 		return os.Getenv("OPENROUTER_API_KEY")
+	case "gemini":
+		if c.GeminiAPIKey != "" {
+			return c.GeminiAPIKey
+		}
+		return os.Getenv("GEMINI_API_KEY")
 	case "voyageai":
 		if c.VoyageAIAPIKey != "" {
 			return c.VoyageAIAPIKey
@@ -223,6 +229,8 @@ func (c *Config) HasProvider(provider string) bool {
 		return c.GetAPIKey("openai") != ""
 	case "openrouter":
 		return c.GetAPIKey("openrouter") != ""
+	case "gemini":
+		return c.GetAPIKey("gemini") != ""
 	case "voyageai":
 		return c.GetAPIKey("voyageai") != ""
 	case "bedrock":
