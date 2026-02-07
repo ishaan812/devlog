@@ -1,0 +1,6 @@
+# DevLog - https://devlog.sh
+User-agent: *
+Allow: /
+
+# Sitemap
+Sitemap: https://devlog.sh/sitemap.xml

@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <defs>
+    <radialGradient id="glow" cx="50%" cy="40%" r="50%">
+      <stop offset="0%" stop-color="rgba(0,255,65,0.12)"/>
+      <stop offset="100%" stop-color="transparent"/>
+    </radialGradient>
+    <filter id="textGlow">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <!-- Background -->
+  <rect width="1200" height="630" fill="#0a0a0a"/>
+  <!-- Subtle grid -->
+  <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+    <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1a1a1a" stroke-width="0.5"/>
+  </pattern>
+  <rect width="1200" height="630" fill="url(#grid)" opacity="0.4"/>
+  <!-- Glow -->
+  <rect width="1200" height="630" fill="url(#glow)"/>
+  <!-- Top accent line -->
+  <rect x="0" y="0" width="1200" height="3" fill="#00ff41" opacity="0.8"/>
+  <!-- Terminal prompt -->
+  <text x="600" y="200" text-anchor="middle" font-family="monospace" font-size="42" fill="#00ff41" opacity="0.6" filter="url(#textGlow)">&gt;_</text>
+  <!-- DevLog title -->
+  <text x="600" y="310" text-anchor="middle" font-family="'Space Grotesk', sans-serif" font-size="96" font-weight="700" fill="#00ff41" font-style="italic" filter="url(#textGlow)">DevLog</text>
+  <!-- Subtitle -->
+  <text x="600" y="390" text-anchor="middle" font-family="'Space Grotesk', sans-serif" font-size="36" font-weight="600" fill="#e0e0e0">Stop Forgetting What You Shipped</text>
+  <!-- Tagline -->
+  <text x="600" y="460" text-anchor="middle" font-family="monospace" font-size="20" fill="#888888">AI-Powered CLI Activity Tracker for Developers</text>
+  <!-- Bottom border -->
+  <text x="600" y="540" text-anchor="middle" font-family="monospace" font-size="16" fill="#555555">npm i -g @devlog/cli  "  Open Source  "  MIT License</text>
+</svg>

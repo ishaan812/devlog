@@ -1,0 +1,22 @@
+{
+  "name": "DevLog - AI-Powered CLI Activity Tracker",
+  "short_name": "DevLog",
+  "description": "Turn git commits into changelogs & standups instantly. AI-powered CLI activity tracker for developers.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a0a0a",
+  "theme_color": "#0a0a0a",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    },
+    {
+      "src": "/favicon-192.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
