@@ -30,6 +30,15 @@ var commitSummaryPromptTemplate string
 //go:embed commit_summarizer.md
 var commitSummarizerPromptTemplate string
 
+//go:embed worklog_overall_summary.md
+var worklogOverallSummaryPromptTemplate string
+
+//go:embed worklog_day_updates.md
+var worklogDayUpdatesPromptTemplate string
+
+//go:embed worklog_branch_summary.md
+var worklogBranchSummaryPromptTemplate string
+
 func BuildSQLPrompt(schema, question string) string {
 	return fmt.Sprintf(strings.TrimSpace(sqlGenerationPromptTemplate), schema, question)
 }
@@ -50,14 +59,26 @@ func BuildFolderSummaryPrompt(folderPath, files, subfolders string) string {
 	return fmt.Sprintf(strings.TrimSpace(folderSummaryPromptTemplate), folderPath, files, subfolders)
 }
 
-func BuildCodebaseSummaryPrompt(name, techStack, mainFolders string, totalFiles int) string {
-	return fmt.Sprintf(strings.TrimSpace(codebaseSummaryPromptTemplate), name, techStack, mainFolders, totalFiles)
+func BuildCodebaseSummaryPrompt(name, mainFolders string, totalFiles int, readmeContent string) string {
+	return fmt.Sprintf(strings.TrimSpace(codebaseSummaryPromptTemplate), name, mainFolders, totalFiles, readmeContent)
 }
 
 func BuildCommitSummaryPrompt(commitContent string) string {
 	return fmt.Sprintf(strings.TrimSpace(commitSummaryPromptTemplate), commitContent)
 }
 
-func BuildCommitSummarizerPrompt(commitContent string) string {
-	return fmt.Sprintf(strings.TrimSpace(commitSummarizerPromptTemplate), commitContent)
+func BuildCommitSummarizerPrompt(projectContext, commitContent string) string {
+	return fmt.Sprintf(strings.TrimSpace(commitSummarizerPromptTemplate), projectContext, commitContent)
+}
+
+func BuildWorklogOverallSummaryPrompt(projectContext, commits, stats string) string {
+	return fmt.Sprintf(strings.TrimSpace(worklogOverallSummaryPromptTemplate), projectContext, commits, stats)
+}
+
+func BuildWorklogDayUpdatesPrompt(projectContext, commits string) string {
+	return fmt.Sprintf(strings.TrimSpace(worklogDayUpdatesPromptTemplate), projectContext, commits)
+}
+
+func BuildWorklogBranchSummaryPrompt(projectContext, commits, stats string) string {
+	return fmt.Sprintf(strings.TrimSpace(worklogBranchSummaryPromptTemplate), projectContext, commits, stats)
 }

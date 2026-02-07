@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -614,7 +615,11 @@ func ingestBranch(ctx context.Context, dbRepo *db.SQLRepository, repo *git.Repos
 
 		var commitSummary string
 		if isUserCommit && llmClient != nil && len(fileChanges) > 0 {
-			summary, err := generateCommitSummary(llmClient, gitCommit.Message, fileChanges)
+			projectCtx := ""
+			if codebase != nil {
+				projectCtx = codebase.Summary
+			}
+			summary, err := generateCommitSummary(llmClient, gitCommit.Message, fileChanges, projectCtx)
 			if err != nil {
 				return 0, 0, fmt.Errorf("failed to generate commit summary for %s: %w", hash[:8], err)
 			}
@@ -846,10 +851,20 @@ func indexCodebase(absPath string, cfg *config.Config) error {
 			embedder = nil
 		}
 	}
-	if !ingestSkipSummaries && summarizer != nil && (isFirstIndex || ingestForceReindex || codebase.Summary == "") {
+	if !ingestSkipSummaries && summarizer != nil {
+		// Read README.md for project context
+		readmeContent := ""
+		for _, readmeName := range []string{"README.md", "readme.md", "Readme.md"} {
+			readmePath := filepath.Join(absPath, readmeName)
+			if data, err := os.ReadFile(readmePath); err == nil {
+				readmeContent = string(data)
+				break
+			}
+		}
+
 		s.Suffix = " Generating codebase summary..."
 		s.Start()
-		summary, err := summarizer.SummarizeCodebase(ctx, scanResult)
+		summary, err := summarizer.SummarizeCodebase(ctx, scanResult, readmeContent)
 		s.Stop()
 		if err != nil {
 			return fmt.Errorf("failed to generate codebase summary: %w\n\nTo skip summaries, use: --skip-summaries", err)
@@ -1188,8 +1203,7 @@ func formatBytes(b int64) string {
 	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGTPE"[exp])
 }
 
-func generateCommitSummary(client llm.Client, commitMessage string, fileChanges []*db.FileChange) (string, error) {
-	// Build context from file changes
+func generateCommitSummary(client llm.Client, commitMessage string, fileChanges []*db.FileChange, projectContext string) (string, error) {
 	var sb strings.Builder
 	sb.WriteString("Commit message: ")
 	sb.WriteString(commitMessage)
@@ -1198,39 +1212,20 @@ func generateCommitSummary(client llm.Client, commitMessage string, fileChanges 
 	totalAdditions := 0
 	totalDeletions := 0
 
-	for i, fc := range fileChanges {
-		if i >= 20 {
-			sb.WriteString(fmt.Sprintf("... and %d more files\n", len(fileChanges)-20))
-			break
-		}
-
+	for _, fc := range fileChanges {
 		sb.WriteString(fmt.Sprintf("- %s (%s): +%d/-%d\n", fc.FilePath, fc.ChangeType, fc.Additions, fc.Deletions))
 		totalAdditions += fc.Additions
 		totalDeletions += fc.Deletions
 
-		// Include patch snippet for context (first 500 chars)
-		if fc.Patch != "" && len(fc.Patch) > 0 {
-			patchPreview := fc.Patch
-			if len(patchPreview) > 500 {
-				patchPreview = patchPreview[:500] + "..."
-			}
-			// Only include actual code changes, not headers
-			lines := strings.Split(patchPreview, "\n")
-			var codeLines []string
+		// Include full patch/diff for context
+		if fc.Patch != "" {
+			sb.WriteString("  Diff:\n")
+			lines := strings.Split(fc.Patch, "\n")
 			for _, line := range lines {
 				if strings.HasPrefix(line, "+") || strings.HasPrefix(line, "-") {
 					if !strings.HasPrefix(line, "+++") && !strings.HasPrefix(line, "---") {
-						codeLines = append(codeLines, line)
+						sb.WriteString(fmt.Sprintf("    %s\n", line))
 					}
-				}
-			}
-			if len(codeLines) > 0 {
-				sb.WriteString("  Changes:\n")
-				for j, line := range codeLines {
-					if j >= 10 {
-						break
-					}
-					sb.WriteString(fmt.Sprintf("    %s\n", line))
 				}
 			}
 		}
@@ -1238,7 +1233,7 @@ func generateCommitSummary(client llm.Client, commitMessage string, fileChanges 
 
 	sb.WriteString(fmt.Sprintf("\nTotal: +%d/-%d lines across %d files\n", totalAdditions, totalDeletions, len(fileChanges)))
 
-	prompt := prompts.BuildCommitSummarizerPrompt(sb.String())
+	prompt := prompts.BuildCommitSummarizerPrompt(projectContext, sb.String())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
@@ -1365,7 +1360,11 @@ func fillMissingSummaries(ctx context.Context, dbRepo *db.SQLRepository, repo *g
 		for j := range fileChanges {
 			fcPtrs = append(fcPtrs, &fileChanges[j])
 		}
-		summary, err := generateCommitSummary(llmClient, commit.Message, fcPtrs)
+		projectCtx := ""
+		if codebase != nil {
+			projectCtx = codebase.Summary
+		}
+		summary, err := generateCommitSummary(llmClient, commit.Message, fcPtrs, projectCtx)
 		if err != nil {
 			return 0, fmt.Errorf("failed to generate summary for commit %s: %w", commit.Hash[:8], err)
 		}

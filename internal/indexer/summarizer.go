@@ -86,15 +86,7 @@ func (s *Summarizer) SummarizeFolder(ctx context.Context, folder *FolderInfo) (*
 }
 
 // SummarizeCodebase generates an overall summary for the codebase
-func (s *Summarizer) SummarizeCodebase(ctx context.Context, result *ScanResult) (string, error) {
-	techStack := DetectTechStack(result.Files)
-	var techList []string
-	for tech, count := range techStack {
-		if count > 2 {
-			techList = append(techList, tech)
-		}
-	}
-
+func (s *Summarizer) SummarizeCodebase(ctx context.Context, result *ScanResult, readmeContent string) (string, error) {
 	var mainFolders []string
 	for path, folder := range result.Folders {
 		if folder.Depth == 1 {
@@ -102,11 +94,15 @@ func (s *Summarizer) SummarizeCodebase(ctx context.Context, result *ScanResult) 
 		}
 	}
 
+	if readmeContent == "" {
+		readmeContent = "(No README found)"
+	}
+
 	prompt := prompts.BuildCodebaseSummaryPrompt(
 		result.Name,
-		strings.Join(techList, ", "),
 		strings.Join(mainFolders, ", "),
-		len(result.Files))
+		len(result.Files),
+		readmeContent)
 
 	ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
@@ -116,15 +112,7 @@ func (s *Summarizer) SummarizeCodebase(ctx context.Context, result *ScanResult) 
 		return "", err
 	}
 
-	// Extract just the summary line
-	lines := strings.Split(response, "\n")
-	for _, line := range lines {
-		if strings.HasPrefix(line, "SUMMARY:") {
-			return strings.TrimSpace(strings.TrimPrefix(line, "SUMMARY:")), nil
-		}
-	}
-
-	return response, nil
+	return strings.TrimSpace(response), nil
 }
 
 func parseFileSummary(response string) *FileSummary {

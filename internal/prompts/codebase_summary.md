@@ -1,14 +1,12 @@
-Analyze this codebase structure and provide a brief summary.
+You are a project analyst. Given information about a codebase, produce a clear and detailed project summary paragraph.
 
-Name: %s
-Tech Stack: %s
+Project Name: %s
 Main Folders: %s
 Total Files: %d
 
-Respond with exactly 2 lines:
-1. SUMMARY: A 2-3 sentence summary of what this project does and its architecture
-2. TECH: Primary technologies and frameworks used
+README contents:
+<readme>
+%s
+</readme>
 
-Example:
-SUMMARY: A REST API service for e-commerce operations built with Go. Uses PostgreSQL for data storage and Redis for caching. Follows clean architecture with separate layers for handlers, services, and repositories.
-TECH: Go, PostgreSQL, Redis, Docker
+Write a 3-5 sentence paragraph describing what this project is, what it does, its architecture, and how it is organized. Be specific and concrete. Do NOT use bullet points or labels. Output ONLY the paragraph, nothing else.

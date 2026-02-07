@@ -15,6 +15,7 @@ import (
 	"github.com/ishaan812/devlog/internal/config"
 	"github.com/ishaan812/devlog/internal/db"
 	"github.com/ishaan812/devlog/internal/llm"
+	"github.com/ishaan812/devlog/internal/prompts"
 )
 
 var (
@@ -154,6 +155,8 @@ func runWorklog(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	projectContext := getProjectContext(codebase)
+
 	var markdown string
 	switch worklogGroupBy {
 	case "branch":
@@ -161,10 +164,10 @@ func runWorklog(cmd *cobra.Command, args []string) error {
 		if groupErr != nil {
 			return groupErr
 		}
-		markdown, err = generateBranchWorklogMarkdown(groups, client, cfg, loc)
+		markdown, err = generateBranchWorklogMarkdown(groups, client, cfg, loc, projectContext)
 	default:
 		groups := groupByDate(commits, loc)
-		markdown, err = generateWorklogMarkdown(groups, client, cfg, loc)
+		markdown, err = generateWorklogMarkdown(groups, client, cfg, loc, projectContext)
 	}
 
 	if err != nil {
@@ -266,6 +269,43 @@ func getString(m map[string]any, key string) string {
 	return ""
 }
 
+// getProjectContext returns the codebase summary for use as LLM context
+func getProjectContext(codebase *db.Codebase) string {
+	if codebase != nil && codebase.Summary != "" {
+		return codebase.Summary
+	}
+	return "(No project context available)"
+}
+
+// buildCommitContext builds a rich text block describing a single commit for LLM consumption
+func buildCommitContext(c commitData) string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Commit %s: %s\n", c.Hash[:7], strings.TrimSpace(c.Message)))
+	if c.Summary != "" {
+		sb.WriteString(fmt.Sprintf("Summary: %s\n", c.Summary))
+	}
+	sb.WriteString(fmt.Sprintf("Stats: +%d/-%d lines\n", c.Additions, c.Deletions))
+	if len(c.Files) > 0 {
+		sb.WriteString(fmt.Sprintf("Files: %s\n", strings.Join(c.Files, ", ")))
+	}
+	return sb.String()
+}
+
+// buildAggregateStats builds a stats summary string for a set of commits
+func buildAggregateStats(commits []commitData) string {
+	totalAdditions := 0
+	totalDeletions := 0
+	fileSet := make(map[string]bool)
+	for _, c := range commits {
+		totalAdditions += c.Additions
+		totalDeletions += c.Deletions
+		for _, f := range c.Files {
+			fileSet[f] = true
+		}
+	}
+	return fmt.Sprintf("%d commits | +%d/-%d lines | %d unique files changed", len(commits), totalAdditions, totalDeletions, len(fileSet))
+}
+
 func groupByDate(commits []commitData, loc *time.Location) []dayGroup {
 	dateMap := make(map[string][]commitData)
 
@@ -360,7 +400,7 @@ func createWorklogClient(cfg *config.Config) (llm.Client, error) {
 	return llm.NewClient(llmCfg)
 }
 
-func generateWorklogMarkdown(groups []dayGroup, client llm.Client, cfg *config.Config, loc *time.Location) (string, error) {
+func generateWorklogMarkdown(groups []dayGroup, client llm.Client, cfg *config.Config, loc *time.Location, projectContext string) (string, error) {
 	var sb strings.Builder
 
 	// Header
@@ -385,7 +425,7 @@ func generateWorklogMarkdown(groups []dayGroup, client llm.Client, cfg *config.C
 
 	// Summary section (with LLM if available)
 	if client != nil {
-		summary, err := generateOverallSummary(groups, client)
+		summary, err := generateOverallSummary(groups, client, projectContext)
 		if err != nil {
 			return "", fmt.Errorf("failed to generate overall summary: %w", err)
 		}
@@ -426,7 +466,7 @@ func generateWorklogMarkdown(groups []dayGroup, client llm.Client, cfg *config.C
 
 			// Generate summarized updates using LLM
 			if client != nil {
-				updatesSummary, err := generateDayBranchUpdates(commits, client)
+				updatesSummary, err := generateDayBranchUpdates(commits, client, projectContext)
 				if err != nil {
 					return "", fmt.Errorf("failed to generate day/branch updates: %w", err)
 				}
@@ -465,7 +505,7 @@ func generateWorklogMarkdown(groups []dayGroup, client llm.Client, cfg *config.C
 	return sb.String(), nil
 }
 
-func generateBranchWorklogMarkdown(groups []branchGroup, client llm.Client, cfg *config.Config, loc *time.Location) (string, error) {
+func generateBranchWorklogMarkdown(groups []branchGroup, client llm.Client, cfg *config.Config, loc *time.Location, projectContext string) (string, error) {
 	var sb strings.Builder
 
 	// Header
@@ -504,7 +544,7 @@ func generateBranchWorklogMarkdown(groups []branchGroup, client llm.Client, cfg 
 
 		// Generate a consolidated summary using LLM if available
 		if client != nil {
-			branchSummary, err := generateBranchSummary(group, client)
+			branchSummary, err := generateBranchSummary(group, client, projectContext)
 			if err != nil {
 				return "", fmt.Errorf("failed to generate branch summary: %w", err)
 			}
@@ -569,28 +609,19 @@ func generateBranchWorklogMarkdown(groups []branchGroup, client llm.Client, cfg 
 	return sb.String(), nil
 }
 
-func generateBranchSummary(group branchGroup, client llm.Client) (string, error) {
-	// Collect all summaries and messages
-	var summaries []string
+func generateBranchSummary(group branchGroup, client llm.Client, projectContext string) (string, error) {
+	// Build rich context for each commit
+	var commitBlocks []string
 	for _, c := range group.Commits {
-		if c.Summary != "" {
-			summaries = append(summaries, c.Summary)
-		} else {
-			summaries = append(summaries, strings.TrimSpace(c.Message))
-		}
+		commitBlocks = append(commitBlocks, buildCommitContext(c))
 	}
 
-	if len(summaries) == 0 {
+	if len(commitBlocks) == 0 {
 		return "", nil
 	}
 
-	prompt := fmt.Sprintf(`You are a worklog summarizer. Given commit descriptions from one branch, output ONLY a 2-4 sentence paragraph summarizing the work done. No preamble, no labels, no bullet points. Use past tense active voice starting with verbs like "Added", "Implemented", "Fixed", "Refactored".
-
-<commits>
-%s
-</commits>
-
-Summary:`, strings.Join(summaries, "\n\n"))
+	stats := buildAggregateStats(group.Commits)
+	prompt := prompts.BuildWorklogBranchSummaryPrompt(projectContext, strings.Join(commitBlocks, "\n---\n"), stats)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
@@ -601,50 +632,19 @@ Summary:`, strings.Join(summaries, "\n\n"))
 	return result, nil
 }
 
-func generateDayBranchUpdates(commits []commitData, client llm.Client) (string, error) {
-	// Collect summaries or messages
-	var descriptions []string
+func generateDayBranchUpdates(commits []commitData, client llm.Client, projectContext string) (string, error) {
+	// Build rich context for each commit
+	var commitBlocks []string
 	for _, c := range commits {
-		if c.Summary != "" {
-			descriptions = append(descriptions, c.Summary)
-		} else {
-			descriptions = append(descriptions, strings.TrimSpace(c.Message))
-		}
+		commitBlocks = append(commitBlocks, buildCommitContext(c))
 	}
 
-	if len(descriptions) == 0 {
+	if len(commitBlocks) == 0 {
 		return "", nil
 	}
 
-	// For a single commit, make a concise bullet point
-	if len(descriptions) == 1 {
-		prompt := fmt.Sprintf(`Rewrite this commit description as one concise sentence. Use past tense active voice starting with a verb (e.g. "Added", "Fixed", "Updated"). Output ONLY the sentence, nothing else.
+	prompt := prompts.BuildWorklogDayUpdatesPrompt(projectContext, strings.Join(commitBlocks, "\n---\n"))
 
-<description>
-%s
-</description>
-
-Sentence:`, descriptions[0])
-		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-		defer cancel()
-		result, err := client.Complete(ctx, prompt)
-		if err != nil {
-			return "", err
-		}
-		result = strings.TrimSpace(result)
-		result = strings.TrimPrefix(result, "- ")
-		result = strings.TrimPrefix(result, "• ")
-		result = strings.TrimPrefix(result, "* ")
-		return fmt.Sprintf("- %s", result), nil
-	}
-	// For multiple commits, create summarized bullet points
-	prompt := fmt.Sprintf(`Summarize these commits into 2-4 bullet points. Each bullet is one sentence using past tense active voice starting with a verb (e.g. "Added", "Fixed", "Refactored"). Output ONLY the bullet points, one per line, each starting with "- ".
-
-<commits>
-%s
-</commits>
-
-Bullets:`, strings.Join(descriptions, "\n\n"))
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	result, err := client.Complete(ctx, prompt)
@@ -654,31 +654,23 @@ Bullets:`, strings.Join(descriptions, "\n\n"))
 	return result, nil
 }
 
-func generateOverallSummary(groups []dayGroup, client llm.Client) (string, error) {
-	// Collect all commit messages
-	var messages []string
+func generateOverallSummary(groups []dayGroup, client llm.Client, projectContext string) (string, error) {
+	// Build rich context for all commits
+	var allCommits []commitData
+	var commitBlocks []string
 	for _, g := range groups {
 		for _, c := range g.Commits {
-			messages = append(messages, strings.TrimSpace(c.Message))
+			allCommits = append(allCommits, c)
+			commitBlocks = append(commitBlocks, buildCommitContext(c))
 		}
 	}
 
-	if len(messages) == 0 {
+	if len(commitBlocks) == 0 {
 		return "", nil
 	}
 
-	// Limit to avoid context overflow
-	if len(messages) > 50 {
-		messages = messages[:50]
-	}
-
-	prompt := fmt.Sprintf(`You are a worklog summarizer. Given commit messages from a time period, output ONLY a 2-3 sentence professional summary of work accomplished. No preamble, no bullet points, no labels. Use past tense active voice starting with verbs like "Added", "Implemented", "Fixed", "Refactored".
-
-<commits>
-%s
-</commits>
-
-Summary:`, strings.Join(messages, "\n"))
+	stats := buildAggregateStats(allCommits)
+	prompt := prompts.BuildWorklogOverallSummaryPrompt(projectContext, strings.Join(commitBlocks, "\n---\n"), stats)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
