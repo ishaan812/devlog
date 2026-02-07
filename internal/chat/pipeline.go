@@ -10,6 +10,7 @@ import (
 
 	"github.com/ishaan812/devlog/internal/db"
 	"github.com/ishaan812/devlog/internal/llm"
+	"github.com/ishaan812/devlog/internal/prompts"
 )
 
 // Pipeline handles question-answering using LLM and database.
@@ -66,7 +67,7 @@ func (p *Pipeline) Ask(ctx context.Context, question string) (string, error) {
 
 func (p *Pipeline) GenerateSQL(ctx context.Context, question string) (string, error) {
 	schema := db.GetSchemaDescription()
-	prompt := BuildSQLPrompt(schema, question)
+	prompt := prompts.BuildSQLPrompt(schema, question)
 
 	response, err := p.client.Complete(ctx, prompt)
 	if err != nil {
@@ -101,7 +102,7 @@ func (p *Pipeline) Summarize(ctx context.Context, question string, results []map
 		resultsStr = resultsStr[:10000] + "\n... (truncated)"
 	}
 
-	prompt := BuildSummarizationPrompt(question, resultsStr)
+	prompt := prompts.BuildSummarizationPrompt(question, resultsStr)
 
 	messages := []llm.Message{
 		{Role: "system", Content: "You are a helpful assistant that summarizes development activity data."},
@@ -112,7 +113,7 @@ func (p *Pipeline) Summarize(ctx context.Context, question string, results []map
 }
 
 func (p *Pipeline) ParseTimeFilter(ctx context.Context, question string) (*TimeFilter, error) {
-	prompt := BuildTimeFilterPrompt(question)
+	prompt := prompts.BuildTimeFilterPrompt(question)
 
 	response, err := p.client.Complete(ctx, prompt)
 	if err != nil {

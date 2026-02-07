@@ -18,6 +18,7 @@ import (
 	"github.com/ishaan812/devlog/internal/git"
 	"github.com/ishaan812/devlog/internal/indexer"
 	"github.com/ishaan812/devlog/internal/llm"
+	"github.com/ishaan812/devlog/internal/prompts"
 	"github.com/ishaan812/devlog/internal/tui"
 )
 
@@ -1237,15 +1238,7 @@ func generateCommitSummary(client llm.Client, commitMessage string, fileChanges 
 
 	sb.WriteString(fmt.Sprintf("\nTotal: +%d/-%d lines across %d files\n", totalAdditions, totalDeletions, len(fileChanges)))
 
-	prompt := fmt.Sprintf(`You are a commit summarizer. Given a git commit, output ONLY a 1-2 sentence technical summary. No preamble, no commentary, no bullet points.
-
-Use past tense active voice. Start directly with a verb like "Added", "Fixed", "Refactored", "Updated", "Implemented".
-
-<commit>
-%s
-</commit>
-
-Summary:`, sb.String())
+	prompt := prompts.BuildCommitSummarizerPrompt(sb.String())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()

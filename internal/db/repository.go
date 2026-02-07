@@ -878,12 +878,12 @@ func (r *SQLRepository) GetCodebaseStats(ctx context.Context, codebaseID string)
 	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM folders WHERE codebase_id = $1`, codebaseID).Scan(&stats.FolderCount); err != nil {
 		return nil, fmt.Errorf("count folders: %w", err)
 	}
-	
+
 	// Query file stats with explicit handling
 	var fileCount sql.NullInt64
 	var totalSize sql.NullInt64
 	var totalLines sql.NullInt64
-	
+
 	if err := r.db.QueryRowContext(ctx, `
 		SELECT COUNT(*) as file_count, 
 		       COALESCE(SUM(size_bytes), 0) as total_size, 
@@ -891,7 +891,7 @@ func (r *SQLRepository) GetCodebaseStats(ctx context.Context, codebaseID string)
 		FROM file_indexes WHERE codebase_id = $1`, codebaseID).Scan(&fileCount, &totalSize, &totalLines); err != nil {
 		return nil, fmt.Errorf("get file stats: %w", err)
 	}
-	
+
 	if fileCount.Valid {
 		stats.FileCount = fileCount.Int64
 	}

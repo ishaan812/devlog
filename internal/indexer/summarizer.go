@@ -2,11 +2,11 @@ package indexer
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"time"
 
 	"github.com/ishaan812/devlog/internal/llm"
+	"github.com/ishaan812/devlog/internal/prompts"
 )
 
 // Summarizer generates summaries for code files and folders.
@@ -33,53 +33,6 @@ type FolderSummary struct {
 	Purpose string `json:"purpose"`
 }
 
-const fileSummaryPrompt = `Analyze this code file and provide a brief summary.
-
-File: %s
-Language: %s
-
-Content (first 2000 chars):
-%s
-
-Respond with exactly 3 lines:
-1. SUMMARY: A one-sentence summary of what this file does
-2. PURPOSE: The main purpose (e.g., "API handler", "Data model", "Utility functions", "Configuration")
-3. EXPORTS: Key exports/functions/classes (comma-separated, max 5)
-
-Example:
-SUMMARY: Handles user authentication and session management
-PURPOSE: Authentication middleware
-EXPORTS: loginHandler, logoutHandler, validateToken, refreshSession`
-
-const folderSummaryPrompt = `Analyze this folder structure and provide a brief summary.
-
-Folder: %s
-Files: %s
-Subfolders: %s
-
-Respond with exactly 2 lines:
-1. SUMMARY: A one-sentence summary of what this folder contains
-2. PURPOSE: The main purpose (e.g., "API routes", "Database models", "UI components", "Utilities")
-
-Example:
-SUMMARY: Contains REST API endpoint handlers for user management
-PURPOSE: API handlers`
-
-const codebaseSummaryPrompt = `Analyze this codebase structure and provide a brief summary.
-
-Name: %s
-Tech Stack: %s
-Main Folders: %s
-Total Files: %d
-
-Respond with exactly 2 lines:
-1. SUMMARY: A 2-3 sentence summary of what this project does and its architecture
-2. TECH: Primary technologies and frameworks used
-
-Example:
-SUMMARY: A REST API service for e-commerce operations built with Go. Uses PostgreSQL for data storage and Redis for caching. Follows clean architecture with separate layers for handlers, services, and repositories.
-TECH: Go, PostgreSQL, Redis, Docker`
-
 // SummarizeFile generates a summary for a file
 func (s *Summarizer) SummarizeFile(ctx context.Context, file FileInfo) (*FileSummary, error) {
 	content := file.Content
@@ -87,7 +40,7 @@ func (s *Summarizer) SummarizeFile(ctx context.Context, file FileInfo) (*FileSum
 		content = content[:2000]
 	}
 
-	prompt := fmt.Sprintf(fileSummaryPrompt, file.Path, file.Language, content)
+	prompt := prompts.BuildFileSummaryPrompt(file.Path, file.Language, content)
 
 	ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
@@ -116,7 +69,7 @@ func (s *Summarizer) SummarizeFolder(ctx context.Context, folder *FolderInfo) (*
 		subfolderNames = append(subfolderNames, parts[len(parts)-1])
 	}
 
-	prompt := fmt.Sprintf(folderSummaryPrompt,
+	prompt := prompts.BuildFolderSummaryPrompt(
 		folder.Path,
 		strings.Join(fileNames, ", "),
 		strings.Join(subfolderNames, ", "))
@@ -149,7 +102,7 @@ func (s *Summarizer) SummarizeCodebase(ctx context.Context, result *ScanResult) 
 		}
 	}
 
-	prompt := fmt.Sprintf(codebaseSummaryPrompt,
+	prompt := prompts.BuildCodebaseSummaryPrompt(
 		result.Name,
 		strings.Join(techList, ", "),
 		strings.Join(mainFolders, ", "),
