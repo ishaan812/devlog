@@ -306,7 +306,7 @@ function Footer() {
   return (
     <footer className="py-6 px-5 md:px-12 flex flex-col md:flex-row items-center justify-between gap-4 md:gap-0 text-center md:text-left border-t border-border-main text-[11px] text-text-dim">
       <span className="font-mono font-bold text-green text-[13px]">
-        <span className="opacity-50" aria-hidden="true">&gt;_ </span>Devlog
+        <span className="opacity-50" aria-hidden="true">&gt;_ </span>DevLog
       </span>
       <nav className="flex gap-6" aria-label="Footer navigation">
         <a href="#" className="text-text-dim no-underline uppercase tracking-[1px] text-[11px] transition-colors duration-200 hover:text-green">Privacy</a>
