@@ -150,11 +150,6 @@ func initializeSchema(db *sql.DB) error {
 	if err != nil {
 		return fmt.Errorf("execute schema: %w", err)
 	}
-	// Run migrations for existing databases
-	_, err = db.Exec(Migrations)
-	if err != nil {
-		return fmt.Errorf("execute migrations: %w", err)
-	}
 	return nil
 }
 
@@ -180,19 +175,6 @@ func Transaction(ctx context.Context, db *sql.DB, fn func(tx *sql.Tx) error) err
 		return fmt.Errorf("commit transaction: %w", err)
 	}
 	return nil
-}
-
-// GetSchemaDescription returns the database schema description.
-func GetSchemaDescription() string {
-	return `Tables:
-1. developers(id, name, email, is_current_user)
-2. codebases(id, path, name, summary, tech_stack, default_branch, indexed_at)
-3. branches(id, codebase_id, name, is_default, summary, story, status, commit_count, ...)
-4. commits(id, hash, codebase_id, branch_id, author_email, message, summary, is_user_commit, ...)
-5. file_changes(id, commit_id, file_path, change_type, additions, deletions, patch)
-6. folders(id, codebase_id, path, name, depth, summary, purpose, file_count)
-7. file_indexes(id, codebase_id, path, name, language, summary, purpose)
-8. ingest_cursors(id, codebase_id, branch_name, last_commit_hash)`
 }
 
 // Global functions for convenience.

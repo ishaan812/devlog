@@ -168,15 +168,9 @@ func runOnboardLegacy() error {
 		}
 	}
 
-	// Step 3: Embedding model configuration
+	// Step 3: User info
 	fmt.Println()
-	printStep(3, "Embedding Model Configuration")
-	fmt.Println()
-	configureEmbeddings(cfg, reader)
-
-	// Step 4: User info
-	fmt.Println()
-	printStep(4, "Your information (optional)")
+	printStep(3, "Your information (optional)")
 	fmt.Println()
 
 	promptColor.Print("GitHub username (for identifying your commits): ")
@@ -217,9 +211,9 @@ func runOnboardLegacy() error {
 	s.Stop()
 	successColor.Println("Configuration saved!")
 
-	// Step 5: Quick tutorial
+	// Step 4: Quick tutorial
 	fmt.Println()
-	printStep(5, "Quick Tutorial")
+	printStep(4, "Quick Tutorial")
 	fmt.Println()
 
 	printTutorial()
@@ -234,7 +228,7 @@ func runOnboardLegacy() error {
 	dimColor.Print("  $ ")
 	infoColor.Println("devlog ingest           # Scan current repo")
 	dimColor.Print("  $ ")
-	infoColor.Println("devlog ask \"What did I do today?\"")
+	infoColor.Println("devlog worklog --days 7  # View your recent activity")
 	fmt.Println()
 
 	return nil
@@ -548,93 +542,6 @@ func configureBedrock(cfg *config.Config, reader *bufio.Reader) error {
 	return nil
 }
 
-func configureEmbeddings(cfg *config.Config, reader *bufio.Reader) {
-	infoColor.Println("Embeddings are used for semantic search and code similarity.")
-	fmt.Println()
-
-	// Display embedding provider options
-	for _, p := range constants.AllEmbeddingProviders {
-		accentColor.Printf("  [%s] ", p.Key)
-		infoColor.Printf("%-30s", p.Name)
-		dimColor.Printf(" - %s\n", p.Description)
-	}
-
-	fmt.Println()
-	promptColor.Printf("Select embedding provider (1-%d): ", len(constants.AllEmbeddingProviders))
-	dimColor.Print("[1] ")
-	choice, _ := reader.ReadString('\n')
-	choice = strings.TrimSpace(choice)
-
-	// Find embedding provider by key
-	var selectedEmbedProvider constants.Provider
-	for _, p := range constants.AllEmbeddingProviders {
-		if p.Key == choice {
-			selectedEmbedProvider = p.Provider
-			break
-		}
-	}
-
-	if selectedEmbedProvider == "" {
-		// "Same as LLM provider" or default
-		llmProvider := constants.Provider(cfg.DefaultProvider)
-		if constants.ProviderSupportsEmbeddings(llmProvider) {
-			cfg.EmbeddingProvider = cfg.DefaultProvider
-		} else {
-			errorColor.Printf("Error: %s doesn't support embeddings. Please select a dedicated embedding provider.\n", cfg.DefaultProvider)
-			return
-		}
-	} else {
-		cfg.EmbeddingProvider = string(selectedEmbedProvider)
-
-		// Prompt for API key if needed
-		setupInfo := constants.GetProviderSetupInfo(selectedEmbedProvider)
-		if setupInfo.NeedsAPIKey {
-			existingKey := getExistingAPIKeyForProvider(cfg, selectedEmbedProvider)
-			if existingKey == "" {
-				promptColor.Printf("%s API Key (for embeddings): ", strings.Title(string(selectedEmbedProvider)))
-				key, _ := reader.ReadString('\n')
-				setAPIKeyForProvider(cfg, selectedEmbedProvider, strings.TrimSpace(key))
-			}
-		}
-	}
-
-	cfg.DefaultEmbedModel = constants.GetDefaultEmbeddingModel(constants.Provider(cfg.EmbeddingProvider))
-
-	fmt.Println()
-	successColor.Printf("Embedding provider: %s\n", cfg.EmbeddingProvider)
-	dimColor.Printf("Embedding model: %s\n", cfg.DefaultEmbedModel)
-}
-
-// getExistingAPIKeyForProvider returns the current API key for a provider from config
-func getExistingAPIKeyForProvider(cfg *config.Config, provider constants.Provider) string {
-	switch provider {
-	case constants.ProviderOpenAI:
-		return cfg.OpenAIAPIKey
-	case constants.ProviderOpenRouter:
-		return cfg.OpenRouterAPIKey
-	case constants.ProviderVoyageAI:
-		return cfg.VoyageAIAPIKey
-	case constants.ProviderAnthropic:
-		return cfg.AnthropicAPIKey
-	default:
-		return ""
-	}
-}
-
-// setAPIKeyForProvider sets the API key for a provider in config
-func setAPIKeyForProvider(cfg *config.Config, provider constants.Provider, key string) {
-	switch provider {
-	case constants.ProviderOpenAI:
-		cfg.OpenAIAPIKey = key
-	case constants.ProviderOpenRouter:
-		cfg.OpenRouterAPIKey = key
-	case constants.ProviderVoyageAI:
-		cfg.VoyageAIAPIKey = key
-	case constants.ProviderAnthropic:
-		cfg.AnthropicAPIKey = key
-	}
-}
-
 func printTutorial() {
 	sections := []struct {
 		title    string
@@ -645,14 +552,6 @@ func printTutorial() {
 			[]string{
 				"devlog ingest              # Current directory",
 				"devlog ingest ~/projects   # Specific path",
-			},
-		},
-		{
-			"Ask questions",
-			[]string{
-				"devlog ask \"What did I work on this week?\"",
-				"devlog ask \"Which files have I changed the most?\"",
-				"devlog ask \"Show commits about authentication\"",
 			},
 		},
 		{

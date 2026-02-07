@@ -21,8 +21,6 @@ const (
 	configStepLLMProvider
 	configStepLLMConfig
 	configStepLLMModelSelection
-	configStepEmbeddingProvider
-	configStepEmbeddingConfig
 	configStepTimezone
 	configStepUserInfo
 	configStepAPIKeys
@@ -73,12 +71,11 @@ func NewConfigModel(cfg *config.Config) ConfigModel {
 	menuOpts := []menuOption{
 		{"1", "LLM Provider", "Change language model provider"},
 		{"2", "LLM Model", "Change language model"},
-		{"3", "Embedding Provider", "Change embedding settings"},
-		{"4", "Timezone", "Change timezone for time tracking"},
-		{"5", "User Information", "Update name, email, GitHub username"},
-		{"6", "API Keys", "Update API keys"},
-		{"7", "Review Settings", "View current configuration"},
-		{"8", "Save & Exit", "Save changes and exit"},
+		{"3", "Timezone", "Change timezone for time tracking"},
+		{"4", "User Information", "Update name, email, GitHub username"},
+		{"5", "API Keys", "Update API keys"},
+		{"6", "Review Settings", "View current configuration"},
+		{"7", "Save & Exit", "Save changes and exit"},
 		{"0", "Cancel", "Exit without saving"},
 	}
 
@@ -118,8 +115,6 @@ func (m ConfigModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.selectedIdx--
 			} else if m.step == configStepLLMModelSelection && m.selectedIdx > 0 {
 				m.selectedIdx--
-			} else if m.step == configStepEmbeddingProvider && m.selectedIdx > 0 {
-				m.selectedIdx--
 			} else if m.step == configStepTimezone && m.selectedIdx > 0 {
 				m.selectedIdx--
 			} else if m.step == configStepAPIKeys && m.selectedIdx > 0 {
@@ -131,8 +126,6 @@ func (m ConfigModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else if m.step == configStepLLMProvider && m.selectedIdx < len(getLLMProviders())-1 {
 				m.selectedIdx++
 			} else if m.step == configStepLLMModelSelection && m.selectedIdx < len(getModelOptions(constants.Provider(m.config.DefaultProvider)))-1 {
-				m.selectedIdx++
-			} else if m.step == configStepEmbeddingProvider && m.selectedIdx < len(getEmbeddingProviders())-1 {
 				m.selectedIdx++
 			} else if m.step == configStepTimezone && m.selectedIdx < len(getTimezoneOptions())-1 {
 				m.selectedIdx++
@@ -185,8 +178,7 @@ func (m ConfigModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// Update text input for certain steps
 	if m.step == configStepLLMConfig || m.step == configStepLLMModelSelection ||
-		m.step == configStepEmbeddingConfig || m.step == configStepUserInfo ||
-		m.step == configStepAPIKeys {
+		m.step == configStepUserInfo || m.step == configStepAPIKeys {
 		m.textInput, cmd = m.textInput.Update(msg)
 	}
 
@@ -213,21 +205,18 @@ func (m ConfigModel) handleEnter() (tea.Model, tea.Cmd) {
 				m.selectedIdx = 0
 			}
 		case "3":
-			m.step = configStepEmbeddingProvider
-			m.selectedIdx = 0
-		case "4":
 			m.step = configStepTimezone
 			m.selectedIdx = 0
-		case "5":
+		case "4":
 			m.step = configStepUserInfo
 			m.prepareStep()
-		case "6":
+		case "5":
 			m.step = configStepAPIKeys
 			m.selectedIdx = 0
 			m.prepareStep()
-		case "7":
+		case "6":
 			m.step = configStepReview
-		case "8":
+		case "7":
 			// Save and exit
 			return m.finishConfiguration()
 		case "0":
@@ -302,31 +291,6 @@ func (m ConfigModel) handleEnter() (tea.Model, tea.Cmd) {
 		m.selectedIdx = 0
 		return m, nil
 
-	case configStepEmbeddingProvider:
-		embProviders := getEmbeddingProviders()
-		selectedProvider := embProviders[m.selectedIdx].Provider
-		if selectedProvider == "" {
-			// "Same as LLM provider"
-			m.config.EmbeddingProvider = m.config.DefaultProvider
-		} else {
-			m.config.EmbeddingProvider = string(selectedProvider)
-		}
-		m.step = configStepEmbeddingConfig
-		m.prepareStep()
-		return m, nil
-
-	case configStepEmbeddingConfig:
-		value := strings.TrimSpace(m.textInput.Value())
-		if value != "" {
-			m.config.DefaultEmbedModel = value
-		} else {
-			// Set default based on provider
-			m.config.DefaultEmbedModel = constants.GetDefaultEmbeddingModel(constants.Provider(m.config.EmbeddingProvider))
-		}
-		m.step = configStepMenu
-		m.selectedIdx = 0
-		return m, nil
-
 	case configStepTimezone:
 		timezones := getTimezoneOptions()
 		if m.selectedIdx < len(timezones) {
@@ -363,10 +327,8 @@ func (m ConfigModel) handleEnter() (tea.Model, tea.Cmd) {
 			case 3:
 				m.config.GeminiAPIKey = value
 			case 4:
-				m.config.VoyageAIAPIKey = value
-			case 5:
 				m.config.AWSAccessKeyID = value
-			case 6:
+			case 5:
 				m.config.AWSSecretAccessKey = value
 			}
 		}
@@ -404,12 +366,6 @@ func (m *ConfigModel) prepareStep() {
 				m.textInput.Placeholder = maskKey(existingKey)
 			}
 		}
-	case configStepEmbeddingConfig:
-		m.textInput.EchoMode = textinput.EchoNormal
-		m.textInput.Placeholder = constants.GetDefaultEmbeddingModel(constants.Provider(m.config.EmbeddingProvider))
-		if m.config.DefaultEmbedModel != "" {
-			m.textInput.Placeholder = m.config.DefaultEmbedModel
-		}
 	case configStepUserInfo:
 		m.textInput.EchoMode = textinput.EchoNormal
 		m.textInput.Placeholder = ""
@@ -430,8 +386,6 @@ func (m ConfigModel) getExistingAPIKey(provider constants.Provider) string {
 		return m.config.OpenRouterAPIKey
 	case constants.ProviderGemini:
 		return m.config.GeminiAPIKey
-	case constants.ProviderVoyageAI:
-		return m.config.VoyageAIAPIKey
 	case constants.ProviderBedrock:
 		return m.config.AWSAccessKeyID
 	default:
@@ -462,10 +416,6 @@ func (m ConfigModel) View() string {
 		s.WriteString(m.viewLLMConfig())
 	case configStepLLMModelSelection:
 		s.WriteString(m.viewLLMModelSelection())
-	case configStepEmbeddingProvider:
-		s.WriteString(m.viewEmbeddingProvider())
-	case configStepEmbeddingConfig:
-		s.WriteString(m.viewEmbeddingConfig())
 	case configStepTimezone:
 		s.WriteString(m.viewTimezone())
 	case configStepUserInfo:
@@ -500,12 +450,7 @@ func (m ConfigModel) viewMenu() string {
 		s.WriteString(dimStyle.Render(fmt.Sprintf("  Model: %s", m.config.DefaultModel)))
 		s.WriteString("\n")
 	}
-	if m.config.EmbeddingProvider != "" {
-		s.WriteString(normalStyle.Render(fmt.Sprintf("  Embeddings: %s", m.config.EmbeddingProvider)))
-	} else {
-		s.WriteString(normalStyle.Render(fmt.Sprintf("  Embeddings: %s", m.config.DefaultProvider)))
-	}
-	s.WriteString("\n\n")
+	s.WriteString("\n")
 
 	// Menu options
 	for i, opt := range m.menuOptions {
@@ -585,34 +530,6 @@ func (m ConfigModel) viewLLMModelSelection() string {
 	)
 }
 
-func (m ConfigModel) viewEmbeddingProvider() string {
-	currentEmbed := m.config.EmbeddingProvider
-	if currentEmbed == "" {
-		currentEmbed = m.config.DefaultProvider
-	}
-	header := dimStyle.Render(fmt.Sprintf("Current: %s", currentEmbed))
-
-	return RenderSelectList(
-		"Configure Embedding Provider",
-		header,
-		EmbeddingProviderItems(),
-		m.selectedIdx,
-		false, 0,
-		"↑/↓: navigate • enter: select • esc: back",
-	)
-}
-
-func (m ConfigModel) viewEmbeddingConfig() string {
-	body := dimStyle.Render(fmt.Sprintf("Provider: %s", m.config.EmbeddingProvider)) + "\n\n" +
-		normalStyle.Render("Embedding model (leave empty for default):")
-
-	return RenderTextInput(
-		"Configure Embedding Model",
-		body, m.textInput, nil,
-		"Press Enter to save • Esc to cancel",
-	)
-}
-
 func (m ConfigModel) viewTimezone() string {
 	var currentTZ string
 	if m.config.Profiles != nil && m.config.ActiveProfile != "" {
@@ -683,7 +600,6 @@ func (m ConfigModel) viewAPIKeys() string {
 		{"OpenAI", m.config.OpenAIAPIKey},
 		{"OpenRouter", m.config.OpenRouterAPIKey},
 		{"Gemini", m.config.GeminiAPIKey},
-		{"Voyage AI", m.config.VoyageAIAPIKey},
 		{"AWS Access Key", m.config.AWSAccessKeyID},
 		{"AWS Secret Key", m.config.AWSSecretAccessKey},
 	}
@@ -728,21 +644,6 @@ func (m ConfigModel) viewReview() string {
 	}
 	s.WriteString("\n")
 
-	// Embedding Configuration
-	s.WriteString(successStyle.Render("Embeddings:"))
-	s.WriteString("\n")
-	embedProvider := m.config.EmbeddingProvider
-	if embedProvider == "" {
-		embedProvider = m.config.DefaultProvider
-	}
-	s.WriteString(normalStyle.Render(fmt.Sprintf("  %s", embedProvider)))
-	s.WriteString("\n")
-	if m.config.DefaultEmbedModel != "" {
-		s.WriteString(dimStyle.Render(fmt.Sprintf("  Model: %s", m.config.DefaultEmbedModel)))
-		s.WriteString("\n")
-	}
-	s.WriteString("\n")
-
 	// User Information
 	if m.config.GitHubUsername != "" || m.config.UserEmail != "" || m.config.UserName != "" {
 		s.WriteString(successStyle.Render("User Information:"))
@@ -764,7 +665,7 @@ func (m ConfigModel) viewReview() string {
 
 	// API Keys (masked)
 	hasAPIKeys := m.config.AnthropicAPIKey != "" || m.config.OpenAIAPIKey != "" ||
-		m.config.OpenRouterAPIKey != "" || m.config.GeminiAPIKey != "" || m.config.VoyageAIAPIKey != "" || m.config.AWSAccessKeyID != ""
+		m.config.OpenRouterAPIKey != "" || m.config.GeminiAPIKey != "" || m.config.AWSAccessKeyID != ""
 
 	if hasAPIKeys {
 		s.WriteString(successStyle.Render("API Keys:"))
@@ -783,10 +684,6 @@ func (m ConfigModel) viewReview() string {
 		}
 		if m.config.GeminiAPIKey != "" {
 			s.WriteString(dimStyle.Render(fmt.Sprintf("  Gemini: %s", maskKey(m.config.GeminiAPIKey))))
-			s.WriteString("\n")
-		}
-		if m.config.VoyageAIAPIKey != "" {
-			s.WriteString(dimStyle.Render(fmt.Sprintf("  Voyage AI: %s", maskKey(m.config.VoyageAIAPIKey))))
 			s.WriteString("\n")
 		}
 		if m.config.AWSAccessKeyID != "" {

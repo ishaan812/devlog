@@ -24,9 +24,7 @@ const (
 	stepTimezone // timezone selection
 	stepProvider
 	stepProviderConfig
-	stepModelSelection    // model selection
-	stepEmbeddingProvider // embedding provider selection
-	stepEmbeddingConfig   // embedding model configuration
+	stepModelSelection // model selection
 	stepGitHubUsername
 	stepUserEmail
 	stepSuccess
@@ -118,8 +116,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.selectedIdx--
 			} else if m.step == stepModelSelection && m.selectedIdx > 0 {
 				m.selectedIdx--
-			} else if m.step == stepEmbeddingProvider && m.selectedIdx > 0 {
-				m.selectedIdx--
 			} else if m.step == stepExistingProfiles && m.selectedIdx > 0 {
 				m.selectedIdx--
 			}
@@ -129,8 +125,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else if m.step == stepProvider && m.selectedIdx < len(getLLMProviders())-1 {
 				m.selectedIdx++
 			} else if m.step == stepModelSelection && m.selectedIdx < len(getModelOptions(constants.Provider(m.config.DefaultProvider)))-1 {
-				m.selectedIdx++
-			} else if m.step == stepEmbeddingProvider && m.selectedIdx < len(getEmbeddingProviders())-1 {
 				m.selectedIdx++
 			} else if m.step == stepExistingProfiles && m.selectedIdx < len(m.existingProfiles) {
 				// +1 for "create new" option
@@ -172,8 +166,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Update text input
 	if m.step == stepProfileName || m.step == stepProfileDesc ||
 		m.step == stepProviderConfig || m.step == stepModelSelection ||
-		m.step == stepEmbeddingConfig || m.step == stepGitHubUsername ||
-		m.step == stepUserEmail {
+		m.step == stepGitHubUsername || m.step == stepUserEmail {
 		m.textInput, cmd = m.textInput.Update(msg)
 	}
 
@@ -284,40 +277,6 @@ func (m Model) handleEnter() (tea.Model, tea.Cmd) {
 		if m.selectedIdx < len(models) {
 			m.config.DefaultModel = models[m.selectedIdx].Model
 		}
-		m.step = stepEmbeddingProvider
-		m.selectedIdx = 0
-		return m, nil
-
-	case stepEmbeddingProvider:
-		embProviders := getEmbeddingProviders()
-		selectedProvider := embProviders[m.selectedIdx].Provider
-		if selectedProvider == "" {
-			// "Same as LLM provider"
-			m.config.EmbeddingProvider = m.config.DefaultProvider
-		} else {
-			m.config.EmbeddingProvider = string(selectedProvider)
-		}
-		m.step = stepEmbeddingConfig
-		m.prepareStep()
-		return m, nil
-
-	case stepEmbeddingConfig:
-		value := strings.TrimSpace(m.textInput.Value())
-		if value != "" {
-			m.config.DefaultEmbedModel = value
-		} else {
-			embProvider := constants.Provider(m.config.EmbeddingProvider)
-			if !constants.ProviderSupportsEmbeddings(embProvider) {
-				m.err = fmt.Errorf("%s doesn't support embeddings; please go back and select a dedicated embedding provider", m.config.EmbeddingProvider)
-				return m, nil
-			}
-			defaultModel := constants.GetDefaultEmbeddingModel(embProvider)
-			if defaultModel == "" {
-				m.err = fmt.Errorf("no default embedding model for provider %s; please specify a model", m.config.EmbeddingProvider)
-				return m, nil
-			}
-			m.config.DefaultEmbedModel = defaultModel
-		}
 		m.step = stepGitHubUsername
 		m.prepareStep()
 		return m, nil
@@ -346,10 +305,10 @@ func (m Model) advanceStep() (tea.Model, tea.Cmd) {
 			m.step = stepModelSelection
 			m.selectedIdx = 0
 		} else {
-			m.step = stepEmbeddingProvider
-			m.selectedIdx = 0
-		}
-		m.prepareStep()
+		m.step = stepGitHubUsername
+		m.selectedIdx = 0
+	}
+	m.prepareStep()
 	}
 	return m, nil
 }
@@ -372,9 +331,6 @@ func (m *Model) prepareStep() {
 		if setupInfo.NeedsAPIKey {
 			m.textInput.EchoMode = textinput.EchoPassword
 		}
-	case stepEmbeddingConfig:
-		m.textInput.EchoMode = textinput.EchoNormal
-		m.textInput.Placeholder = constants.GetDefaultEmbeddingModel(constants.Provider(m.config.EmbeddingProvider))
 	case stepGitHubUsername:
 		m.textInput.Placeholder = "your-github-username"
 		m.textInput.EchoMode = textinput.EchoNormal
@@ -434,10 +390,6 @@ func (m Model) View() string {
 		s.WriteString(m.viewProviderConfig())
 	case stepModelSelection:
 		s.WriteString(m.viewModelSelection())
-	case stepEmbeddingProvider:
-		s.WriteString(m.viewEmbeddingProvider())
-	case stepEmbeddingConfig:
-		s.WriteString(m.viewEmbeddingConfig())
 	case stepGitHubUsername:
 		s.WriteString(m.viewGitHubUsername())
 	case stepUserEmail:
@@ -598,28 +550,11 @@ func (m Model) viewModelSelection() string {
 	)
 }
 
-func (m Model) viewEmbeddingProvider() string {
-	return RenderSelectList(
-		"Step 4: Choose Embedding Provider",
-		normalStyle.Render("Embeddings are used for semantic search and similarity."),
-		EmbeddingProviderItems(),
-		m.selectedIdx,
-		false, 0,
-		"Use arrow keys to select, Enter to confirm",
-	)
-}
-
-func (m Model) viewEmbeddingConfig() string {
-	body := dimStyle.Render(fmt.Sprintf("Provider: %s", m.config.EmbeddingProvider)) + "\n\n" +
-		normalStyle.Render("Enter embedding model (leave empty for default):")
-	return RenderTextInput("Step 4: Configure Embeddings", body, m.textInput, nil, "Press Enter to continue")
-}
-
 func (m Model) viewGitHubUsername() string {
 	body := normalStyle.Render("This is used to identify your commits in git history.") + "\n" +
 		dimStyle.Render("(Matches commits with emails like username@users.noreply.github.com)") + "\n\n" +
 		dimStyle.Render("GitHub username:")
-	return RenderTextInput("Step 5: GitHub Username", body, m.textInput, nil, "Press Enter to continue")
+	return RenderTextInput("Step 4: GitHub Username", body, m.textInput, nil, "Press Enter to continue")
 }
 
 func (m Model) viewUserEmail() string {
@@ -629,7 +564,7 @@ func (m Model) viewUserEmail() string {
 	}
 	bodyParts = append(bodyParts, dimStyle.Render("Your email (optional, for additional git matching):"))
 	body := strings.Join(bodyParts, "\n\n")
-	return RenderTextInput("Step 5: Your Info", body, m.textInput, nil, "Press Enter to finish")
+	return RenderTextInput("Step 4: Your Info", body, m.textInput, nil, "Press Enter to finish")
 }
 
 func (m Model) viewSuccess() string {
@@ -645,17 +580,7 @@ func (m Model) viewSuccess() string {
 	s.WriteString(dimStyle.Render("   cd ~/your-project && devlog ingest"))
 	s.WriteString("\n\n")
 
-	s.WriteString(selectedStyle.Render("2. Ask questions:"))
-	s.WriteString("\n")
-	s.WriteString(dimStyle.Render("   devlog ask \"What did I work on this week?\""))
-	s.WriteString("\n\n")
-
-	s.WriteString(selectedStyle.Render("3. Search code:"))
-	s.WriteString("\n")
-	s.WriteString(dimStyle.Render("   devlog search \"authentication\""))
-	s.WriteString("\n\n")
-
-	s.WriteString(selectedStyle.Render("4. Generate reports:"))
+	s.WriteString(selectedStyle.Render("2. Generate reports:"))
 	s.WriteString("\n")
 	s.WriteString(dimStyle.Render("   devlog worklog --days 7"))
 	s.WriteString("\n\n")

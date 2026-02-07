@@ -1,4 +1,4 @@
-.PHONY: build install install-local clean test run-ingest run-ask run-worklog run-onboard fmt lint tools
+.PHONY: build install install-local clean test run-ingest run-worklog run-onboard fmt lint tools
 
 BINARY_NAME=devlog
 BUILD_DIR=./bin
@@ -36,9 +36,6 @@ test:
 # Development helpers
 run-ingest:
 	go run ./cmd/devlog ingest .
-
-run-ask:
-	go run ./cmd/devlog ask "What did I work on recently?"
 
 run-worklog:
 	go run ./cmd/devlog worklog --days 7 --no-llm

@@ -30,17 +30,14 @@ type Profile struct {
 // Config holds all configuration for devlog.
 type Config struct {
 	// Provider configuration
-	DefaultProvider   string `json:"default_provider"`
-	DefaultModel      string `json:"default_model"`
-	DefaultEmbedModel string `json:"default_embed_model,omitempty"`
-	EmbeddingProvider string `json:"embedding_provider,omitempty"` // Can be different from DefaultProvider
+	DefaultProvider string `json:"default_provider"`
+	DefaultModel    string `json:"default_model"`
 
 	// API Keys
 	AnthropicAPIKey  string `json:"anthropic_api_key,omitempty"`
 	OpenAIAPIKey     string `json:"openai_api_key,omitempty"`
 	OpenRouterAPIKey string `json:"openrouter_api_key,omitempty"`
 	GeminiAPIKey     string `json:"gemini_api_key,omitempty"`
-	VoyageAIAPIKey   string `json:"voyageai_api_key,omitempty"`
 
 	// Bedrock config
 	AWSRegion          string `json:"aws_region,omitempty"`
@@ -207,11 +204,6 @@ func (c *Config) GetAPIKey(provider string) string {
 			return c.GeminiAPIKey
 		}
 		return os.Getenv("GEMINI_API_KEY")
-	case "voyageai":
-		if c.VoyageAIAPIKey != "" {
-			return c.VoyageAIAPIKey
-		}
-		return os.Getenv("VOYAGEAI_API_KEY")
 	case "bedrock":
 		return c.AWSAccessKeyID
 	default:
@@ -232,8 +224,6 @@ func (c *Config) HasProvider(provider string) bool {
 		return c.GetAPIKey("openrouter") != ""
 	case "gemini":
 		return c.GetAPIKey("gemini") != ""
-	case "voyageai":
-		return c.GetAPIKey("voyageai") != ""
 	case "bedrock":
 		return c.AWSAccessKeyID != "" && c.AWSSecretAccessKey != ""
 	default:

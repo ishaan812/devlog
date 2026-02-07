@@ -123,9 +123,3 @@ CREATE INDEX IF NOT EXISTS idx_branches_codebase ON branches(codebase_id);
 CREATE INDEX IF NOT EXISTS idx_folders_codebase ON folders(codebase_id);
 CREATE INDEX IF NOT EXISTS idx_file_indexes_codebase ON file_indexes(codebase_id);
 `
-
-// Migrations adds columns that may not exist in older databases.
-const Migrations = `
-ALTER TABLE file_indexes ADD COLUMN IF NOT EXISTS embedding VARCHAR;
-ALTER TABLE folders ADD COLUMN IF NOT EXISTS embedding VARCHAR;
-`

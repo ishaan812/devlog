@@ -4,8 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"math"
-	"sort"
 	"time"
 )
 
@@ -73,14 +71,10 @@ type Repository interface {
 	DeleteFileIndex(ctx context.Context, codebaseID, path string) error
 	DeleteFileIndexesByPaths(ctx context.Context, codebaseID string, paths []string) error
 	GetFilesByFolder(ctx context.Context, folderID string) ([]FileIndex, error)
-	SearchFilesBySummary(ctx context.Context, codebaseID, query string) ([]FileIndex, error)
 
-	// Codebase statistics and search operations
+	// Codebase statistics
 	// -----------------------------------------
 	GetCodebaseStats(ctx context.Context, codebaseID string) (*CodebaseStats, error)
-	HasEmbeddings(ctx context.Context, codebaseID string) bool
-	SemanticSearchFiles(ctx context.Context, codebaseID string, queryEmbedding []float32, limit int) ([]FileIndex, error)
-	SemanticSearchFolders(ctx context.Context, codebaseID string, queryEmbedding []float32, limit int) ([]Folder, error)
 
 	// Raw query operations
 	// --------------------
@@ -589,8 +583,8 @@ func (r *SQLRepository) UpdateBranchCursor(ctx context.Context, codebaseID, bran
 func (r *SQLRepository) UpsertFolder(ctx context.Context, folder *Folder) error {
 	// Use INSERT ON CONFLICT on the unique constraint (codebase_id, path)
 	_, err := r.db.ExecContext(ctx, `
-		INSERT INTO folders (id, codebase_id, path, name, depth, parent_path, summary, purpose, file_count, indexed_at, embedding)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		INSERT INTO folders (id, codebase_id, path, name, depth, parent_path, summary, purpose, file_count, indexed_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		ON CONFLICT (codebase_id, path) DO UPDATE SET
 			name = EXCLUDED.name,
 			depth = EXCLUDED.depth,
@@ -598,11 +592,9 @@ func (r *SQLRepository) UpsertFolder(ctx context.Context, folder *Folder) error 
 			summary = EXCLUDED.summary,
 			purpose = EXCLUDED.purpose,
 			file_count = EXCLUDED.file_count,
-			indexed_at = EXCLUDED.indexed_at,
-			embedding = EXCLUDED.embedding`,
+			indexed_at = EXCLUDED.indexed_at`,
 		folder.ID, folder.CodebaseID, folder.Path, folder.Name, folder.Depth, NullString(folder.ParentPath),
-		NullString(folder.Summary), NullString(folder.Purpose), folder.FileCount, NullTime(folder.IndexedAt),
-		NullString(EmbeddingToJSON(folder.Embedding)))
+		NullString(folder.Summary), NullString(folder.Purpose), folder.FileCount, NullTime(folder.IndexedAt))
 	if err != nil {
 		return fmt.Errorf("upsert folder: %w", err)
 	}
@@ -613,7 +605,7 @@ func (r *SQLRepository) UpsertFolder(ctx context.Context, folder *Folder) error 
 // GetFoldersByCodebase retrieves all folders for a codebase.
 func (r *SQLRepository) GetFoldersByCodebase(ctx context.Context, codebaseID string) ([]Folder, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, codebase_id, path, name, depth, parent_path, summary, purpose, file_count, indexed_at, embedding
+		SELECT id, codebase_id, path, name, depth, parent_path, summary, purpose, file_count, indexed_at
 		FROM folders WHERE codebase_id = $1 ORDER BY depth, path`, codebaseID)
 	if err != nil {
 		return nil, fmt.Errorf("query folders: %w", err)
@@ -626,15 +618,14 @@ func (r *SQLRepository) scanFolders(rows *sql.Rows) ([]Folder, error) {
 	var folders []Folder
 	for rows.Next() {
 		f := Folder{}
-		var parentPath, summary, purpose, embeddingJSON sql.NullString
+		var parentPath, summary, purpose sql.NullString
 		var indexedAt sql.NullTime
-		if err := rows.Scan(&f.ID, &f.CodebaseID, &f.Path, &f.Name, &f.Depth, &parentPath, &summary, &purpose, &f.FileCount, &indexedAt, &embeddingJSON); err != nil {
+		if err := rows.Scan(&f.ID, &f.CodebaseID, &f.Path, &f.Name, &f.Depth, &parentPath, &summary, &purpose, &f.FileCount, &indexedAt); err != nil {
 			return nil, fmt.Errorf("scan folder: %w", err)
 		}
 		f.ParentPath = parentPath.String
 		f.Summary = summary.String
 		f.Purpose = purpose.String
-		f.Embedding = EmbeddingFromJSON(embeddingJSON.String)
 		if indexedAt.Valid {
 			f.IndexedAt = indexedAt.Time
 		}
@@ -649,12 +640,12 @@ func (r *SQLRepository) scanFolders(rows *sql.Rows) ([]Folder, error) {
 // GetFolderByPath retrieves a folder by path.
 func (r *SQLRepository) GetFolderByPath(ctx context.Context, codebaseID, path string) (*Folder, error) {
 	row := r.db.QueryRowContext(ctx, `
-		SELECT id, codebase_id, path, name, depth, parent_path, summary, purpose, file_count, indexed_at, embedding
+		SELECT id, codebase_id, path, name, depth, parent_path, summary, purpose, file_count, indexed_at
 		FROM folders WHERE codebase_id = $1 AND path = $2`, codebaseID, path)
 	f := &Folder{}
-	var parentPath, summary, purpose, embeddingJSON sql.NullString
+	var parentPath, summary, purpose sql.NullString
 	var indexedAt sql.NullTime
-	err := row.Scan(&f.ID, &f.CodebaseID, &f.Path, &f.Name, &f.Depth, &parentPath, &summary, &purpose, &f.FileCount, &indexedAt, &embeddingJSON)
+	err := row.Scan(&f.ID, &f.CodebaseID, &f.Path, &f.Name, &f.Depth, &parentPath, &summary, &purpose, &f.FileCount, &indexedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -664,7 +655,6 @@ func (r *SQLRepository) GetFolderByPath(ctx context.Context, codebaseID, path st
 	f.ParentPath = parentPath.String
 	f.Summary = summary.String
 	f.Purpose = purpose.String
-	f.Embedding = EmbeddingFromJSON(embeddingJSON.String)
 	if indexedAt.Valid {
 		f.IndexedAt = indexedAt.Time
 	}
@@ -712,8 +702,8 @@ func (r *SQLRepository) UpsertFileIndex(ctx context.Context, file *FileIndex) er
 	// in ON CONFLICT DO UPDATE, so folder_id is excluded from the update set.
 	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO file_indexes (id, codebase_id, folder_id, path, name, extension, language,
-			size_bytes, line_count, summary, purpose, key_exports, dependencies, content_hash, indexed_at, embedding)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+			size_bytes, line_count, summary, purpose, key_exports, dependencies, content_hash, indexed_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 		ON CONFLICT (codebase_id, path) DO UPDATE SET
 			name = EXCLUDED.name,
 			extension = EXCLUDED.extension,
@@ -725,12 +715,10 @@ func (r *SQLRepository) UpsertFileIndex(ctx context.Context, file *FileIndex) er
 			key_exports = EXCLUDED.key_exports,
 			dependencies = EXCLUDED.dependencies,
 			content_hash = EXCLUDED.content_hash,
-			indexed_at = EXCLUDED.indexed_at,
-			embedding = EXCLUDED.embedding`,
+			indexed_at = EXCLUDED.indexed_at`,
 		file.ID, file.CodebaseID, NullString(file.FolderID), file.Path, file.Name, NullString(file.Extension),
 		NullString(file.Language), file.SizeBytes, file.LineCount, NullString(file.Summary), NullString(file.Purpose),
-		ToJSON(file.KeyExports), ToJSON(file.Dependencies), NullString(file.ContentHash), NullTime(file.IndexedAt),
-		NullString(EmbeddingToJSON(file.Embedding)))
+		ToJSON(file.KeyExports), ToJSON(file.Dependencies), NullString(file.ContentHash), NullTime(file.IndexedAt))
 	if err != nil {
 		return fmt.Errorf("upsert file index: %w", err)
 	}
@@ -742,7 +730,7 @@ func (r *SQLRepository) UpsertFileIndex(ctx context.Context, file *FileIndex) er
 func (r *SQLRepository) GetFilesByCodebase(ctx context.Context, codebaseID string) ([]FileIndex, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, codebase_id, folder_id, path, name, extension, language,
-			size_bytes, line_count, summary, purpose, key_exports, dependencies, content_hash, indexed_at, embedding
+			size_bytes, line_count, summary, purpose, key_exports, dependencies, content_hash, indexed_at
 		FROM file_indexes WHERE codebase_id = $1 ORDER BY path`, codebaseID)
 	if err != nil {
 		return nil, fmt.Errorf("query files: %w", err)
@@ -808,7 +796,7 @@ func (r *SQLRepository) DeleteFileIndexesByPaths(ctx context.Context, codebaseID
 func (r *SQLRepository) GetFilesByFolder(ctx context.Context, folderID string) ([]FileIndex, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, codebase_id, folder_id, path, name, extension, language,
-			size_bytes, line_count, summary, purpose, key_exports, dependencies, content_hash, indexed_at, embedding
+			size_bytes, line_count, summary, purpose, key_exports, dependencies, content_hash, indexed_at
 		FROM file_indexes WHERE folder_id = $1 ORDER BY name`, folderID)
 	if err != nil {
 		return nil, fmt.Errorf("query files by folder: %w", err)
@@ -821,11 +809,11 @@ func (r *SQLRepository) scanFileIndexes(rows *sql.Rows) ([]FileIndex, error) {
 	var files []FileIndex
 	for rows.Next() {
 		f := FileIndex{}
-		var folderID, extension, language, summary, purpose, contentHash, embeddingJSON sql.NullString
+		var folderID, extension, language, summary, purpose, contentHash sql.NullString
 		var keyExports, deps any
 		var indexedAt sql.NullTime
 		if err := rows.Scan(&f.ID, &f.CodebaseID, &folderID, &f.Path, &f.Name, &extension, &language,
-			&f.SizeBytes, &f.LineCount, &summary, &purpose, &keyExports, &deps, &contentHash, &indexedAt, &embeddingJSON); err != nil {
+			&f.SizeBytes, &f.LineCount, &summary, &purpose, &keyExports, &deps, &contentHash, &indexedAt); err != nil {
 			return nil, fmt.Errorf("scan file index: %w", err)
 		}
 		f.FolderID = folderID.String
@@ -836,7 +824,6 @@ func (r *SQLRepository) scanFileIndexes(rows *sql.Rows) ([]FileIndex, error) {
 		f.KeyExports = convertToStringSlice(keyExports)
 		f.Dependencies = convertToStringSlice(deps)
 		f.ContentHash = contentHash.String
-		f.Embedding = EmbeddingFromJSON(embeddingJSON.String)
 		if indexedAt.Valid {
 			f.IndexedAt = indexedAt.Time
 		}
@@ -846,21 +833,6 @@ func (r *SQLRepository) scanFileIndexes(rows *sql.Rows) ([]FileIndex, error) {
 		return nil, fmt.Errorf("iterate file indexes: %w", err)
 	}
 	return files, nil
-}
-
-// SearchFilesBySummary searches files by summary text.
-func (r *SQLRepository) SearchFilesBySummary(ctx context.Context, codebaseID, query string) ([]FileIndex, error) {
-	searchPattern := "%" + query + "%"
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, codebase_id, folder_id, path, name, extension, language,
-			size_bytes, line_count, summary, purpose, key_exports, dependencies, content_hash, indexed_at, embedding
-		FROM file_indexes WHERE codebase_id = $1 AND (summary ILIKE $2 OR purpose ILIKE $2 OR name ILIKE $2)
-		ORDER BY path LIMIT 20`, codebaseID, searchPattern)
-	if err != nil {
-		return nil, fmt.Errorf("search files: %w", err)
-	}
-	defer rows.Close()
-	return r.scanFileIndexes(rows)
 }
 
 // CodebaseStats holds statistics for a codebase.
@@ -921,122 +893,6 @@ func (r *SQLRepository) GetCodebaseStats(ctx context.Context, codebaseID string)
 		return nil, fmt.Errorf("iterate language stats: %w", err)
 	}
 	return stats, nil
-}
-
-// HasEmbeddings checks if any files in the codebase have embeddings.
-func (r *SQLRepository) HasEmbeddings(ctx context.Context, codebaseID string) bool {
-	var count int64
-	err := r.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM file_indexes WHERE codebase_id = $1 AND embedding IS NOT NULL AND embedding != ''`,
-		codebaseID).Scan(&count)
-	if err != nil {
-		return false
-	}
-	return count > 0
-}
-
-// SemanticSearchFiles searches files using cosine similarity against embeddings.
-func (r *SQLRepository) SemanticSearchFiles(ctx context.Context, codebaseID string, queryEmbedding []float32, limit int) ([]FileIndex, error) {
-	// Load all files with embeddings
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, codebase_id, folder_id, path, name, extension, language,
-			size_bytes, line_count, summary, purpose, key_exports, dependencies, content_hash, indexed_at, embedding
-		FROM file_indexes WHERE codebase_id = $1 AND embedding IS NOT NULL AND embedding != ''`, codebaseID)
-	if err != nil {
-		return nil, fmt.Errorf("query files for semantic search: %w", err)
-	}
-	defer rows.Close()
-
-	files, err := r.scanFileIndexes(rows)
-	if err != nil {
-		return nil, err
-	}
-
-	// Compute cosine similarity and rank
-	type scored struct {
-		file  FileIndex
-		score float64
-	}
-	var results []scored
-	for _, f := range files {
-		if len(f.Embedding) > 0 {
-			sim := cosineSimilarity(queryEmbedding, f.Embedding)
-			results = append(results, scored{file: f, score: sim})
-		}
-	}
-
-	// Sort by similarity (highest first)
-	sort.Slice(results, func(i, j int) bool {
-		return results[i].score > results[j].score
-	})
-
-	// Return top N
-	var out []FileIndex
-	for i, r := range results {
-		if i >= limit {
-			break
-		}
-		out = append(out, r.file)
-	}
-	return out, nil
-}
-
-// SemanticSearchFolders searches folders using cosine similarity against embeddings.
-func (r *SQLRepository) SemanticSearchFolders(ctx context.Context, codebaseID string, queryEmbedding []float32, limit int) ([]Folder, error) {
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, codebase_id, path, name, depth, parent_path, summary, purpose, file_count, indexed_at, embedding
-		FROM folders WHERE codebase_id = $1 AND embedding IS NOT NULL AND embedding != ''`, codebaseID)
-	if err != nil {
-		return nil, fmt.Errorf("query folders for semantic search: %w", err)
-	}
-	defer rows.Close()
-
-	folders, err := r.scanFolders(rows)
-	if err != nil {
-		return nil, err
-	}
-
-	type scored struct {
-		folder Folder
-		score  float64
-	}
-	var results []scored
-	for _, f := range folders {
-		if len(f.Embedding) > 0 {
-			sim := cosineSimilarity(queryEmbedding, f.Embedding)
-			results = append(results, scored{folder: f, score: sim})
-		}
-	}
-
-	sort.Slice(results, func(i, j int) bool {
-		return results[i].score > results[j].score
-	})
-
-	var out []Folder
-	for i, r := range results {
-		if i >= limit {
-			break
-		}
-		out = append(out, r.folder)
-	}
-	return out, nil
-}
-
-// cosineSimilarity computes cosine similarity between two vectors.
-func cosineSimilarity(a, b []float32) float64 {
-	if len(a) != len(b) || len(a) == 0 {
-		return 0
-	}
-	var dot, normA, normB float64
-	for i := range a {
-		dot += float64(a[i]) * float64(b[i])
-		normA += float64(a[i]) * float64(a[i])
-		normB += float64(b[i]) * float64(b[i])
-	}
-	if normA == 0 || normB == 0 {
-		return 0
-	}
-	return dot / (math.Sqrt(normA) * math.Sqrt(normB))
 }
 
 // ExecuteQuery executes a raw SQL query without parameters.

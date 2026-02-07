@@ -22,11 +22,10 @@ var (
 var configureCmd = &cobra.Command{
 	Use:   "configure",
 	Short: "Configure DevLog settings",
-	Long: `Configure your DevLog settings including LLM provider, embeddings, and user information.
+	Long: `Configure your DevLog settings including LLM provider and user information.
 
 This command opens an interactive configuration wizard that allows you to update:
   - LLM provider and API keys
-  - Embedding provider and models
   - User information (name, email, GitHub username)
 
 Examples:
@@ -94,12 +93,6 @@ func runConfigureLegacy(cfg *config.Config) error {
 	if cfg.DefaultModel != "" {
 		dimColor.Printf("  LLM Model: %s\n", cfg.DefaultModel)
 	}
-	if cfg.EmbeddingProvider != "" {
-		infoColor.Printf("  Embedding Provider: %s\n", cfg.EmbeddingProvider)
-	}
-	if cfg.DefaultEmbedModel != "" {
-		dimColor.Printf("  Embedding Model: %s\n", cfg.DefaultEmbedModel)
-	}
 	if cfg.GitHubUsername != "" {
 		infoColor.Printf("  GitHub Username: %s\n", cfg.GitHubUsername)
 	}
@@ -121,11 +114,10 @@ func runConfigureLegacy(cfg *config.Config) error {
 			desc string
 		}{
 			{"1", "LLM Provider", "Change language model provider and API key"},
-			{"2", "Embedding Provider", "Change embedding provider and model"},
-			{"3", "User Information", "Update name, email, GitHub username"},
-			{"4", "API Keys", "Update API keys for providers"},
-			{"5", "View Settings", "Display current configuration"},
-			{"6", "Save & Exit", "Save changes and exit"},
+			{"2", "User Information", "Update name, email, GitHub username"},
+			{"3", "API Keys", "Update API keys for providers"},
+			{"4", "View Settings", "Display current configuration"},
+			{"5", "Save & Exit", "Save changes and exit"},
 			{"0", "Exit without saving", "Discard changes and exit"},
 		}
 
@@ -146,20 +138,16 @@ func runConfigureLegacy(cfg *config.Config) error {
 				return err
 			}
 		case "2":
-			if err := configureEmbeddingProvider(cfg, reader); err != nil {
-				return err
-			}
-		case "3":
 			if err := configureUserInfo(cfg, reader); err != nil {
 				return err
 			}
-		case "4":
+		case "3":
 			if err := configureAPIKeys(cfg, reader); err != nil {
 				return err
 			}
-		case "5":
+		case "4":
 			displayCurrentSettings(cfg)
-		case "6":
+		case "5":
 			// Save and exit
 			if err := cfg.Save(); err != nil {
 				return fmt.Errorf("failed to save config: %w", err)
@@ -256,99 +244,6 @@ func configureLLMProvider(cfg *config.Config, reader *bufio.Reader) error {
 	return nil
 }
 
-func configureEmbeddingProvider(cfg *config.Config, reader *bufio.Reader) error {
-	titleColor := color.New(color.FgHiCyan, color.Bold)
-	promptColor := color.New(color.FgHiYellow)
-	successColor := color.New(color.FgHiGreen)
-	dimColor := color.New(color.FgHiBlack)
-	infoColor := color.New(color.FgHiWhite)
-	accentColor := color.New(color.FgHiMagenta)
-
-	fmt.Println()
-	titleColor.Println("Configure Embedding Provider")
-	dimColor.Println(strings.Repeat("─", 40))
-	fmt.Println()
-
-	currentEmbed := cfg.EmbeddingProvider
-	if currentEmbed == "" {
-		currentEmbed = cfg.DefaultProvider
-	}
-	infoColor.Printf("Current embedding provider: %s\n", currentEmbed)
-	if cfg.DefaultEmbedModel != "" {
-		dimColor.Printf("Current embedding model: %s\n", cfg.DefaultEmbedModel)
-	}
-	fmt.Println()
-
-	// Display embedding providers
-	for _, p := range constants.AllEmbeddingProviders {
-		accentColor.Printf("  [%s] ", p.Key)
-		infoColor.Printf("%-30s", p.Name)
-		dimColor.Printf(" - %s\n", p.Description)
-	}
-
-	fmt.Println()
-	promptColor.Print("Select embedding provider (or press Enter to keep current): ")
-	choice, _ := reader.ReadString('\n')
-	choice = strings.TrimSpace(choice)
-
-	if choice == "" {
-		dimColor.Println("Keeping current embedding provider.")
-		return nil
-	}
-
-	// Find embedding provider by key
-	var selectedEmbedProvider constants.Provider
-	for _, p := range constants.AllEmbeddingProviders {
-		if p.Key == choice {
-			selectedEmbedProvider = p.Provider
-			break
-		}
-	}
-
-	// If "same as LLM provider" or not found, use LLM provider
-	if selectedEmbedProvider == "" {
-		selectedEmbedProvider = constants.Provider(cfg.DefaultProvider)
-		// Check if LLM provider supports embeddings
-		if !constants.ProviderSupportsEmbeddings(selectedEmbedProvider) {
-			fmt.Println()
-			color.New(color.FgHiRed).Printf("Error: %s doesn't support embeddings. Please select a dedicated embedding provider.\n", cfg.DefaultProvider)
-			return nil
-		}
-		cfg.EmbeddingProvider = string(selectedEmbedProvider)
-		cfg.DefaultEmbedModel = constants.GetDefaultEmbeddingModel(selectedEmbedProvider)
-	} else {
-		cfg.EmbeddingProvider = string(selectedEmbedProvider)
-		cfg.DefaultEmbedModel = constants.GetDefaultEmbeddingModel(selectedEmbedProvider)
-
-		// Prompt for API key if needed and not already set
-		switch selectedEmbedProvider {
-		case constants.ProviderOpenAI:
-			if cfg.OpenAIAPIKey == "" {
-				promptColor.Print("OpenAI API Key: ")
-				key, _ := reader.ReadString('\n')
-				cfg.OpenAIAPIKey = strings.TrimSpace(key)
-			}
-		case constants.ProviderOpenRouter:
-			if cfg.OpenRouterAPIKey == "" {
-				promptColor.Print("OpenRouter API Key: ")
-				key, _ := reader.ReadString('\n')
-				cfg.OpenRouterAPIKey = strings.TrimSpace(key)
-			}
-		case constants.ProviderVoyageAI:
-			if cfg.VoyageAIAPIKey == "" {
-				promptColor.Print("Voyage AI API Key: ")
-				key, _ := reader.ReadString('\n')
-				cfg.VoyageAIAPIKey = strings.TrimSpace(key)
-			}
-		}
-	}
-
-	fmt.Println()
-	successColor.Printf("Embedding provider updated to: %s\n", cfg.EmbeddingProvider)
-	dimColor.Printf("Embedding model: %s\n", cfg.DefaultEmbedModel)
-	return nil
-}
-
 func configureUserInfo(cfg *config.Config, reader *bufio.Reader) error {
 	titleColor := color.New(color.FgHiCyan, color.Bold)
 	promptColor := color.New(color.FgHiYellow)
@@ -422,8 +317,7 @@ func configureAPIKeys(cfg *config.Config, reader *bufio.Reader) error {
 		{"1", "Anthropic", "Update Anthropic API key"},
 		{"2", "OpenAI", "Update OpenAI API key"},
 		{"3", "OpenRouter", "Update OpenRouter API key"},
-		{"4", "Voyage AI", "Update Voyage AI API key"},
-		{"5", "AWS Bedrock", "Update AWS credentials"},
+		{"4", "AWS Bedrock", "Update AWS credentials"},
 		{"0", "Back", "Return to main menu"},
 	}
 
@@ -455,11 +349,6 @@ func configureAPIKeys(cfg *config.Config, reader *bufio.Reader) error {
 		cfg.OpenRouterAPIKey = strings.TrimSpace(key)
 		successColor.Println("OpenRouter API key updated!")
 	case "4":
-		promptColor.Print("Voyage AI API Key: ")
-		key, _ := reader.ReadString('\n')
-		cfg.VoyageAIAPIKey = strings.TrimSpace(key)
-		successColor.Println("Voyage AI API key updated!")
-	case "5":
 		promptColor.Print("AWS Access Key ID: ")
 		accessKey, _ := reader.ReadString('\n')
 		cfg.AWSAccessKeyID = strings.TrimSpace(accessKey)
@@ -507,18 +396,6 @@ func displayCurrentSettings(cfg *config.Config) {
 	}
 	fmt.Println()
 
-	// Embedding Configuration
-	successColor.Println("Embeddings:")
-	embedProvider := cfg.EmbeddingProvider
-	if embedProvider == "" {
-		embedProvider = cfg.DefaultProvider
-	}
-	infoColor.Printf("  Provider: %s\n", embedProvider)
-	if cfg.DefaultEmbedModel != "" {
-		infoColor.Printf("  Model: %s\n", cfg.DefaultEmbedModel)
-	}
-	fmt.Println()
-
 	// User Information
 	successColor.Println("User Information:")
 	if cfg.GitHubUsername != "" {
@@ -542,9 +419,6 @@ func displayCurrentSettings(cfg *config.Config) {
 	}
 	if cfg.OpenRouterAPIKey != "" {
 		infoColor.Printf("  OpenRouter: %s\n", maskAPIKey(cfg.OpenRouterAPIKey))
-	}
-	if cfg.VoyageAIAPIKey != "" {
-		infoColor.Printf("  Voyage AI: %s\n", maskAPIKey(cfg.VoyageAIAPIKey))
 	}
 	if cfg.AWSAccessKeyID != "" {
 		infoColor.Printf("  AWS: %s\n", maskAPIKey(cfg.AWSAccessKeyID))

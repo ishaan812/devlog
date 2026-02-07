@@ -2,47 +2,35 @@ package constants
 
 // ModelConfig holds model configuration for a provider
 type ModelConfig struct {
-	LLMModel       string
-	EmbeddingModel string
-	BaseURL        string
-	AWSRegion      string
+	LLMModel  string
+	BaseURL   string
+	AWSRegion string
 }
 
 // DefaultModels contains default model configurations for each provider
 var DefaultModels = map[Provider]ModelConfig{
 	ProviderOllama: {
-		LLMModel:       "llama3.1",
-		EmbeddingModel: "nomic-embed-text",
-		BaseURL:        "http://localhost:11434",
+		LLMModel: "llama3.1",
+		BaseURL:  "http://localhost:11434",
 	},
 	ProviderOpenAI: {
-		LLMModel:       "gpt-5.2",
-		EmbeddingModel: "text-embedding-3-small",
-		BaseURL:        "https://api.openai.com/v1",
+		LLMModel: "gpt-5.2",
+		BaseURL:  "https://api.openai.com/v1",
 	},
 	ProviderAnthropic: {
-		LLMModel:       "claude-opus-4-6-20260205",
-		EmbeddingModel: "", // Anthropic doesn't provide embeddings
+		LLMModel: "claude-opus-4-6-20260205",
 	},
 	ProviderOpenRouter: {
-		LLMModel:       "openrouter/free",
-		EmbeddingModel: "openai/text-embedding-3-small",
-		BaseURL:        "https://openrouter.ai/api/v1",
+		LLMModel: "openrouter/free",
+		BaseURL:  "https://openrouter.ai/api/v1",
 	},
 	ProviderGemini: {
-		LLMModel:       "gemini-3-flash-preview",
-		EmbeddingModel: "gemini-embedding-001",
-		BaseURL:        "", // SDK handles endpoint
+		LLMModel: "gemini-3-flash-preview",
+		BaseURL:  "", // SDK handles endpoint
 	},
 	ProviderBedrock: {
-		LLMModel:       "anthropic.claude-opus-4-6-20260205-v1:0",
-		EmbeddingModel: "",
-		AWSRegion:      "us-east-1",
-	},
-	ProviderVoyageAI: {
-		LLMModel:       "", // Voyage AI is embeddings only
-		EmbeddingModel: "voyage-3.5",
-		BaseURL:        "https://api.voyageai.com/v1",
+		LLMModel:  "anthropic.claude-opus-4-6-20260205-v1:0",
+		AWSRegion: "us-east-1",
 	},
 }
 
@@ -56,15 +44,6 @@ type ModelOption struct {
 // GetLLMModels returns available LLM model options for a provider
 func GetLLMModels(provider Provider) []ModelOption {
 	models, ok := llmModels[provider]
-	if !ok {
-		return nil
-	}
-	return models
-}
-
-// GetEmbeddingModels returns available embedding model options for a provider
-func GetEmbeddingModels(provider Provider) []ModelOption {
-	models, ok := embeddingModels[provider]
 	if !ok {
 		return nil
 	}
@@ -121,48 +100,10 @@ var llmModels = map[Provider][]ModelOption{
 	},
 }
 
-// embeddingModels contains selectable embedding models per provider
-var embeddingModels = map[Provider][]ModelOption{
-	ProviderOllama: {
-		{ID: "1", Model: "nomic-embed-text", Description: "Nomic Embed (default, recommended)"},
-		{ID: "2", Model: "qwen3-embedding", Description: "Qwen3 Embedding (latest)"},
-		{ID: "3", Model: "mxbai-embed-large", Description: "MxBai Embed Large"},
-	},
-	ProviderOpenAI: {
-		{ID: "1", Model: "text-embedding-3-small", Description: "Ada v3 Small (default, cheap)"},
-		{ID: "2", Model: "text-embedding-3-large", Description: "Ada v3 Large (higher quality)"},
-		{ID: "3", Model: "text-embedding-ada-002", Description: "Ada v2 (legacy)"},
-	},
-	ProviderOpenRouter: {
-		{ID: "1", Model: "openai/text-embedding-3-small", Description: "OpenAI Ada v3 Small (default)"},
-		{ID: "2", Model: "openai/text-embedding-3-large", Description: "OpenAI Ada v3 Large"},
-	},
-	ProviderGemini: {
-		{ID: "1", Model: "gemini-embedding-001", Description: "Gemini Embedding 001 (default, 3072 dims)"},
-		{ID: "2", Model: "text-embedding-004", Description: "Text Embedding 004 (768 dims, lightweight)"},
-	},
-	ProviderVoyageAI: {
-		{ID: "1", Model: "voyage-3.5", Description: "Voyage 3.5 (default, recommended)"},
-		{ID: "2", Model: "voyage-3.5-lite", Description: "Voyage 3.5 Lite (fast, cheap)"},
-		{ID: "3", Model: "voyage-3-large", Description: "Voyage 3 Large (highest quality)"},
-		{ID: "4", Model: "voyage-code-3", Description: "Voyage Code 3 (code specialist)"},
-		{ID: "5", Model: "voyage-finance-2", Description: "Voyage Finance 2 (finance)"},
-		{ID: "6", Model: "voyage-law-2", Description: "Voyage Law 2 (legal)"},
-	},
-}
-
 // GetDefaultModel returns the default LLM model for a provider
 func GetDefaultModel(provider Provider) string {
 	if config, ok := DefaultModels[provider]; ok {
 		return config.LLMModel
-	}
-	return ""
-}
-
-// GetDefaultEmbeddingModel returns the default embedding model for a provider.
-func GetDefaultEmbeddingModel(provider Provider) string {
-	if config, ok := DefaultModels[provider]; ok {
-		return config.EmbeddingModel
 	}
 	return ""
 }

@@ -21,7 +21,7 @@ var rootCmd = &cobra.Command{
 	Long: `DevLog is a CLI tool that helps you track your development activity
 by analyzing git commit history and providing insights through natural language queries.
 
-Use 'devlog ingest' to scan a repository and 'devlog ask' to query your activity.
+Use 'devlog ingest' to scan a repository and 'devlog worklog' to view your activity.
 
 Profiles allow you to maintain separate databases for different work contexts.
 Use 'devlog profile' to manage profiles.`,

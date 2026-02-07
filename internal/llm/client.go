@@ -31,14 +31,12 @@ const (
 	ProviderBedrock    = constants.ProviderBedrock
 	ProviderOpenRouter = constants.ProviderOpenRouter
 	ProviderGemini     = constants.ProviderGemini
-	ProviderVoyageAI   = constants.ProviderVoyageAI
 )
 
 // Config holds configuration for creating an LLM client.
 type Config struct {
 	Provider           Provider
 	Model              string
-	EmbeddingModel     string // Embedding model to use
 	BaseURL            string
 	APIKey             string
 	AWSRegion          string
@@ -80,7 +78,6 @@ func defaultConfig(provider Provider) *Config {
 	modelConfig, ok := constants.DefaultModels[provider]
 	if ok {
 		cfg.Model = modelConfig.LLMModel
-		cfg.EmbeddingModel = modelConfig.EmbeddingModel
 		cfg.BaseURL = modelConfig.BaseURL
 		cfg.AWSRegion = modelConfig.AWSRegion
 	}

@@ -13,109 +13,53 @@ const (
 	ProviderOpenRouter Provider = "openrouter"
 	ProviderBedrock    Provider = "bedrock"
 	ProviderGemini     Provider = "gemini"
-	ProviderVoyageAI   Provider = "voyageai" // Embeddings only
 )
 
 // ProviderInfo contains display information about a provider
 type ProviderInfo struct {
-	Key                string
-	Name               string
-	Description        string
-	SupportsLLM        bool
-	SupportsEmbeddings bool
+	Key         string
+	Name        string
+	Description string
+	SupportsLLM bool
 }
 
 // AllProviders returns all available LLM providers in order
 var AllProviders = []ProviderInfo{
 	{
-		Key:                "1",
-		Name:               "Ollama",
-		Description:        "Free, local, private — Llama 3.2, DeepSeek, Qwen3",
-		SupportsLLM:        true,
-		SupportsEmbeddings: true,
-	},
-	{
-		Key:                "2",
-		Name:               "Anthropic",
-		Description:        "Claude Opus 4.6, Sonnet 4.5, Haiku 4.5",
-		SupportsLLM:        true,
-		SupportsEmbeddings: false, // Anthropic recommends Voyage AI
-	},
-	{
-		Key:                "3",
-		Name:               "OpenAI",
-		Description:        "GPT-5.2, GPT-5.3 Codex, GPT-4o",
-		SupportsLLM:        true,
-		SupportsEmbeddings: true,
-	},
-	{
-		Key:                "4",
-		Name:               "OpenRouter",
-		Description:        "Unified API — Gemini, Claude, GPT, Llama, DeepSeek & free models",
-		SupportsLLM:        true,
-		SupportsEmbeddings: true,
-	},
-	{
-		Key:                "5",
-		Name:               "Gemini",
-		Description:        "Google Gemini — Flash, Pro, 1M context",
-		SupportsLLM:        true,
-		SupportsEmbeddings: true,
-	},
-	{
-		Key:                "6",
-		Name:               "Bedrock",
-		Description:        "Claude via AWS (enterprise)",
-		SupportsLLM:        true,
-		SupportsEmbeddings: false,
-	},
-}
-
-// EmbeddingProviderInfo contains display information about embedding providers
-type EmbeddingProviderInfo struct {
-	Key         string
-	Name        string
-	Description string
-	Provider    Provider
-}
-
-// AllEmbeddingProviders returns all available embedding providers
-var AllEmbeddingProviders = []EmbeddingProviderInfo{
-	{
 		Key:         "1",
-		Name:        "Same as LLM provider",
-		Description: "Use the same provider for embeddings (recommended)",
-		Provider:    "", // Special case - will use LLM provider
+		Name:        "Ollama",
+		Description: "Free, local, private — Llama 3.2, DeepSeek, Qwen3",
+		SupportsLLM: true,
 	},
 	{
 		Key:         "2",
-		Name:        "Ollama",
-		Description: "Local embeddings (nomic-embed-text)",
-		Provider:    ProviderOllama,
+		Name:        "Anthropic",
+		Description: "Claude Opus 4.6, Sonnet 4.5, Haiku 4.5",
+		SupportsLLM: true,
 	},
 	{
 		Key:         "3",
 		Name:        "OpenAI",
-		Description: "OpenAI embeddings (text-embedding-3-small)",
-		Provider:    ProviderOpenAI,
+		Description: "GPT-5.2, GPT-5.3 Codex, GPT-4o",
+		SupportsLLM: true,
 	},
 	{
 		Key:         "4",
 		Name:        "OpenRouter",
-		Description: "OpenRouter embeddings (openai/text-embedding-3-small)",
-		Provider:    ProviderOpenRouter,
+		Description: "Unified API — Gemini, Claude, GPT, Llama, DeepSeek & free models",
+		SupportsLLM: true,
 	},
 	{
 		Key:         "5",
 		Name:        "Gemini",
-		Description: "Google Gemini embeddings (gemini-embedding-001)",
-		Provider:    ProviderGemini,
+		Description: "Google Gemini — Flash, Pro, 1M context",
+		SupportsLLM: true,
 	},
 	{
 		Key:         "6",
-		Name:        "Voyage AI",
-		Description: "Voyage AI embeddings (voyage-3.5) - Recommended by Anthropic",
-		Provider:    ProviderVoyageAI,
+		Name:        "Bedrock",
+		Description: "Claude via AWS (enterprise)",
+		SupportsLLM: true,
 	},
 }
 
@@ -140,15 +84,6 @@ func GetProviderInfo(provider Provider) *ProviderInfo {
 	return nil
 }
 
-// ProviderSupportsEmbeddings checks if a provider supports embeddings
-func ProviderSupportsEmbeddings(provider Provider) bool {
-	info := GetProviderInfo(provider)
-	if info == nil {
-		return false
-	}
-	return info.SupportsEmbeddings
-}
-
 // ProviderDescription returns a human-readable description of a provider
 func ProviderDescription(provider Provider) string {
 	switch provider {
@@ -164,8 +99,6 @@ func ProviderDescription(provider Provider) string {
 		return "OpenRouter (unified API, multiple models)"
 	case ProviderGemini:
 		return "Google Gemini (Flash, Pro, 1M context)"
-	case ProviderVoyageAI:
-		return "Voyage AI (embeddings specialist)"
 	default:
 		return string(provider)
 	}
@@ -225,14 +158,6 @@ func GetProviderSetupInfo(provider Provider) ProviderSetupInfo {
 			APIKeyPrefix: "AI",
 			Placeholder:  "AIza...",
 			SetupHint:    "Get your API key from: aistudio.google.com/apikey",
-			NeedsAPIKey:  true,
-		}
-	case ProviderVoyageAI:
-		return ProviderSetupInfo{
-			APIKeyURL:    "https://dash.voyageai.com/",
-			APIKeyPrefix: "pa-",
-			Placeholder:  "pa-...",
-			SetupHint:    "Get your API key from: dash.voyageai.com",
 			NeedsAPIKey:  true,
 		}
 	default:

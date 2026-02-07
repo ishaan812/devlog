@@ -114,11 +114,6 @@ func getLLMProviders() []constants.ProviderInfo {
 	return llmProviders
 }
 
-// getEmbeddingProviders returns all embedding provider options.
-func getEmbeddingProviders() []constants.EmbeddingProviderInfo {
-	return constants.AllEmbeddingProviders
-}
-
 // getModelOptions returns available LLM models for a provider.
 func getModelOptions(provider constants.Provider) []constants.ModelOption {
 	return constants.GetLLMModels(provider)
@@ -147,16 +142,6 @@ func ModelItems(provider constants.Provider) []SelectItem {
 	items := make([]SelectItem, len(models))
 	for i, m := range models {
 		items[i] = SelectItem{Label: m.Model, Description: m.Description}
-	}
-	return items
-}
-
-// EmbeddingProviderItems converts embedding provider info to SelectItems.
-func EmbeddingProviderItems() []SelectItem {
-	providers := getEmbeddingProviders()
-	items := make([]SelectItem, len(providers))
-	for i, p := range providers {
-		items[i] = SelectItem{Label: p.Name, Description: p.Description}
 	}
 	return items
 }

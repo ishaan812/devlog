@@ -6,15 +6,6 @@ import (
 	"strings"
 )
 
-//go:embed sql_generation.md
-var sqlGenerationPromptTemplate string
-
-//go:embed summarization.md
-var summarizationPromptTemplate string
-
-//go:embed time_filter.md
-var timeFilterPromptTemplate string
-
 //go:embed file_summary.md
 var fileSummaryPromptTemplate string
 
@@ -38,18 +29,6 @@ var worklogDayUpdatesPromptTemplate string
 
 //go:embed worklog_branch_summary.md
 var worklogBranchSummaryPromptTemplate string
-
-func BuildSQLPrompt(schema, question string) string {
-	return fmt.Sprintf(strings.TrimSpace(sqlGenerationPromptTemplate), schema, question)
-}
-
-func BuildSummarizationPrompt(question, results string) string {
-	return fmt.Sprintf(strings.TrimSpace(summarizationPromptTemplate), question, results)
-}
-
-func BuildTimeFilterPrompt(question string) string {
-	return fmt.Sprintf(strings.TrimSpace(timeFilterPromptTemplate), question)
-}
 
 func BuildFileSummaryPrompt(filePath, language, content string) string {
 	return fmt.Sprintf(strings.TrimSpace(fileSummaryPromptTemplate), filePath, language, content)

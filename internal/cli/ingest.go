@@ -56,9 +56,8 @@ var (
 	ingestReselectBranch bool
 
 	// Indexing flags
-	ingestSkipSummaries  bool
-	ingestSkipEmbeddings bool
-	ingestMaxFiles       int
+	ingestSkipSummaries bool
+	ingestMaxFiles      int
 
 	// Mode flags
 	ingestGitOnly        bool
@@ -75,7 +74,7 @@ var ingestCmd = &cobra.Command{
 
 This unified command performs two phases:
   1. Git History Ingestion - Scan commits and store in the database
-  2. Codebase Indexing - Generate summaries and embeddings for search
+  2. Codebase Indexing - Generate summaries for search
 
 The repository is automatically added to the active profile.
 
@@ -114,7 +113,6 @@ func init() {
 
 	// Indexing flags
 	ingestCmd.Flags().BoolVar(&ingestSkipSummaries, "skip-summaries", false, "Skip LLM-generated summaries")
-	ingestCmd.Flags().BoolVar(&ingestSkipEmbeddings, "skip-embeddings", false, "Skip embedding generation")
 	ingestCmd.Flags().IntVar(&ingestMaxFiles, "max-files", 500, "Maximum files to index")
 
 	// Mode flags
@@ -190,8 +188,7 @@ func runIngest(cmd *cobra.Command, args []string) error {
 	// Final success message
 	fmt.Println()
 	successColor.Printf("  Ingestion Complete!\n\n")
-	dimColor.Println("  Use 'devlog ask <question>' to query git history")
-	dimColor.Println("  Use 'devlog search <query>' to search the codebase")
+	dimColor.Println("  Use 'devlog worklog' to view your development activity")
 	fmt.Println()
 
 	return nil
@@ -832,7 +829,6 @@ func indexCodebase(absPath string, cfg *config.Config) error {
 
 	var llmClient llm.Client
 	var summarizer *indexer.Summarizer
-	var embedder llm.EmbeddingClient
 
 	if !ingestSkipSummaries {
 		llmClient, err = createLLMClient(cfg)
@@ -840,16 +836,6 @@ func indexCodebase(absPath string, cfg *config.Config) error {
 			return fmt.Errorf("failed to initialize LLM client: %w\n\nTo skip file/folder summaries, use: --skip-summaries", err)
 		}
 		summarizer = indexer.NewSummarizer(llmClient, IsVerbose())
-	}
-
-	// Create embedder for semantic search (unless explicitly skipped)
-	if !ingestSkipEmbeddings {
-		embedder, err = createEmbedder(cfg)
-		if err != nil {
-			warnColor.Printf("  Embeddings disabled: %v\n", err)
-			// Non-fatal: continue without embeddings
-			embedder = nil
-		}
 	}
 	if !ingestSkipSummaries && summarizer != nil {
 		// Read README.md for project context
@@ -1081,18 +1067,6 @@ func indexCodebase(absPath string, cfg *config.Config) error {
 
 	fmt.Printf("\r  Processed %d/%d files                    \n", totalFiles, totalFiles)
 
-	// Generate embeddings for files and folders with summaries
-	if embedder != nil {
-		embeddingCount, err := generateEmbeddings(ctx, dbRepo, codebase.ID, embedder, dimColor, infoColor)
-		if err != nil {
-			return fmt.Errorf("failed to generate embeddings: %w", err)
-		}
-		if embeddingCount > 0 {
-			dimColor.Printf("  Embeddings: ")
-			infoColor.Printf("%d generated\n", embeddingCount)
-		}
-	}
-
 	fmt.Println()
 	stats, err := dbRepo.GetCodebaseStats(ctx, codebase.ID)
 	if err != nil {
@@ -1239,98 +1213,6 @@ func generateCommitSummary(client llm.Client, commitMessage string, fileChanges 
 	defer cancel()
 
 	return client.Complete(ctx, prompt)
-}
-
-func generateEmbeddings(ctx context.Context, dbRepo *db.SQLRepository, codebaseID string, embedder llm.EmbeddingClient, dimColor, infoColor *color.Color) (int, error) {
-	// Get all files that have summaries but no embeddings
-	files, err := dbRepo.GetFilesByCodebase(ctx, codebaseID)
-	if err != nil {
-		return 0, fmt.Errorf("failed to get files for embedding: %w", err)
-	}
-
-	// Get all folders
-	folders, err := dbRepo.GetFoldersByCodebase(ctx, codebaseID)
-	if err != nil {
-		return 0, fmt.Errorf("failed to get folders for embedding: %w", err)
-	}
-
-	// Collect items that need embeddings
-	type embeddable struct {
-		text      string
-		fileIdx   int // -1 if folder
-		folderIdx int // -1 if file
-	}
-	var items []embeddable
-
-	for i, f := range files {
-		if f.Summary != "" && len(f.Embedding) == 0 {
-			text := f.Path + ": " + f.Summary
-			if f.Purpose != "" {
-				text += " (" + f.Purpose + ")"
-			}
-			items = append(items, embeddable{text: text, fileIdx: i, folderIdx: -1})
-		}
-	}
-	for i, f := range folders {
-		if f.Summary != "" && len(f.Embedding) == 0 {
-			text := f.Path + ": " + f.Summary
-			if f.Purpose != "" {
-				text += " (" + f.Purpose + ")"
-			}
-			items = append(items, embeddable{text: text, fileIdx: -1, folderIdx: i})
-		}
-	}
-
-	if len(items) == 0 {
-		return 0, nil
-	}
-
-	dimColor.Printf("\n  Generating embeddings for %d items...\n", len(items))
-
-	// Batch embed in chunks of 20
-	batchSize := 20
-	embeddedCount := 0
-
-	for start := 0; start < len(items); start += batchSize {
-		end := start + batchSize
-		if end > len(items) {
-			end = len(items)
-		}
-		batch := items[start:end]
-
-		texts := make([]string, len(batch))
-		for i, item := range batch {
-			texts[i] = item.text
-		}
-
-		embeddings, err := embedder.EmbedBatch(ctx, texts)
-		if err != nil {
-			return embeddedCount, fmt.Errorf("failed to embed batch: %w", err)
-		}
-
-		for i, emb := range embeddings {
-			item := batch[i]
-			if item.fileIdx >= 0 {
-				files[item.fileIdx].Embedding = emb
-				if err := dbRepo.UpsertFileIndex(ctx, &files[item.fileIdx]); err != nil {
-					return embeddedCount, fmt.Errorf("failed to save file embedding for %s: %w", files[item.fileIdx].Path, err)
-				}
-			} else if item.folderIdx >= 0 {
-				folders[item.folderIdx].Embedding = emb
-				if err := dbRepo.UpsertFolder(ctx, &folders[item.folderIdx]); err != nil {
-					return embeddedCount, fmt.Errorf("failed to save folder embedding for %s: %w", folders[item.folderIdx].Path, err)
-				}
-			}
-			embeddedCount++
-		}
-
-		fmt.Printf("\r  Embedded %d/%d items", embeddedCount, len(items))
-	}
-	if len(items) > 0 {
-		fmt.Println()
-	}
-
-	return embeddedCount, nil
 }
 
 func fillMissingSummaries(ctx context.Context, dbRepo *db.SQLRepository, repo *git.Repository, codebase *db.Codebase, llmClient llm.Client) (int, error) {
