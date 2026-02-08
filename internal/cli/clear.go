@@ -127,7 +127,7 @@ func runClear(cmd *cobra.Command, args []string) error {
 	dimColor.Println("  Clearing data...")
 
 	tables := []string{
-		"file_changes", "ingest_cursors", "commits", "branches",
+		"worklog_entries", "file_changes", "ingest_cursors", "commits", "branches",
 		"file_indexes", "folders", "codebases", "developers",
 	}
 

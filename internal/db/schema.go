@@ -111,6 +111,25 @@ CREATE TABLE IF NOT EXISTS ingest_cursors (
     UNIQUE(codebase_id, branch_name)
 );
 
+-- Worklog entries table (cached LLM-generated worklog content)
+CREATE TABLE IF NOT EXISTS worklog_entries (
+    id VARCHAR PRIMARY KEY,
+    codebase_id VARCHAR NOT NULL,
+    profile_name VARCHAR NOT NULL,
+    entry_date DATE NOT NULL,
+    branch_id VARCHAR,
+    branch_name VARCHAR,
+    entry_type VARCHAR NOT NULL,
+    group_by VARCHAR NOT NULL,
+    content VARCHAR NOT NULL,
+    commit_count INTEGER,
+    additions INTEGER,
+    deletions INTEGER,
+    commit_hashes VARCHAR NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(codebase_id, profile_name, entry_date, branch_id, entry_type, group_by)
+);
+
 -- Create indexes for better query performance
 CREATE INDEX IF NOT EXISTS idx_commits_codebase ON commits(codebase_id);
 CREATE INDEX IF NOT EXISTS idx_commits_branch ON commits(branch_id);
@@ -122,4 +141,5 @@ CREATE INDEX IF NOT EXISTS idx_file_changes_path ON file_changes(file_path);
 CREATE INDEX IF NOT EXISTS idx_branches_codebase ON branches(codebase_id);
 CREATE INDEX IF NOT EXISTS idx_folders_codebase ON folders(codebase_id);
 CREATE INDEX IF NOT EXISTS idx_file_indexes_codebase ON file_indexes(codebase_id);
+CREATE INDEX IF NOT EXISTS idx_worklog_entries_lookup ON worklog_entries(codebase_id, profile_name, entry_date, group_by);
 `

@@ -76,6 +76,14 @@ type Repository interface {
 	// -----------------------------------------
 	GetCodebaseStats(ctx context.Context, codebaseID string) (*CodebaseStats, error)
 
+	// Worklog entry operations
+	// -----------------------
+	UpsertWorklogEntry(ctx context.Context, entry *WorklogEntry) error
+	GetWorklogEntry(ctx context.Context, codebaseID, profile string, date time.Time, branchID, entryType, groupBy string) (*WorklogEntry, error)
+	ListWorklogEntriesByDate(ctx context.Context, codebaseID, profile string, date time.Time) ([]WorklogEntry, error)
+	ListWorklogDates(ctx context.Context, codebaseID, profile string) ([]WorklogDateInfo, error)
+	DeleteWorklogEntriesByCodebase(ctx context.Context, codebaseID string) error
+
 	// Raw query operations
 	// --------------------
 	ExecuteQuery(ctx context.Context, query string) ([]map[string]any, error)
@@ -893,6 +901,134 @@ func (r *SQLRepository) GetCodebaseStats(ctx context.Context, codebaseID string)
 		return nil, fmt.Errorf("iterate language stats: %w", err)
 	}
 	return stats, nil
+}
+
+// UpsertWorklogEntry creates or updates a worklog entry.
+func (r *SQLRepository) UpsertWorklogEntry(ctx context.Context, entry *WorklogEntry) error {
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO worklog_entries (id, codebase_id, profile_name, entry_date, branch_id, branch_name,
+			entry_type, group_by, content, commit_count, additions, deletions, commit_hashes, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+		ON CONFLICT (codebase_id, profile_name, entry_date, branch_id, entry_type, group_by) DO UPDATE SET
+			branch_name = EXCLUDED.branch_name,
+			content = EXCLUDED.content,
+			commit_count = EXCLUDED.commit_count,
+			additions = EXCLUDED.additions,
+			deletions = EXCLUDED.deletions,
+			commit_hashes = EXCLUDED.commit_hashes,
+			created_at = EXCLUDED.created_at`,
+		entry.ID, entry.CodebaseID, entry.ProfileName, entry.EntryDate, NullString(entry.BranchID),
+		NullString(entry.BranchName), entry.EntryType, entry.GroupBy, entry.Content,
+		entry.CommitCount, entry.Additions, entry.Deletions, entry.CommitHashes, entry.CreatedAt)
+	if err != nil {
+		return fmt.Errorf("upsert worklog entry: %w", err)
+	}
+	return nil
+}
+
+// GetWorklogEntry retrieves a single worklog entry for cache lookup.
+func (r *SQLRepository) GetWorklogEntry(ctx context.Context, codebaseID, profile string, date time.Time, branchID, entryType, groupBy string) (*WorklogEntry, error) {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT id, codebase_id, profile_name, entry_date, branch_id, branch_name,
+			entry_type, group_by, content, commit_count, additions, deletions, commit_hashes, created_at
+		FROM worklog_entries
+		WHERE codebase_id = $1 AND profile_name = $2 AND entry_date = $3
+			AND branch_id IS NOT DISTINCT FROM $4 AND entry_type = $5 AND group_by = $6`,
+		codebaseID, profile, date, NullString(branchID), entryType, groupBy)
+	return r.scanWorklogEntry(row)
+}
+
+func (r *SQLRepository) scanWorklogEntry(row *sql.Row) (*WorklogEntry, error) {
+	e := &WorklogEntry{}
+	var branchID, branchName sql.NullString
+	var createdAt sql.NullTime
+	err := row.Scan(&e.ID, &e.CodebaseID, &e.ProfileName, &e.EntryDate, &branchID, &branchName,
+		&e.EntryType, &e.GroupBy, &e.Content, &e.CommitCount, &e.Additions, &e.Deletions,
+		&e.CommitHashes, &createdAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("scan worklog entry: %w", err)
+	}
+	e.BranchID = branchID.String
+	e.BranchName = branchName.String
+	if createdAt.Valid {
+		e.CreatedAt = createdAt.Time
+	}
+	return e, nil
+}
+
+// ListWorklogEntriesByDate retrieves all worklog entries for a specific date.
+func (r *SQLRepository) ListWorklogEntriesByDate(ctx context.Context, codebaseID, profile string, date time.Time) ([]WorklogEntry, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, codebase_id, profile_name, entry_date, branch_id, branch_name,
+			entry_type, group_by, content, commit_count, additions, deletions, commit_hashes, created_at
+		FROM worklog_entries
+		WHERE codebase_id = $1 AND profile_name = $2 AND entry_date = $3
+		ORDER BY branch_name`, codebaseID, profile, date)
+	if err != nil {
+		return nil, fmt.Errorf("query worklog entries by date: %w", err)
+	}
+	defer rows.Close()
+	var entries []WorklogEntry
+	for rows.Next() {
+		e := WorklogEntry{}
+		var branchID, branchName sql.NullString
+		var createdAt sql.NullTime
+		if err := rows.Scan(&e.ID, &e.CodebaseID, &e.ProfileName, &e.EntryDate, &branchID, &branchName,
+			&e.EntryType, &e.GroupBy, &e.Content, &e.CommitCount, &e.Additions, &e.Deletions,
+			&e.CommitHashes, &createdAt); err != nil {
+			return nil, fmt.Errorf("scan worklog entry row: %w", err)
+		}
+		e.BranchID = branchID.String
+		e.BranchName = branchName.String
+		if createdAt.Valid {
+			e.CreatedAt = createdAt.Time
+		}
+		entries = append(entries, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate worklog entries: %w", err)
+	}
+	return entries, nil
+}
+
+// ListWorklogDates returns distinct dates with cached entries and aggregate stats.
+func (r *SQLRepository) ListWorklogDates(ctx context.Context, codebaseID, profile string) ([]WorklogDateInfo, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT entry_date, COUNT(*) as entry_count,
+			COALESCE(SUM(commit_count), 0) as total_commits,
+			COALESCE(SUM(additions), 0) as total_additions,
+			COALESCE(SUM(deletions), 0) as total_deletions
+		FROM worklog_entries
+		WHERE codebase_id = $1 AND profile_name = $2
+		GROUP BY entry_date
+		ORDER BY entry_date DESC`, codebaseID, profile)
+	if err != nil {
+		return nil, fmt.Errorf("query worklog dates: %w", err)
+	}
+	defer rows.Close()
+	var dates []WorklogDateInfo
+	for rows.Next() {
+		d := WorklogDateInfo{}
+		if err := rows.Scan(&d.EntryDate, &d.EntryCount, &d.CommitCount, &d.Additions, &d.Deletions); err != nil {
+			return nil, fmt.Errorf("scan worklog date: %w", err)
+		}
+		dates = append(dates, d)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate worklog dates: %w", err)
+	}
+	return dates, nil
+}
+
+// DeleteWorklogEntriesByCodebase deletes all worklog entries for a codebase.
+func (r *SQLRepository) DeleteWorklogEntriesByCodebase(ctx context.Context, codebaseID string) error {
+	if _, err := r.db.ExecContext(ctx, `DELETE FROM worklog_entries WHERE codebase_id = $1`, codebaseID); err != nil {
+		return fmt.Errorf("delete worklog entries: %w", err)
+	}
+	return nil
 }
 
 // ExecuteQuery executes a raw SQL query without parameters.

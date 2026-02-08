@@ -110,6 +110,33 @@ type IngestCursor struct {
 	UpdatedAt      time.Time
 }
 
+// WorklogEntry represents a cached LLM-generated worklog entry
+type WorklogEntry struct {
+	ID           string
+	CodebaseID   string
+	ProfileName  string
+	EntryDate    time.Time
+	BranchID     string
+	BranchName   string
+	EntryType    string // "day_updates" or "branch_summary"
+	GroupBy      string // "date" or "branch"
+	Content      string
+	CommitCount  int
+	Additions    int
+	Deletions    int
+	CommitHashes string // sorted, comma-joined hashes for invalidation
+	CreatedAt    time.Time
+}
+
+// WorklogDateInfo holds aggregated info for a single date's cached worklogs
+type WorklogDateInfo struct {
+	EntryDate   time.Time
+	EntryCount  int
+	CommitCount int
+	Additions   int
+	Deletions   int
+}
+
 // JSON is a type alias for map[string]any used for JSON columns
 type JSON = map[string]any
 

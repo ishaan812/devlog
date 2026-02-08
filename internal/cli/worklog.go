@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/fatih/color"
+	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
 	"github.com/ishaan812/devlog/internal/config"
@@ -27,6 +28,7 @@ var (
 	worklogBranch   string
 	worklogAll      bool
 	worklogGroupBy  string
+	worklogNoCache  bool
 )
 
 var worklogCmd = &cobra.Command{
@@ -64,6 +66,7 @@ func init() {
 	worklogCmd.Flags().StringVar(&worklogBranch, "branch", "", "Filter by specific branch")
 	worklogCmd.Flags().BoolVar(&worklogAll, "all", false, "Include all commits (not just your own)")
 	worklogCmd.Flags().StringVar(&worklogGroupBy, "group-by", "date", "Group commits by: date, branch")
+	worklogCmd.Flags().BoolVar(&worklogNoCache, "no-cache", false, "Skip cache and regenerate all LLM summaries")
 }
 
 type commitData struct {
@@ -157,6 +160,18 @@ func runWorklog(cmd *cobra.Command, args []string) error {
 
 	projectContext := getProjectContext(codebase)
 
+	// Set up cache context
+	var cache *worklogCacheContext
+	if codebase != nil && !worklogNoCache {
+		cache = &worklogCacheContext{
+			dbRepo:      dbRepo,
+			codebaseID:  codebase.ID,
+			profileName: cfg.GetActiveProfileName(),
+			loc:         loc,
+			noCache:     worklogNoCache,
+		}
+	}
+
 	var markdown string
 	switch worklogGroupBy {
 	case "branch":
@@ -164,10 +179,10 @@ func runWorklog(cmd *cobra.Command, args []string) error {
 		if groupErr != nil {
 			return groupErr
 		}
-		markdown, err = generateBranchWorklogMarkdown(groups, client, cfg, loc, projectContext)
+		markdown, err = generateBranchWorklogMarkdown(groups, client, cfg, loc, projectContext, cache)
 	default:
 		groups := groupByDate(commits, loc)
-		markdown, err = generateWorklogMarkdown(groups, client, cfg, loc, projectContext)
+		markdown, err = generateWorklogMarkdown(groups, client, cfg, loc, projectContext, cache)
 	}
 
 	if err != nil {
@@ -306,6 +321,97 @@ func buildAggregateStats(commits []commitData) string {
 	return fmt.Sprintf("%d commits | +%d/-%d lines | %d unique files changed", len(commits), totalAdditions, totalDeletions, len(fileSet))
 }
 
+// worklogCacheContext holds dependencies for cache operations during worklog generation
+type worklogCacheContext struct {
+	dbRepo      *db.SQLRepository
+	codebaseID  string
+	profileName string
+	loc         *time.Location
+	noCache     bool
+}
+
+// computeCommitHashes returns sorted comma-joined hashes for a set of commits (used as cache key)
+func computeCommitHashes(commits []commitData) string {
+	hashes := make([]string, len(commits))
+	for i, c := range commits {
+		hashes[i] = c.Hash
+	}
+	sort.Strings(hashes)
+	return strings.Join(hashes, ",")
+}
+
+// computeCommitStats returns aggregate additions and deletions for a set of commits
+func computeCommitStats(commits []commitData) (int, int) {
+	adds, dels := 0, 0
+	for _, c := range commits {
+		adds += c.Additions
+		dels += c.Deletions
+	}
+	return adds, dels
+}
+
+// getCachedOrGenerate checks the worklog cache and returns cached content if valid,
+// otherwise calls the generator function, stores the result, and returns it.
+func getCachedOrGenerate(
+	ctx context.Context,
+	cache *worklogCacheContext,
+	date time.Time,
+	branchID, branchName string,
+	entryType, groupBy string,
+	commits []commitData,
+	generator func() (string, error),
+) (string, bool, error) {
+	if cache == nil || cache.noCache || cache.dbRepo == nil || cache.codebaseID == "" {
+		content, err := generator()
+		return content, false, err
+	}
+
+	// Don't cache today's entries -- the day is not yet complete
+	today := time.Now().In(cache.loc).Truncate(24 * time.Hour)
+	entryDay := date.In(cache.loc).Truncate(24 * time.Hour)
+	isToday := entryDay.Equal(today)
+
+	currentHashes := computeCommitHashes(commits)
+
+	if !isToday {
+		// Try cache lookup
+		cached, err := cache.dbRepo.GetWorklogEntry(ctx, cache.codebaseID, cache.profileName, date, branchID, entryType, groupBy)
+		if err == nil && cached != nil && cached.CommitHashes == currentHashes {
+			return cached.Content, true, nil
+		}
+	}
+
+	// Cache miss or today -- generate
+	content, err := generator()
+	if err != nil {
+		return "", false, err
+	}
+
+	// Store in cache (even for today, so the console TUI can display it)
+	adds, dels := computeCommitStats(commits)
+	entry := &db.WorklogEntry{
+		ID:           uuid.New().String(),
+		CodebaseID:   cache.codebaseID,
+		ProfileName:  cache.profileName,
+		EntryDate:    date,
+		BranchID:     branchID,
+		BranchName:   branchName,
+		EntryType:    entryType,
+		GroupBy:      groupBy,
+		Content:      content,
+		CommitCount:  len(commits),
+		Additions:    adds,
+		Deletions:    dels,
+		CommitHashes: currentHashes,
+		CreatedAt:    time.Now(),
+	}
+	if storeErr := cache.dbRepo.UpsertWorklogEntry(ctx, entry); storeErr != nil {
+		VerboseLog("Warning: failed to cache worklog entry: %v", storeErr)
+	}
+
+	return content, false, nil
+}
+
 func groupByDate(commits []commitData, loc *time.Location) []dayGroup {
 	dateMap := make(map[string][]commitData)
 
@@ -400,7 +506,11 @@ func createWorklogClient(cfg *config.Config) (llm.Client, error) {
 	return llm.NewClient(llmCfg)
 }
 
-func generateWorklogMarkdown(groups []dayGroup, client llm.Client, cfg *config.Config, loc *time.Location, projectContext string) (string, error) {
+func generateWorklogMarkdown(groups []dayGroup, client llm.Client, cfg *config.Config, loc *time.Location, projectContext string, cache *worklogCacheContext) (string, error) {
+	ctx := context.Background()
+	dimColor := color.New(color.FgHiBlack)
+	cacheColor := color.New(color.FgHiGreen)
+
 	var sb strings.Builder
 
 	// Header
@@ -423,7 +533,7 @@ func generateWorklogMarkdown(groups []dayGroup, client llm.Client, cfg *config.C
 
 	sb.WriteString("---\n\n")
 
-	// Summary section (with LLM if available)
+	// Summary section (with LLM if available) - always regenerated
 	if client != nil {
 		summary, err := generateOverallSummary(groups, client, projectContext)
 		if err != nil {
@@ -443,6 +553,7 @@ func generateWorklogMarkdown(groups []dayGroup, client llm.Client, cfg *config.C
 
 		// Group commits by branch
 		branchCommits := make(map[string][]commitData)
+		branchIDs := make(map[string]string)
 		branchOrder := []string{}
 		for _, c := range group.Commits {
 			branchName := c.BranchName
@@ -453,47 +564,36 @@ func generateWorklogMarkdown(groups []dayGroup, client llm.Client, cfg *config.C
 				branchOrder = append(branchOrder, branchName)
 			}
 			branchCommits[branchName] = append(branchCommits[branchName], c)
+			if c.BranchID != "" {
+				branchIDs[branchName] = c.BranchID
+			}
 		}
 
 		// For each branch on this day
 		for _, branchName := range branchOrder {
 			commits := branchCommits[branchName]
+			branchID := branchIDs[branchName]
+
+			// Build the full branch section (summary + commits) with caching
+			// We cache the entire section so the console TUI can display it completely
+			branchSection, cached, err := getCachedOrGenerate(
+				ctx, cache, group.Date, branchID, branchName,
+				"day_updates", "date", commits,
+				func() (string, error) {
+					return buildDayBranchSection(commits, client, projectContext, loc)
+				},
+			)
+			if err != nil {
+				return "", fmt.Errorf("failed to generate day/branch updates: %w", err)
+			}
+			if cached {
+				cacheColor.Printf("  %s [%s]: cached\n", group.Date.In(loc).Format("Jan 2"), branchName)
+			} else {
+				dimColor.Printf("  %s [%s]: generated\n", group.Date.In(loc).Format("Jan 2"), branchName)
+			}
 
 			sb.WriteString(fmt.Sprintf("## Branch: %s\n\n", branchName))
-
-			// Updates section - LLM-summarized bullet points
-			sb.WriteString("### Updates\n\n")
-
-			// Generate summarized updates using LLM
-			if client != nil {
-				updatesSummary, err := generateDayBranchUpdates(commits, client, projectContext)
-				if err != nil {
-					return "", fmt.Errorf("failed to generate day/branch updates: %w", err)
-				}
-				if updatesSummary != "" {
-					sb.WriteString(updatesSummary)
-					sb.WriteString("\n")
-				}
-			}
-			sb.WriteString("\n")
-
-			// Commits section
-			sb.WriteString("### Commits\n\n")
-
-			// Sort commits by time (newest first)
-			sort.Slice(commits, func(i, j int) bool {
-				return commits[i].CommittedAt.After(commits[j].CommittedAt)
-			})
-
-			for _, c := range commits {
-				commitTime := c.CommittedAt.In(loc).Format("15:04")
-				message := strings.Split(strings.TrimSpace(c.Message), "\n")[0]
-				sb.WriteString(fmt.Sprintf("- **%s** `%s` %s", commitTime, c.Hash[:7], message))
-				if c.Additions > 0 || c.Deletions > 0 {
-					sb.WriteString(fmt.Sprintf(" (+%d/-%d)", c.Additions, c.Deletions))
-				}
-				sb.WriteString("\n")
-			}
+			sb.WriteString(branchSection)
 			sb.WriteString("\n")
 		}
 		sb.WriteString("---\n\n")
@@ -505,7 +605,11 @@ func generateWorklogMarkdown(groups []dayGroup, client llm.Client, cfg *config.C
 	return sb.String(), nil
 }
 
-func generateBranchWorklogMarkdown(groups []branchGroup, client llm.Client, cfg *config.Config, loc *time.Location, projectContext string) (string, error) {
+func generateBranchWorklogMarkdown(groups []branchGroup, client llm.Client, cfg *config.Config, loc *time.Location, projectContext string, cache *worklogCacheContext) (string, error) {
+	ctx := context.Background()
+	dimColor := color.New(color.FgHiBlack)
+	cacheColor := color.New(color.FgHiGreen)
+
 	var sb strings.Builder
 
 	// Header
@@ -524,8 +628,10 @@ func generateBranchWorklogMarkdown(groups []branchGroup, client llm.Client, cfg 
 
 	for _, group := range groups {
 		branchName := "unknown"
+		branchID := ""
 		if group.Branch != nil {
 			branchName = group.Branch.Name
+			branchID = group.Branch.ID
 		}
 
 		// Branch heading
@@ -542,11 +648,28 @@ func generateBranchWorklogMarkdown(groups []branchGroup, client llm.Client, cfg 
 		// Summary section - LLM-generated summary of all commits in this branch
 		sb.WriteString("## Summary\n\n")
 
-		// Generate a consolidated summary using LLM if available
+		// Generate a consolidated summary using LLM if available (with cache)
 		if client != nil {
-			branchSummary, err := generateBranchSummary(group, client, projectContext)
+			// For branch summary, use the earliest commit date as the entry date
+			var entryDate time.Time
+			if len(group.Commits) > 0 {
+				entryDate = group.Commits[0].CommittedAt.In(loc).Truncate(24 * time.Hour)
+			}
+
+			branchSummary, cached, err := getCachedOrGenerate(
+				ctx, cache, entryDate, branchID, branchName,
+				"branch_summary", "branch", group.Commits,
+				func() (string, error) {
+					return generateBranchSummary(group, client, projectContext)
+				},
+			)
 			if err != nil {
 				return "", fmt.Errorf("failed to generate branch summary: %w", err)
+			}
+			if cached {
+				cacheColor.Printf("  Branch %s: cached\n", branchName)
+			} else {
+				dimColor.Printf("  Branch %s: generated\n", branchName)
 			}
 			if branchSummary != "" {
 				sb.WriteString(branchSummary)
@@ -607,6 +730,48 @@ func generateBranchWorklogMarkdown(groups []branchGroup, client llm.Client, cfg 
 	sb.WriteString("*Generated by [DevLog](https://github.com/ishaan812/devlog)*\n")
 
 	return sb.String(), nil
+}
+
+// buildDayBranchSection builds the full markdown section for a day+branch, including
+// both the LLM-generated summary and the commit list. This is what gets cached.
+func buildDayBranchSection(commits []commitData, client llm.Client, projectContext string, loc *time.Location) (string, error) {
+	var section strings.Builder
+
+	// Updates section - LLM-summarized bullet points
+	section.WriteString("### Updates\n\n")
+	if client != nil {
+		updatesSummary, err := generateDayBranchUpdates(commits, client, projectContext)
+		if err != nil {
+			return "", err
+		}
+		if updatesSummary != "" {
+			section.WriteString(updatesSummary)
+			section.WriteString("\n")
+		}
+	}
+	section.WriteString("\n")
+
+	// Commits section
+	section.WriteString("### Commits\n\n")
+
+	// Sort commits by time (newest first)
+	sorted := make([]commitData, len(commits))
+	copy(sorted, commits)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].CommittedAt.After(sorted[j].CommittedAt)
+	})
+
+	for _, c := range sorted {
+		commitTime := c.CommittedAt.In(loc).Format("15:04")
+		message := strings.Split(strings.TrimSpace(c.Message), "\n")[0]
+		section.WriteString(fmt.Sprintf("- **%s** `%s` %s", commitTime, c.Hash[:7], message))
+		if c.Additions > 0 || c.Deletions > 0 {
+			section.WriteString(fmt.Sprintf(" (+%d/-%d)", c.Additions, c.Deletions))
+		}
+		section.WriteString("\n")
+	}
+
+	return section.String(), nil
 }
 
 func generateBranchSummary(group branchGroup, client llm.Client, projectContext string) (string, error) {
