@@ -104,6 +104,16 @@ npm install -g @ishaan812/devlog
 go install github.com/ishaan812/devlog/cmd/devlog@latest
 ```
 
+**Note:** Make sure `$HOME/go/bin` (or `$GOPATH/bin`) is in your PATH. Add this to your shell config if needed:
+
+```bash
+# For bash (~/.bashrc) or zsh (~/.zshrc)
+export PATH="$HOME/go/bin:$PATH"
+
+# For fish (~/.config/fish/config.fish)
+set -gx PATH $HOME/go/bin $PATH
+```
+
 ### From Source
 
 ```bash

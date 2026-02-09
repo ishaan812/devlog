@@ -84,9 +84,15 @@ function Navbar() {
 
 function Hero() {
   const [copied, setCopied] = useState(false)
+  const [installMethod, setInstallMethod] = useState('npm')
+
+  const commands = {
+    npm: 'npm i -g @ishaan812/devlog',
+    go: 'go install github.com/ishaan812/devlog/cmd/devlog@latest'
+  }
 
   const handleCopy = () => {
-    navigator.clipboard.writeText('npm i -g @ishaan812/devlog')
+    navigator.clipboard.writeText(commands[installMethod])
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
@@ -118,15 +124,43 @@ function Hero() {
         <br />
         <span className="text-green mr-1" aria-hidden="true">&gt;</span> Professional markdown work logs from your git history.
       </p>
-      <div className="flex flex-col items-center gap-4 mb-4">
+      <div className="flex flex-col items-center gap-4">
+        {/* Install method switcher */}
+        <div className="inline-flex items-center gap-1 p-1 bg-bg-secondary border border-border-main rounded-md">
+          <button
+            onClick={() => setInstallMethod('npm')}
+            className={`px-4 py-1.5 rounded font-mono text-xs uppercase tracking-[1px] transition-all duration-200 ${
+              installMethod === 'npm'
+                ? 'bg-green text-bg-primary font-bold'
+                : 'text-text-dim hover:text-text-secondary'
+            }`}
+            type="button"
+            aria-label="Install via npm"
+          >
+            npm
+          </button>
+          <button
+            onClick={() => setInstallMethod('go')}
+            className={`px-4 py-1.5 rounded font-mono text-xs uppercase tracking-[1px] transition-all duration-200 ${
+              installMethod === 'go'
+                ? 'bg-green text-bg-primary font-bold'
+                : 'text-text-dim hover:text-text-secondary'
+            }`}
+            type="button"
+            aria-label="Install via Go"
+          >
+            go
+          </button>
+        </div>
+        
         <button
-          className="group inline-flex items-center gap-3 py-4 px-6 bg-bg-secondary border border-border-main rounded-md text-sm text-text-primary cursor-pointer transition-all duration-200 hover:border-border-green hover:shadow-[0_0_20px_rgba(0,255,65,0.15)]"
+          className="group inline-flex items-center gap-3 py-4 px-6 bg-bg-secondary border border-border-main rounded-md text-sm text-text-primary cursor-pointer transition-all duration-200 hover:border-border-green hover:shadow-[0_0_20px_rgba(0,255,65,0.15)] mb-6"
           onClick={handleCopy}
           type="button"
-          aria-label={copied ? 'Install command copied to clipboard' : 'Copy install command: npm i -g @ishaan812/devlog'}
+          aria-label={copied ? 'Install command copied to clipboard' : `Copy install command: ${commands[installMethod]}`}
         >
           <span className="text-green" aria-hidden="true">$</span>
-          <span>npm i -g @ishaan812/devlog</span>
+          <span className="font-mono">{commands[installMethod]}</span>
           {copied ? (
             <Check size={16} className="text-green" aria-hidden="true" />
           ) : (
@@ -326,9 +360,15 @@ function Marquee() {
 
 function CTA() {
   const [copied, setCopied] = useState(false)
+  const [installMethod, setInstallMethod] = useState('npm')
+
+  const commands = {
+    npm: 'npm i -g @ishaan812/devlog',
+    go: 'go install github.com/ishaan812/devlog/cmd/devlog@latest'
+  }
 
   const handleCopy = () => {
-    navigator.clipboard.writeText('npm i -g @ishaan812/devlog')
+    navigator.clipboard.writeText(commands[installMethod])
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
@@ -343,21 +383,53 @@ function CTA() {
         Professional markdown work logs, generated from your actual commits.<br />
         Multi-repo, multi-branch, zero effort.
       </p>
-      <button
-        className="group inline-flex items-center gap-3 py-4 px-6 bg-bg-secondary border border-border-main rounded-md text-sm text-text-primary cursor-pointer transition-all duration-200 mb-6 hover:border-border-green hover:shadow-[0_0_20px_rgba(0,255,65,0.15)]"
-        onClick={handleCopy}
-        type="button"
-        aria-label={copied ? 'Install command copied to clipboard' : 'Copy install command: npm i -g @ishaan812/devlog'}
-      >
-        <span className="text-green" aria-hidden="true">$</span>
-        <span>npm i -g @ishaan812/devlog</span>
-        {copied ? (
-          <Check size={16} className="text-green" aria-hidden="true" />
-        ) : (
-          <Copy size={16} className="text-text-dim transition-colors duration-200 group-hover:text-green" aria-hidden="true" />
-        )}
-      </button>
-      <span className="block mt-4 text-xs text-text-dim">Free &amp; Open Source. MIT License. Local-first.</span>
+      
+      <div className="flex flex-col items-center gap-4">
+        {/* Install method switcher */}
+        <div className="inline-flex items-center gap-1 p-1 bg-bg-secondary border border-border-main rounded-md">
+          <button
+            onClick={() => setInstallMethod('npm')}
+            className={`px-4 py-1.5 rounded font-mono text-xs uppercase tracking-[1px] transition-all duration-200 ${
+              installMethod === 'npm'
+                ? 'bg-green text-bg-primary font-bold'
+                : 'text-text-dim hover:text-text-secondary'
+            }`}
+            type="button"
+            aria-label="Install via npm"
+          >
+            npm
+          </button>
+          <button
+            onClick={() => setInstallMethod('go')}
+            className={`px-4 py-1.5 rounded font-mono text-xs uppercase tracking-[1px] transition-all duration-200 ${
+              installMethod === 'go'
+                ? 'bg-green text-bg-primary font-bold'
+                : 'text-text-dim hover:text-text-secondary'
+            }`}
+            type="button"
+            aria-label="Install via Go"
+          >
+            go
+          </button>
+        </div>
+        
+        <button
+          className="group inline-flex items-center gap-3 py-4 px-6 bg-bg-secondary border border-border-main rounded-md text-sm text-text-primary cursor-pointer transition-all duration-200 hover:border-border-green hover:shadow-[0_0_20px_rgba(0,255,65,0.15)]"
+          onClick={handleCopy}
+          type="button"
+          aria-label={copied ? 'Install command copied to clipboard' : `Copy install command: ${commands[installMethod]}`}
+        >
+          <span className="text-green" aria-hidden="true">$</span>
+          <span className="font-mono">{commands[installMethod]}</span>
+          {copied ? (
+            <Check size={16} className="text-green" aria-hidden="true" />
+          ) : (
+            <Copy size={16} className="text-text-dim transition-colors duration-200 group-hover:text-green" aria-hidden="true" />
+          )}
+        </button>
+      </div>
+      
+      <span className="block mt-6 text-xs text-text-dim">Free &amp; Open Source. MIT License. Local-first.</span>
     </section>
   )
 }
