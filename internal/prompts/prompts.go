@@ -30,6 +30,15 @@ var worklogDayUpdatesPromptTemplate string
 //go:embed worklog_branch_summary.md
 var worklogBranchSummaryPromptTemplate string
 
+//go:embed worklog_overall_summary_nontechnical.md
+var worklogOverallSummaryNonTechnicalPromptTemplate string
+
+//go:embed worklog_day_updates_nontechnical.md
+var worklogDayUpdatesNonTechnicalPromptTemplate string
+
+//go:embed worklog_branch_summary_nontechnical.md
+var worklogBranchSummaryNonTechnicalPromptTemplate string
+
 //go:embed commit_message.md
 var commitMessagePromptTemplate string
 
@@ -63,6 +72,18 @@ func BuildWorklogDayUpdatesPrompt(projectContext, commits string) string {
 
 func BuildWorklogBranchSummaryPrompt(projectContext, commits, stats string) string {
 	return fmt.Sprintf(strings.TrimSpace(worklogBranchSummaryPromptTemplate), projectContext, commits, stats)
+}
+
+func BuildWorklogOverallSummaryPromptNonTechnical(projectContext, commits, stats string) string {
+	return fmt.Sprintf(strings.TrimSpace(worklogOverallSummaryNonTechnicalPromptTemplate), projectContext, commits, stats)
+}
+
+func BuildWorklogDayUpdatesPromptNonTechnical(projectContext, commits string) string {
+	return fmt.Sprintf(strings.TrimSpace(worklogDayUpdatesNonTechnicalPromptTemplate), projectContext, commits)
+}
+
+func BuildWorklogBranchSummaryPromptNonTechnical(projectContext, commits, stats string) string {
+	return fmt.Sprintf(strings.TrimSpace(worklogBranchSummaryNonTechnicalPromptTemplate), projectContext, commits, stats)
 }
 
 func BuildCommitMessagePrompt(projectContext, diff string) string {

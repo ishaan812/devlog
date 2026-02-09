@@ -21,7 +21,8 @@ const (
 	stepExistingProfiles      // show existing profiles
 	stepProfileName
 	stepProfileDesc
-	stepTimezone // timezone selection
+	stepTimezone     // timezone selection
+	stepWorklogStyle // worklog style preference
 	stepProvider
 	stepProviderConfig
 	stepModelSelection // model selection
@@ -37,6 +38,7 @@ type Model struct {
 	profileName   string
 	profileDesc   string
 	timezone      string
+	worklogStyle  string
 	selectedIdx   int
 	textInput     textinput.Model
 	spinner       spinner.Model
@@ -112,6 +114,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "up", "k":
 			if m.step == stepTimezone && m.selectedIdx > 0 {
 				m.selectedIdx--
+			} else if m.step == stepWorklogStyle && m.selectedIdx > 0 {
+				m.selectedIdx--
 			} else if m.step == stepProvider && m.selectedIdx > 0 {
 				m.selectedIdx--
 			} else if m.step == stepModelSelection && m.selectedIdx > 0 {
@@ -121,6 +125,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "down", "j":
 			if m.step == stepTimezone && m.selectedIdx < len(getTimezoneOptions())-1 {
+				m.selectedIdx++
+			} else if m.step == stepWorklogStyle && m.selectedIdx < 1 {
 				m.selectedIdx++
 			} else if m.step == stepProvider && m.selectedIdx < len(getLLMProviders())-1 {
 				m.selectedIdx++
@@ -232,6 +238,18 @@ func (m Model) handleEnter() (tea.Model, tea.Cmd) {
 		}
 		if m.timezone == "" {
 			m.timezone = "UTC"
+		}
+		m.step = stepWorklogStyle
+		m.selectedIdx = 0
+		return m, nil
+
+	case stepWorklogStyle:
+		worklogStyles := []string{"non-technical", "technical"}
+		if m.selectedIdx < len(worklogStyles) {
+			m.worklogStyle = worklogStyles[m.selectedIdx]
+		}
+		if m.worklogStyle == "" {
+			m.worklogStyle = "non-technical"
 		}
 		m.step = stepProvider
 		m.selectedIdx = 0
@@ -351,9 +369,14 @@ func (m Model) finishOnboarding() (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// Set timezone for the profile
+	// Set timezone and worklog style for the profile
 	if m.config.Profiles != nil && m.config.Profiles[m.profileName] != nil {
 		m.config.Profiles[m.profileName].Timezone = m.timezone
+		if m.worklogStyle != "" {
+			m.config.Profiles[m.profileName].WorklogStyle = m.worklogStyle
+		} else {
+			m.config.Profiles[m.profileName].WorklogStyle = "non-technical" // default
+		}
 	}
 
 	// Set as active profile
@@ -384,6 +407,8 @@ func (m Model) View() string {
 		s.WriteString(m.viewProfileDesc())
 	case stepTimezone:
 		s.WriteString(m.viewTimezone())
+	case stepWorklogStyle:
+		s.WriteString(m.viewWorklogStyle())
 	case stepProvider:
 		s.WriteString(m.viewProvider())
 	case stepProviderConfig:
@@ -498,9 +523,31 @@ func (m Model) viewTimezone() string {
 	)
 }
 
+func (m Model) viewWorklogStyle() string {
+	items := []SelectItem{
+		{
+			Label:       "Non-technical (default)",
+			Description: "Focus on high-level goals and accomplishments",
+		},
+		{
+			Label:       "Technical",
+			Description: "Include file paths, code changes, and technical details",
+		},
+	}
+	
+	return RenderSelectList(
+		"Step 3: Worklog Style",
+		normalStyle.Render("Choose how detailed your work logs should be."),
+		items,
+		m.selectedIdx,
+		false, 0,
+		"Use arrow keys to select, Enter to confirm",
+	)
+}
+
 func (m Model) viewProvider() string {
 	return RenderSelectList(
-		"Step 2: Choose LLM Provider",
+		"Step 4: Choose LLM Provider",
 		normalStyle.Render("DevLog uses an LLM to generate summaries and answer questions."),
 		LLMProviderItems(),
 		m.selectedIdx,

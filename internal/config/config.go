@@ -22,9 +22,10 @@ type Profile struct {
 	Name             string                          `json:"name"`
 	Description      string                          `json:"description,omitempty"`
 	CreatedAt        string                          `json:"created_at"`
-	Timezone         string                          `json:"timezone,omitempty"` // IANA timezone (e.g. "America/New_York")
-	Repos            []string                        `json:"repos"`              // Repo paths in this profile
-	BranchSelections map[string]*RepoBranchSelection `json:"branch_selections"`  // Saved branch selections per repo path
+	Timezone         string                          `json:"timezone,omitempty"`  // IANA timezone (e.g. "America/New_York")
+	WorklogStyle     string                          `json:"worklog_style,omitempty"` // "technical" or "non-technical" (default: non-technical)
+	Repos            []string                        `json:"repos"`               // Repo paths in this profile
+	BranchSelections map[string]*RepoBranchSelection `json:"branch_selections"`   // Saved branch selections per repo path
 }
 
 // Config holds all configuration for devlog.
@@ -502,4 +503,33 @@ func (c *Config) GetTimezone() string {
 		}
 	}
 	return "UTC"
+}
+
+// GetWorklogStyle returns the worklog style for the active profile, defaulting to "non-technical"
+func (c *Config) GetWorklogStyle() string {
+	if c.Profiles != nil && c.ActiveProfile != "" {
+		if profile := c.Profiles[c.ActiveProfile]; profile != nil && profile.WorklogStyle != "" {
+			return profile.WorklogStyle
+		}
+	}
+	return "non-technical"
+}
+
+// SetWorklogStyle sets the worklog style for a profile
+func (c *Config) SetWorklogStyle(profileName, style string) error {
+	if c.Profiles == nil {
+		return fmt.Errorf("profile '%s' not found", profileName)
+	}
+
+	profile, exists := c.Profiles[profileName]
+	if !exists {
+		return fmt.Errorf("profile '%s' not found", profileName)
+	}
+
+	if style != "technical" && style != "non-technical" {
+		return fmt.Errorf("invalid worklog style: %s (must be 'technical' or 'non-technical')", style)
+	}
+
+	profile.WorklogStyle = style
+	return nil
 }

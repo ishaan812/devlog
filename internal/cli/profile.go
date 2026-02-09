@@ -69,6 +69,18 @@ var profileReposCmd = &cobra.Command{
 	RunE:  runProfileRepos,
 }
 
+var profileSetWorklogStyleCmd = &cobra.Command{
+	Use:   "set-worklog-style <style>",
+	Short: "Set worklog style for the active profile",
+	Long: `Set the worklog style preference for the active profile.
+
+Valid styles:
+  non-technical - Focus on high-level goals and accomplishments
+  technical     - Include file paths, code changes, and technical details`,
+	Args: cobra.ExactArgs(1),
+	RunE: runProfileSetWorklogStyle,
+}
+
 func init() {
 	rootCmd.AddCommand(profileCmd)
 	profileCmd.AddCommand(profileListCmd)
@@ -76,6 +88,7 @@ func init() {
 	profileCmd.AddCommand(profileUseCmd)
 	profileCmd.AddCommand(profileDeleteCmd)
 	profileCmd.AddCommand(profileReposCmd)
+	profileCmd.AddCommand(profileSetWorklogStyleCmd)
 
 	profileDeleteCmd.Flags().BoolVar(&deleteProfileData, "data", false, "Also delete the profile's database")
 }
@@ -103,6 +116,12 @@ func runProfileShow(cmd *cobra.Command, args []string) error {
 			infoColor.Printf("  Description: %s\n", profile.Description)
 		}
 		dimColor.Printf("  Created: %s\n", profile.CreatedAt)
+		
+		worklogStyle := profile.WorklogStyle
+		if worklogStyle == "" {
+			worklogStyle = "non-technical (default)"
+		}
+		infoColor.Printf("  Worklog Style: %s\n", worklogStyle)
 		infoColor.Printf("  Repositories: %d\n", len(profile.Repos))
 	}
 
@@ -293,5 +312,32 @@ func runProfileRepos(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Println()
+	return nil
+}
+
+func runProfileSetWorklogStyle(cmd *cobra.Command, args []string) error {
+	style := args[0]
+
+	if style != "technical" && style != "non-technical" {
+		return fmt.Errorf("invalid worklog style: %s (must be 'technical' or 'non-technical')", style)
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	profileName := cfg.GetActiveProfileName()
+	if err := cfg.SetWorklogStyle(profileName, style); err != nil {
+		return err
+	}
+
+	if err := cfg.Save(); err != nil {
+		return fmt.Errorf("failed to save config: %w", err)
+	}
+
+	successColor := color.New(color.FgHiGreen)
+	successColor.Printf("Set worklog style to '%s' for profile '%s'\n", style, profileName)
+
 	return nil
 }

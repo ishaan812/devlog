@@ -462,6 +462,73 @@ devlog ingest --skip-summaries
 - **Open source maintainers** who want to generate changelogs and activity summaries
 - **Anyone tired of `git log --oneline | head -50`** as a standup prep strategy
 
+## About the Project
+
+### The Problem That Started It All
+
+Every Monday morning, the same ritual: staring at four terminal windows, trying to piece together what I shipped last week. Between juggling multiple feature branches, emergency hotfixes, and code reviews across frontend, backend, and infrastructure repos, I'd lose track of my own work.
+
+Standup meetings became archaeology sessions. Performance reviews meant hours of manual git history diving and piecing together scraps I had left to remember what I worked on. I'd spend an awful amount of time *remembering* what I built.
+
+The final straw? Missing a critical bug fix in a standup because it happened in a repo I forgot I'd touched. I realized: **git is the perfect source of truth, but humans are terrible at reading raw git logs across dozens of branches.**
+
+What if your git history could just... explain itself?
+
+### What I Learned
+
+Building DevLog taught me that **context is expensive, but structured data is cheap**:
+
+1. **LLM Integration Patterns**: Initially, I hardcoded Gemini. Bad idea. Abstracting provider interfaces taught me the value of flexibility—users shouldn't be forced into expensive APIs when Ollama runs free on their laptop. The `llm.Client` interface now supports 5+ providers with zero code changes to the core logic.
+
+2. **Git Isn't Just Text**: Walking a git repository efficiently is *hard*. I learned about git object databases, tree traversal algorithms, and how to use `git2go` (libgit2 bindings) to avoid shelling out to git commands thousands of times. The performance difference was \( O(n \log n) \to O(n) \) for large repos.
+
+3. **Terminal UIs That Don't Suck**: Building the interactive console with [Bubble Tea](https://github.com/charmbracelet/bubbletea) taught me functional reactive patterns in Go. State management in a TUI is surprisingly similar to React—every keypress is an event, every render is a pure function of state.
+
+4. **Distribution Complexity**: Shipping a Go binary via npm was trickier than expected. I learned about platform detection, cross-compilation, release automation with GitHub Actions, and why `install.js` scripts need extensive error handling. Supporting `npm install -g`, `go install`, and `brew` simultaneously meant tripling my packaging logic.
+
+5. **Privacy-First Design**: Making Ollama the default provider wasn't just philosophical—it forced architectural decisions that made the tool better. Every API call had to be justified. Every piece of data sent to an LLM had to be minimal. The result: most queries are < 2KB, even for large repos.
+
+### Challenges I Faced
+
+1. **Multi-Repo Timeline Merging**  
+   **Problem**: Users work on 5+ repos simultaneously. How do you merge timelines across repos while keeping branch context clear?  
+   **Solution**: Unified timestamp sorting with branch metadata preserved. WorkLogs group by `(date, repo, branch)` tuples, then sort commits within each group. The data model stores absolute timestamps, avoiding timezone hell.
+
+2. **LLM Prompt Engineering for Code**  
+   **Problem**: Early summaries were terrible—either too verbose ("added semicolon to line 47") or too vague ("updated files").  
+   **Solution**: Iterative prompt design with few-shot examples. I learned that LLMs need *explicit structure*:
+   ```
+   Given these commits, extract:
+   - High-level changes (what feature/fix)
+   - Technical approach (how it works)
+   - Files affected (why it matters)
+   ```
+   This increased summary quality by ~60% based on user feedback.
+
+3. **Performance on Large Repos**  
+   **Problem**: A repo with 50,000 commits would take 2+ minutes to ingest. Unacceptable.  
+   **Solution**: Incremental ingestion. DevLog tracks the last processed commit SHA per branch. Re-runs only walk new commits:
+   \[
+   T_{\text{ingest}} = O(k) \text{ where } k = \text{new commits}, \text{ not } O(n)
+   \]
+   Average re-ingest time dropped from 120s to 3s on active repos.
+
+4. **Cross-Platform Binary Distribution**  
+   **Problem**: Go users want `go install`. JS developers want `npm install -g`. Both should work.  
+   **Solution**: `package.json` includes a post-install script (`install.js`) that detects the platform, downloads the correct pre-built binary from GitHub releases, and symlinks it. Go users bypass npm entirely. One codebase, two package managers.
+
+5. **Making TUIs Feel Native**  
+   **Problem**: Terminal UIs often feel sluggish or unresponsive. Arrow key lag, janky scrolling, unclear state changes.  
+   **Solution**: Embraced Bubble Tea's Elm architecture. Every component is a pure state machine. Render logic never blocks. The result: 60 FPS terminal UIs with smooth vim-style navigation (`j`/`k` keys, `Ctrl+D`/`Ctrl+U` scrolling).
+
+### What's Next
+
+- **Linear/Slack/Jira integrations**: To be able to gather informations from all work surfaces
+- **Team mode**: Aggregate worklogs across teams for engineering manager reports
+- **Git hooks**: Auto-commit worklogs to a markdown file in your repo on each commit
+
+DevLog started as a personal itch—I was tired of forgetting my own work. It turned into a lesson in building tools that respect user privacy, embrace local-first principles, and make boring tasks (standup prep) disappear. If you've ever fumbled through your slack messages at 8:59am before a standup, this tool is for you.
+
 ## Contributing
 
 Contributions are welcome! DevLog is open source and we'd love your help making it better.

@@ -112,6 +112,29 @@ func runOnboardLegacy() error {
 	}
 	cfg.ActiveProfile = profileName
 
+	// Ask for worklog style preference
+	fmt.Println()
+	promptColor.Print("Worklog style preference: ")
+	fmt.Println()
+	infoColor.Println("  [1] Non-technical (default) - Focus on high-level goals and accomplishments")
+	infoColor.Println("  [2] Technical - Include file paths, code changes, and technical details")
+	fmt.Println()
+	promptColor.Print("Select style (1-2): ")
+	dimColor.Print("[1] ")
+	styleChoice, _ := reader.ReadString('\n')
+	styleChoice = strings.TrimSpace(styleChoice)
+	
+	worklogStyle := "non-technical"
+	if styleChoice == "2" {
+		worklogStyle = "technical"
+	}
+	
+	// Set the worklog style for the profile
+	if profile := cfg.Profiles[profileName]; profile != nil {
+		profile.WorklogStyle = worklogStyle
+	}
+	successColor.Printf("✓ Worklog style set to: %s\n", worklogStyle)
+
 	// Step 2: Choose provider
 	fmt.Println()
 	printStep(2, "Choose your LLM provider")
