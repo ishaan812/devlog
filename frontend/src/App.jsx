@@ -177,6 +177,10 @@ function TerminalDemo() {
         </div>
         {/* Terminal body */}
         <div className="py-5 px-6 text-[13px] leading-[1.7]">
+        <span className="block mb-0.5">
+            <span className="text-green">$ </span>
+            <span className="text-text-primary font-medium">devlog onboard</span>
+          </span>
           <span className="block mb-0.5">
             <span className="text-green">$ </span>
             <span className="text-text-primary font-medium">devlog ingest ~/projects/frontend</span>
