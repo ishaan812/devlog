@@ -5,11 +5,11 @@ VERSION=${1}
 
 if [ -z "$VERSION" ]; then
   echo "Usage: $0 <version>"
-  echo "Example: $0 1.0.0"
+  echo "Example: $0 0.0.1"
   exit 1
 fi
 
-echo "Publishing devlog v${VERSION} to npm..."
+echo "Publishing @ishaan812/devlog v${VERSION} to npm..."
 
 # Update version in package.json
 npm version ${VERSION} --no-git-tag-version
@@ -25,10 +25,10 @@ gh release create v${VERSION} \
   --generate-notes \
   release/*
 
-# Publish to npm
+# Publish to npm (--access public for scoped package)
 echo ""
 echo "Publishing to npm..."
-npm publish
+npm publish --access public
 
 # Create git tag
 git add package.json
@@ -38,9 +38,9 @@ git push origin master
 git push origin v${VERSION}
 
 echo ""
-echo "✓ Successfully published devlog v${VERSION}!"
+echo "✓ Successfully published @ishaan812/devlog v${VERSION}!"
 echo ""
 echo "Users can now install with:"
-echo "  npm install -g devlog"
+echo "  npm install -g @ishaan812/devlog"
 echo "  # or"
 echo "  go install github.com/ishaan812/devlog/cmd/devlog@latest"
