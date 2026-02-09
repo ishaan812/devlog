@@ -108,13 +108,33 @@ var (
 
 	logoDimStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("241"))
+
+	// Help bar key badge styles
+	helpKeyStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("230")).
+			Background(lipgloss.Color("239")).
+			Bold(true).
+			Padding(0, 1)
+
+	helpDescStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("248")).
+			Background(lipgloss.Color("236")).
+			Padding(0, 1, 0, 0)
+
+	helpSepStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("238")).
+			Background(lipgloss.Color("236"))
+
+	helpBarBg = lipgloss.NewStyle().
+			Background(lipgloss.Color("236"))
 )
 
 // ── Pane constants ─────────────────────────────────────────────────────────
 
 const (
-	paneRepos = 0
-	paneDates = 1
+	paneRepos   = 0
+	paneDates   = 1
+	paneContent = 2
 )
 
 // ── Model ──────────────────────────────────────────────────────────────────
@@ -125,7 +145,7 @@ type ConsoleModel struct {
 	width  int
 	height int
 
-	// Active pane: 0=repos, 1=dates (cursor always on left side)
+	// Active pane: 0=repos, 1=dates, 2=content
 	activePane int
 
 	// Data
@@ -194,12 +214,16 @@ func (m ConsoleModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.quitting = true
 			return m, tea.Quit
 
-		// Tab toggles between repos and dates only (left side)
+		// ── Panel switching ────────────────────────────────────────
+
+		// Tab cycles left-side panes: repos <-> dates
 		case "tab":
-			if m.activePane == paneRepos {
+			if m.activePane == paneContent {
+				// from content, go back to dates
+				m.activePane = paneDates
+			} else if m.activePane == paneRepos {
 				m.activePane = paneDates
 			} else {
-				// Going back to repos pane clears the content
 				m.activePane = paneRepos
 				m.selectedDate = -1
 				m.contentReady = false
@@ -209,8 +233,9 @@ func (m ConsoleModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case "shift+tab":
-			if m.activePane == paneDates {
-				// Going back to repos pane clears the content
+			if m.activePane == paneContent {
+				m.activePane = paneDates
+			} else if m.activePane == paneDates {
 				m.activePane = paneRepos
 				m.selectedDate = -1
 				m.contentReady = false
@@ -220,6 +245,22 @@ func (m ConsoleModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.activePane = paneDates
 			}
 			return m, nil
+
+		// Right arrow: move from left panes into content (if loaded)
+		case "right", "l":
+			if m.activePane != paneContent && m.contentReady {
+				m.activePane = paneContent
+			}
+			return m, nil
+
+		// Left arrow: move from content back to dates
+		case "left", "h":
+			if m.activePane == paneContent {
+				m.activePane = paneDates
+			}
+			return m, nil
+
+		// ── Navigation ─────────────────────────────────────────────
 
 		case "up", "k":
 			switch m.activePane {
@@ -233,6 +274,10 @@ func (m ConsoleModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.dateCursor--
 					m.ensureDateVisible()
 				}
+			case paneContent:
+				var cmd tea.Cmd
+				m.viewport.LineUp(1)
+				return m, cmd
 			}
 			return m, nil
 
@@ -249,6 +294,10 @@ func (m ConsoleModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.dateCursor++
 					m.ensureDateVisible()
 				}
+			case paneContent:
+				var cmd tea.Cmd
+				m.viewport.LineDown(1)
+				return m, cmd
 			}
 			return m, nil
 
@@ -263,37 +312,32 @@ func (m ConsoleModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.contentReady = false
 					m.viewport.SetContent("")
 					m.contentHeader = ""
-					// Move to dates pane but stay on left
 					m.activePane = paneDates
 				}
 			case paneDates:
-				// Select date and load content on right, cursor stays here
 				dates := m.currentDates()
 				if m.dateCursor >= 0 && m.dateCursor < len(dates) {
 					m.selectedDate = m.dateCursor
 					m.loadContent()
+					// Stay on dates pane
 				}
 			}
 			return m, nil
 
-		// Right-side scrolling always works when content is loaded
+		// ── Content scrolling (works from any pane) ────────────────
+
 		case "pgup":
 			if m.contentReady {
-				var cmd tea.Cmd
-				m.viewport, cmd = m.viewport.Update(msg)
-				return m, cmd
+				m.viewport.HalfViewUp()
 			}
 			return m, nil
 
 		case "pgdown":
 			if m.contentReady {
-				var cmd tea.Cmd
-				m.viewport, cmd = m.viewport.Update(msg)
-				return m, cmd
+				m.viewport.HalfViewDown()
 			}
 			return m, nil
 
-		// Ctrl+U / Ctrl+D for half-page scroll of content
 		case "ctrl+u":
 			if m.contentReady {
 				m.viewport.HalfViewUp()
@@ -504,7 +548,12 @@ func (m ConsoleModel) renderLeftPanel() string {
 
 	panelHeight := m.height - 3
 
-	return activeBorderStyle.
+	borderStyle := activeBorderStyle
+	if m.activePane == paneContent {
+		borderStyle = inactiveBorderStyle
+	}
+
+	return borderStyle.
 		Width(leftW).
 		Height(panelHeight).
 		Render(content)
@@ -682,7 +731,12 @@ func (m ConsoleModel) renderRightPanel() string {
 		}
 	}
 
-	return inactiveBorderStyle.
+	borderStyle := inactiveBorderStyle
+	if m.activePane == paneContent {
+		borderStyle = activeBorderStyle
+	}
+
+	return borderStyle.
 		Width(rightW).
 		Height(panelHeight).
 		Render(content)
@@ -756,25 +810,54 @@ func (m ConsoleModel) renderLogo(width, height int) string {
 	return b.String()
 }
 
+// helpItem renders a single key+description pair for the help bar.
+func helpItem(key, desc string) string {
+	return helpKeyStyle.Render(key) + helpDescStyle.Render(desc)
+}
+
 func (m ConsoleModel) renderHelpBar() string {
-	var help string
+	sep := helpSepStyle.Render(" ")
+
+	var items []string
 	switch m.activePane {
 	case paneRepos:
-		help = "  ↑/↓ navigate  enter select repo  tab dates  pgup/pgdn scroll content  q quit"
+		items = []string{
+			helpItem("↑↓", "navigate"),
+			helpItem("enter", "select"),
+			helpItem("tab", "dates"),
+			helpItem("→", "content"),
+			helpItem("pgup/dn", "scroll"),
+			helpItem("q", "quit"),
+		}
 	case paneDates:
-		help = "  ↑/↓ navigate  enter view worklog  tab repos  pgup/pgdn scroll content  q quit"
+		items = []string{
+			helpItem("↑↓", "navigate"),
+			helpItem("enter", "view"),
+			helpItem("tab", "repos"),
+			helpItem("→", "content"),
+			helpItem("pgup/dn", "scroll"),
+			helpItem("q", "quit"),
+		}
+	case paneContent:
+		items = []string{
+			helpItem("↑↓", "scroll"),
+			helpItem("pgup/dn", "page"),
+			helpItem("←", "back"),
+			helpItem("tab", "panels"),
+			helpItem("q", "quit"),
+		}
 	}
 
-	helpText := consoleHelpStyle.Render(help)
-	spacerLen := m.width - lipgloss.Width(helpText)
+	bar := strings.Join(items, sep)
+	barWidth := lipgloss.Width(bar)
+
+	spacerLen := m.width - barWidth
 	if spacerLen < 0 {
 		spacerLen = 0
 	}
-	spacer := lipgloss.NewStyle().
-		Background(lipgloss.Color("236")).
-		Render(strings.Repeat(" ", spacerLen))
+	spacer := helpBarBg.Render(strings.Repeat(" ", spacerLen))
 
-	return helpText + spacer
+	return bar + spacer
 }
 
 // ── Runner ─────────────────────────────────────────────────────────────────
