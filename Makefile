@@ -1,4 +1,4 @@
-.PHONY: build install install-local clean test run-ingest run-worklog run-onboard fmt lint tools
+.PHONY: build install install-local clean test run-ingest run-worklog run-onboard fmt lint tools uninstall-all
 
 BINARY_NAME=devlog
 BUILD_DIR=./bin
@@ -21,6 +21,37 @@ install-local: build
 uninstall:
 	sudo rm -f $(INSTALL_DIR)/$(BINARY_NAME)
 	@echo "Removed $(INSTALL_DIR)/$(BINARY_NAME)"
+
+# Uninstall from all locations (for testing releases)
+uninstall-all:
+	@echo "Uninstalling devlog from all locations..."
+	@# Remove from /usr/local/bin
+	@if [ -f "$(INSTALL_DIR)/$(BINARY_NAME)" ]; then \
+		sudo rm -f $(INSTALL_DIR)/$(BINARY_NAME) && echo "✓ Removed $(INSTALL_DIR)/$(BINARY_NAME)"; \
+	else \
+		echo "- Not found in $(INSTALL_DIR)"; \
+	fi
+	@# Remove from $GOPATH/bin
+	@if [ -f "$(GOBIN)/$(BINARY_NAME)" ]; then \
+		rm -f $(GOBIN)/$(BINARY_NAME) && echo "✓ Removed $(GOBIN)/$(BINARY_NAME)"; \
+	else \
+		echo "- Not found in $(GOBIN)"; \
+	fi
+	@# Remove npm global package
+	@if npm list -g @ishaan812/devlog >/dev/null 2>&1; then \
+		npm uninstall -g @ishaan812/devlog && echo "✓ Uninstalled npm package @ishaan812/devlog"; \
+	else \
+		echo "- npm package @ishaan812/devlog not installed"; \
+	fi
+	@# Check if any devlog binaries remain in PATH
+	@echo ""
+	@echo "Checking for remaining devlog installations..."
+	@if command -v devlog >/dev/null 2>&1; then \
+		echo "⚠ devlog still found in PATH at: $$(which devlog)"; \
+		echo "  You may need to manually remove it or restart your shell."; \
+	else \
+		echo "✓ No devlog binary found in PATH"; \
+	fi
 
 clean:
 	rm -rf $(BUILD_DIR)

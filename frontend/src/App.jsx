@@ -96,7 +96,7 @@ function Hero() {
       </div>
       <div className="inline-flex items-center gap-2 py-1.5 px-4 bg-[rgba(0,255,65,0.08)] border border-border-green rounded-[20px] text-[10px] tracking-[2px] uppercase text-green mb-10">
         <span className="w-1.5 h-1.5 rounded-full bg-green animate-pulse-dot" aria-hidden="true" />
-        <span>System Status: Optimal // v0.0.4</span>
+        <span>System Status: Optimal // v0.0.1</span>
       </div>
       <h1 id="hero-title" className="font-display text-[32px] md:text-[52px] font-bold leading-[1.1] tracking-[-1.5px] mb-6">
         <span className="text-text-primary">Stop Forgetting</span>
@@ -112,7 +112,7 @@ function Hero() {
       </p>
       <div className="flex gap-4 justify-center flex-wrap" role="group" aria-label="Get started">
         <a
-          href="https://www.npmjs.com/package/@devlog/cli"
+          href="https://www.npmjs.com/package/@ishaan812/devlog"
           target="_blank"
           rel="noopener noreferrer"
           className="btn-clip inline-flex items-center gap-2 py-3.5 px-7 bg-green text-bg-primary font-mono text-[13px] font-semibold no-underline border-none cursor-pointer tracking-[1px] uppercase transition-all duration-200 hover:bg-[#33ff66] hover:shadow-[0_0_30px_rgba(0,255,65,0.3)]"
@@ -155,10 +155,10 @@ function TerminalDemo() {
         <div className="py-5 px-6 text-[13px] leading-[1.7]">
           <span className="block mb-0.5">
             <span className="text-green">$ </span>
-            <span className="text-text-primary font-medium">npm install -g devlog</span>
+            <span className="text-text-primary font-medium">npm install -g @ishaan812/devlog</span>
           </span>
           <span className="block mb-0.5">
-            <span className="text-text-dim">  + devlog@1.0.4</span>
+            <span className="text-text-dim">  + @ishaan812/devlog@0.0.1</span>
           </span>
           <span className="block mb-0.5">
             <span className="text-text-dim">  added 84 packages in 2.4s</span>
@@ -272,7 +272,7 @@ function CTA() {
   const [copied, setCopied] = useState(false)
 
   const handleCopy = () => {
-    navigator.clipboard.writeText('npm i -g @devlog/cli')
+    navigator.clipboard.writeText('npm i -g @ishaan812/devlog')
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
@@ -287,10 +287,10 @@ function CTA() {
         className="group inline-flex items-center gap-3 py-4 px-6 bg-bg-secondary border border-border-main rounded-md text-sm text-text-primary cursor-pointer transition-all duration-200 mb-6 hover:border-border-green hover:shadow-[0_0_20px_rgba(0,255,65,0.15)]"
         onClick={handleCopy}
         type="button"
-        aria-label={copied ? 'Install command copied to clipboard' : 'Copy install command: npm i -g @devlog/cli'}
+        aria-label={copied ? 'Install command copied to clipboard' : 'Copy install command: npm i -g @ishaan812/devlog'}
       >
         <span className="text-green" aria-hidden="true">$</span>
-        <span>npm i -g @devlog/cli</span>
+        <span>npm i -g @ishaan812/devlog</span>
         {copied ? (
           <Check size={16} className="text-green" aria-hidden="true" />
         ) : (
