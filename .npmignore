@@ -3,8 +3,10 @@ internal/
 cmd/
 guides/
 scripts/
+frontend/
 
 # Build artifacts
+bin/
 release/
 *.tgz
 

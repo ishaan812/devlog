@@ -4,7 +4,7 @@ docs/
 .cursor/
 .agents/
 .env*
-devlog
+/devlog
 
 # npm
 node_modules/

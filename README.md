@@ -16,7 +16,7 @@ Open-source, local-first AI work logging for developers who juggle<br>too many r
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Go Version](https://img.shields.io/badge/go-%3E%3D1.21-blue.svg)](https://go.dev)
 [![Open Source](https://img.shields.io/badge/open%20source-%E2%9C%93-brightgreen.svg)](https://github.com/ishaan812/devlog)
-[![npm](https://img.shields.io/badge/npm-devlog-red.svg)](https://www.npmjs.com/package/devlog)
+[![npm](https://img.shields.io/badge/npm-%40ishaan812%2Fdevlog-red.svg)](https://www.npmjs.com/package/@ishaan812/devlog)
 
 </div>
 
@@ -29,7 +29,7 @@ You ship code across 5 repos, 12 branches, and 3 teams. Monday morning standup h
 ### The 30-second pitch
 
 ```bash
-npm install -g devlog       # Install
+npm install -g @ishaan812/devlog  # Install
 devlog onboard              # Set up (works with free local Ollama)
 devlog ingest               # Point it at your repos
 devlog worklog --days 7     # Get your week's work, organized by branch
@@ -96,7 +96,7 @@ devlog search "error handling"
 ### Using npm (Easiest)
 
 ```bash
-npm install -g devlog
+npm install -g @ishaan812/devlog
 ```
 
 ### Using Go Install
