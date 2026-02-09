@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Download, Github, Star, Copy, Check, GitPullRequest } from 'lucide-react'
+import { Download, Github, Star, Copy, Check, GitPullRequest, Play } from 'lucide-react'
 
 const ENVIRONMENTS = [
   'ZSH', 'FISH', 'POWERSHELL', 'DOCKER', 'LINUX', 'MACOS', 'WINDOWS WSL', 'BASH',
@@ -187,6 +187,16 @@ function Hero() {
           >
             <GitPullRequest size={16} className="group-hover:rotate-12 transition-all duration-200" aria-hidden="true" />
             Contribute
+          </a>
+          <a
+            href="https://youtu.be/lykiT4GqhR4"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="btn-clip inline-flex items-center gap-2 py-3 px-5 border border-border-main text-text-secondary font-mono text-[12px] font-medium no-underline cursor-pointer tracking-[1px] uppercase transition-all duration-200 hover:bg-white/5 hover:text-text-primary hover:border-text-dim group"
+            aria-label="Watch DevLog video on YouTube"
+          >
+            <Play size={14} className="text-text-dim group-hover:text-text-secondary transition-colors duration-200" aria-hidden="true" />
+            Watch Video
           </a>
         </div>
       </div>
