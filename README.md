@@ -13,6 +13,8 @@
 
 Open-source, local-first AI work logging for developers who juggle<br>too many repos, too many branches, and too many standups.
 
+**[devlog.ishaan812.com](https://devlog.ishaan812.com)**
+
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Go Version](https://img.shields.io/badge/go-%3E%3D1.21-blue.svg)](https://go.dev)
 [![Open Source](https://img.shields.io/badge/open%20source-%E2%9C%93-brightgreen.svg)](https://github.com/ishaan812/devlog)
@@ -22,7 +24,7 @@ Open-source, local-first AI work logging for developers who juggle<br>too many r
 
 You ship code across 5 repos, 12 branches, and 3 teams. Monday morning standup hits and you're scrolling through `git log` trying to remember what you did last Thursday.
 
-**DevLog fixes that.** It ingests your git history across every repo and branch you work on, and turns it into smart, structured work logs — automatically. No more "I think I worked on the auth thing?" Ask DevLog and get an answer in seconds.
+**DevLog fixes that.** It ingests your git history across every repo and branch you work on, and turns it into smart, structured work logs — automatically. No more "I think I worked on the auth thing?" Get your work summary in seconds.
 
 ---
 
@@ -33,6 +35,7 @@ npm install -g @ishaan812/devlog  # Install
 devlog onboard              # Set up (works with free local Ollama)
 devlog ingest               # Point it at your repos
 devlog worklog --days 7     # Get your week's work, organized by branch
+devlog console              # Browse worklogs in an interactive TUI
 ```
 
 That's it. Professional markdown work logs, generated from your actual commits. Multi-repo, multi-branch, zero effort.
@@ -60,15 +63,13 @@ DevLog is **local-first**. Run it with [Ollama](https://ollama.ai) and your data
 | Feature | Description |
 |---------|-------------|
 | **Smart Work Logs** | Auto-generated markdown summaries organized by branch, date, and repo — ready for standups, PRs, or performance reviews |
+| **Interactive Console** | Full-screen terminal UI to browse repos and navigate through your cached worklogs day-by-day |
 | **Multi-Repo Ingestion** | Ingest as many repos as you want into a single profile. See your full picture. |
 | **Multi-Branch Tracking** | Branch-aware ingestion remembers your selections per repo. Track `main`, `develop`, and every feature branch. |
 | **Local-First AI** | Works completely offline with Ollama. Your code and history stay on your machine. |
-| **Cheap Cloud Fallback** | Optionally use Anthropic, OpenAI, OpenRouter, or AWS Bedrock — most queries cost fractions of a cent |
-| **Natural Language Queries** | Ask questions about your git history in plain English |
-| **Semantic Code Search** | Find code by describing what it does, not just grepping keywords |
+| **Cheap Cloud Fallback** | Optionally use Anthropic, OpenAI, OpenRouter, or AWS Bedrock — most queries are very lightweight and would cost fractions of a cent |
 | **Profile System** | Isolated databases for work vs. personal, or per-client contexts |
 | **Incremental Updates** | Re-runs only process new commits. Fast even on large repos. |
-| **Codebase Visualization** | Generate structure diagrams and collaboration graphs |
 
 ## Quick Start
 
@@ -77,7 +78,7 @@ DevLog is **local-first**. Run it with [Ollama](https://ollama.ai) and your data
 npm install -g @ishaan812/devlog
 # or: go install github.com/ishaan812/devlog/cmd/devlog@latest
 
-# 2. Run the setup wizard (picks up Ollama automatically)
+# 2. Run the setup wizard
 devlog onboard
 
 # 3. Ingest your repositories
@@ -87,8 +88,6 @@ devlog ingest ~/projects/shared-lib
 
 # 4. See what you actually shipped
 devlog worklog --days 7
-devlog ask "What did I work on this week?"
-devlog search "error handling"
 ```
 
 ## Installation
@@ -190,56 +189,20 @@ One command. Every repo. Every branch. Organized and summarized:
 
 That's your standup, done. Copy-paste it, email it, or drop it in Slack.
 
-### 4. Query Your Activity
-
-```bash
-# Ask natural language questions
-devlog ask "What features did I add this month?"
-devlog ask "Show me commits related to the payment system"
-devlog ask "Which files have I changed the most?"
-
-# Semantic code search
-devlog search "database connection pooling"
-devlog search "user authentication flow"
-```
-
 ## Commands Reference
 
 ### `devlog ingest`
 
-Ingest git history and index your codebase for search.
+Ingest git history from your repositories.
 
 ```bash
 devlog ingest                      # Current directory
 devlog ingest ~/projects/myapp     # Specific path
 devlog ingest --days 90            # Last 90 days (default: 30)
 devlog ingest --all                # Full git history
-devlog ingest --git-only           # Skip codebase indexing
-devlog ingest --index-only         # Skip git history
 devlog ingest --reselect-branches  # Re-select branches
 devlog ingest --all-branches       # Ingest all branches
 devlog ingest --fill-summaries     # Generate missing commit summaries
-```
-
-### `devlog ask`
-
-Query your development activity using natural language.
-
-```bash
-devlog ask "What did I work on this week?"
-devlog ask "Show commits about authentication"
-devlog ask "Which files changed the most in January?"
-devlog ask --provider anthropic "Summarize my recent work"
-```
-
-### `devlog search`
-
-Semantic search across your indexed codebase.
-
-```bash
-devlog search "authentication logic"
-devlog search "database queries"
-devlog search -n 20 "error handling"    # More results
 ```
 
 ### `devlog worklog`
@@ -253,6 +216,22 @@ devlog worklog -o report.md        # Custom output file
 devlog worklog --no-llm            # Skip AI summaries
 devlog worklog --group-by date     # Group by date instead of branch
 ```
+
+### `devlog console`
+
+Interactive terminal UI to browse repositories and worklogs.
+
+```bash
+devlog console                     # Launch full-screen TUI
+```
+
+Features:
+- Browse through all your ingested repositories
+- Navigate day-by-day worklogs
+- View formatted markdown content in the terminal
+- Keyboard shortcuts for quick navigation (arrow keys, j/k, tab)
+
+Requires at least one prior `devlog worklog` run to populate the cache.
 
 ### `devlog profile`
 
@@ -270,19 +249,9 @@ devlog profile delete old          # Delete a profile
 Use a profile temporarily:
 ```bash
 devlog --profile work ingest ~/work/project
-devlog --profile personal ask "What did I do this weekend?"
+devlog --profile personal worklog --days 7
 ```
 
-### `devlog graph`
-
-Visualize your codebase structure.
-
-```bash
-devlog graph                       # Folder structure
-devlog graph --type commits        # Commit activity
-devlog graph --type files          # File change heatmap
-devlog graph --type collab         # Developer collaboration
-devlog graph -o diagram.md         # Export as Mermaid markdown
 ```
 
 ### `devlog list`
@@ -442,7 +411,6 @@ make install
 
 # Run development commands
 make run-ingest
-make run-ask
 make run-worklog
 ```
 
@@ -486,7 +454,23 @@ devlog ingest --skip-summaries
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Contributions are welcome! DevLog is open source and we'd love your help making it better.
+
+**Ways to contribute:**
+- 🐛 Report bugs or issues
+- 💡 Suggest new features or improvements
+- 📝 Improve documentation
+- 🔧 Submit pull requests for bug fixes or features
+- ⭐ Star the repo if you find it useful
+
+**Getting started:**
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Make your changes and commit (`git commit -m 'feat: add amazing feature'`)
+4. Push to your branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+See the [Development](#development) section for build instructions.
 
 ## License
 

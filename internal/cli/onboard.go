@@ -228,7 +228,9 @@ func runOnboardLegacy() error {
 	dimColor.Print("  $ ")
 	infoColor.Println("devlog ingest           # Scan current repo")
 	dimColor.Print("  $ ")
-	infoColor.Println("devlog worklog --days 7  # View your recent activity")
+	infoColor.Println("devlog worklog --days 7  # Generate your recent activity")
+	dimColor.Print("  $ ")
+	infoColor.Println("devlog console          # Browse worklogs interactively")
 	fmt.Println()
 
 	return nil
@@ -555,18 +557,24 @@ func printTutorial() {
 			},
 		},
 		{
+			"Generate work logs",
+			[]string{
+				"devlog worklog --days 7           # Last week",
+				"devlog worklog --days 30 -o log.md  # Export to file",
+			},
+		},
+		{
+			"Browse worklogs interactively",
+			[]string{
+				"devlog console             # Launch TUI to browse worklogs",
+			},
+		},
+		{
 			"Manage profiles",
 			[]string{
 				"devlog profile list        # Show all profiles",
 				"devlog profile create work # Create new profile",
 				"devlog profile use work    # Switch profile",
-			},
-		},
-		{
-			"Generate work logs",
-			[]string{
-				"devlog worklog --days 7           # Last week",
-				"devlog worklog --days 30 -o log.md  # Export to file",
 			},
 		},
 	}

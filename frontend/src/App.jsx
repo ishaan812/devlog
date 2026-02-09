@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Download, Github, Star, Copy, Check } from 'lucide-react'
+import { Download, Github, Star, Copy, Check, GitPullRequest } from 'lucide-react'
 
 const ENVIRONMENTS = [
   'ZSH', 'FISH', 'POWERSHELL', 'DOCKER', 'LINUX', 'MACOS', 'WINDOWS WSL', 'BASH',
@@ -8,23 +8,23 @@ const ENVIRONMENTS = [
 const FEATURES = [
   {
     num: '01 // Automation',
-    title: 'Zero-Touch Changelogs',
-    desc: 'Parsing commit messages using conventional commits standard to auto-generate semantic version updates, changelogs, and manual documentation overhead by 100%.',
+    title: 'Smart Work Logs',
+    desc: 'Auto-generated markdown summaries organized by branch, date, and repo — ready for standups, PRs, or performance reviews. Multi-repo, multi-branch, zero effort.',
   },
   {
-    num: '02 // Integration',
-    title: 'Stack Agnostic',
-    desc: "Works with git. That's it. Whether you use Node, Rust, Go, or Python — pull diffs directly from the CLI. Compatible with GitHub, GitLab, and Bitbucket.",
+    num: '02 // Interactive',
+    title: 'Console TUI',
+    desc: 'Full-screen terminal UI to browse repositories and navigate through your cached worklogs day-by-day. Keyboard shortcuts for quick navigation and formatted markdown viewing.',
   },
   {
-    num: '03 // Intelligence',
-    title: 'Context Aware NLP',
-    desc: 'AI that understands code — summarizes complex diffs into human-readable bullet points. Detects your architecture, naming and scopes changes across your local codebase.',
+    num: '03 // Multi-Repo',
+    title: 'Unified Timeline',
+    desc: 'Ingest as many repos as you want into a single profile. Frontend, backend, shared libraries — DevLog tracks them all into one unified timeline. See your full picture.',
   },
   {
-    num: '04 // Analytics',
-    title: 'Velocity Metrics',
-    desc: 'Track commit trends, weekly output metrics from codebase changelog generation to new feature burn. Get actionable analytics for your next sprint planning or sprint planning.',
+    num: '04 // Privacy',
+    title: 'Local-First AI',
+    desc: 'Works completely offline with Ollama. Your code and history stay on your machine. No subscriptions, no telemetry, no cloud dependency. Optionally use cloud providers for pennies per query.',
   },
 ]
 
@@ -60,11 +60,11 @@ function Navbar() {
           /Features
         </a>
         <a
-          href="https://github.com/ishaan812/devlog"
+          href="https://github.com/ishaan812/devlog#quick-start"
           target="_blank"
           rel="noopener noreferrer"
           className="hidden md:inline font-mono text-xs text-text-secondary no-underline tracking-[1px] uppercase transition-colors duration-200 hover:text-green"
-          aria-label="Documentation on GitHub"
+          aria-label="Quick Start Guide"
         >
           /Docs
         </a>
@@ -83,6 +83,14 @@ function Navbar() {
 }
 
 function Hero() {
+  const [copied, setCopied] = useState(false)
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText('npm i -g @ishaan812/devlog')
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+
   return (
     <section
       className="hero-glow pt-[120px] md:pt-[140px] px-5 md:px-6 pb-[60px] md:pb-20 text-center relative overflow-hidden"
@@ -103,34 +111,50 @@ function Hero() {
         <br />
         <span className="text-green [text-shadow:0_0_30px_rgba(0,255,65,0.3)]">What You Shipped</span>
       </h1>
-      <p className="font-mono text-[13px] md:text-sm text-text-secondary leading-[1.8] max-w-[500px] mx-auto mb-10">
-        <span className="text-green mr-1" aria-hidden="true">&gt;</span> An AI-powered CLI activity tracker for developers.
+      <p className="font-mono text-[13px] md:text-sm text-text-secondary leading-[1.8] max-w-[520px] mx-auto mb-10">
+        <span className="text-green mr-1" aria-hidden="true">&gt;</span> Local-first AI work logging for developers.
         <br />
-        <span className="text-green mr-1" aria-hidden="true">&gt;</span> Turn git commits into changelogs &amp; standups instantly.
+        <span className="text-green mr-1" aria-hidden="true">&gt;</span> Multi-repo, multi-branch tracking. One unified timeline.
         <br />
-        <span className="text-green mr-1" aria-hidden="true">&gt;</span> Local LLM compatible &amp; Open Source MIT License.
+        <span className="text-green mr-1" aria-hidden="true">&gt;</span> Professional markdown work logs from your git history.
       </p>
-      <div className="flex gap-4 justify-center flex-wrap" role="group" aria-label="Get started">
-        <a
-          href="https://www.npmjs.com/package/@ishaan812/devlog"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="btn-clip inline-flex items-center gap-2 py-3.5 px-7 bg-green text-bg-primary font-mono text-[13px] font-semibold no-underline border-none cursor-pointer tracking-[1px] uppercase transition-all duration-200 hover:bg-[#33ff66] hover:shadow-[0_0_30px_rgba(0,255,65,0.3)]"
-          aria-label="Install DevLog via NPM"
+      <div className="flex flex-col items-center gap-4 mb-4">
+        <button
+          className="group inline-flex items-center gap-3 py-4 px-6 bg-bg-secondary border border-border-main rounded-md text-sm text-text-primary cursor-pointer transition-all duration-200 hover:border-border-green hover:shadow-[0_0_20px_rgba(0,255,65,0.15)]"
+          onClick={handleCopy}
+          type="button"
+          aria-label={copied ? 'Install command copied to clipboard' : 'Copy install command: npm i -g @ishaan812/devlog'}
         >
-          <Download size={16} aria-hidden="true" />
-          Install via NPM
-        </a>
-        <a
-          href="https://github.com/ishaan812/devlog"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="btn-clip inline-flex items-center gap-2 py-3.5 px-7 bg-transparent text-text-primary font-mono text-[13px] font-semibold no-underline border border-border-main cursor-pointer tracking-[1px] uppercase transition-all duration-200 hover:border-green hover:text-green hover:shadow-[0_0_20px_rgba(0,255,65,0.15)]"
-          aria-label="Star DevLog on GitHub"
-        >
-          <Star size={16} aria-hidden="true" />
-          Star on GitHub
-        </a>
+          <span className="text-green" aria-hidden="true">$</span>
+          <span>npm i -g @ishaan812/devlog</span>
+          {copied ? (
+            <Check size={16} className="text-green" aria-hidden="true" />
+          ) : (
+            <Copy size={16} className="text-text-dim transition-colors duration-200 group-hover:text-green" aria-hidden="true" />
+          )}
+        </button>
+        <div className="flex gap-4 flex-wrap justify-center">
+          <a
+            href="https://github.com/ishaan812/devlog"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="btn-clip inline-flex items-center gap-2 py-3.5 px-7 bg-gradient-to-r from-[#febc2e] to-[#ffd35c] text-bg-primary font-mono text-[13px] font-bold no-underline border-none cursor-pointer tracking-[1px] uppercase transition-all duration-200 hover:from-[#ffd35c] hover:to-[#febc2e] hover:shadow-[0_0_30px_rgba(254,188,46,0.5)] hover:scale-105 group"
+            aria-label="Star DevLog on GitHub"
+          >
+            <Star size={16} className="fill-bg-primary group-hover:fill-bg-primary transition-all duration-200" aria-hidden="true" />
+            Star on GitHub
+          </a>
+          <a
+            href="https://github.com/ishaan812/devlog#contributing"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="btn-clip inline-flex items-center gap-2 py-3.5 px-7 bg-gradient-to-r from-[#58a6ff] to-[#79c0ff] text-bg-primary font-mono text-[13px] font-bold no-underline border-none cursor-pointer tracking-[1px] uppercase transition-all duration-200 hover:from-[#79c0ff] hover:to-[#58a6ff] hover:shadow-[0_0_30px_rgba(88,166,255,0.5)] hover:scale-105 group"
+            aria-label="Contribute to DevLog"
+          >
+            <GitPullRequest size={16} className="group-hover:rotate-12 transition-all duration-200" aria-hidden="true" />
+            Contribute
+          </a>
+        </div>
       </div>
     </section>
   )
@@ -155,56 +179,84 @@ function TerminalDemo() {
         <div className="py-5 px-6 text-[13px] leading-[1.7]">
           <span className="block mb-0.5">
             <span className="text-green">$ </span>
-            <span className="text-text-primary font-medium">npm install -g @ishaan812/devlog</span>
+            <span className="text-text-primary font-medium">devlog ingest ~/projects/frontend</span>
           </span>
           <span className="block mb-0.5">
-            <span className="text-text-dim">  + @ishaan812/devlog@0.0.1</span>
+            <span className="text-[#58a6ff]">→</span>
+            <span className="text-text-dim"> Analyzing git history...</span>
           </span>
           <span className="block mb-0.5">
-            <span className="text-text-dim">  added 84 packages in 2.4s</span>
-          </span>
-
-          <div className="h-3" />
-
-          <span className="block mb-0.5">
-            <span className="text-green">$ </span>
-            <span className="text-text-primary font-medium">devlog worklog --today</span>
-          </span>
-
-          <div className="h-3" />
-
-          <span className="block mb-0.5">
-            <span className="text-green">ACTIVITY REPORT [Today]:</span>
+            <span className="text-green">✓</span>
+            <span className="text-text-dim"> Processed 147 commits across 3 branches</span>
           </span>
           <span className="block mb-0.5">
-            <span className="text-[#0a0a0a] bg-green px-1.5 rounded-[2px] text-[11px] font-semibold">[feat]</span>
-            <span className="text-text-dim"> Implemented JWT rotation middleware</span>
-          </span>
-          <span className="block mb-0.5">
-            <span className="text-[#0a0a0a] bg-[#febc2e] px-1.5 rounded-[2px] text-[11px] font-semibold">[refactor]</span>
-            <span className="text-text-dim"> Optimized SQL queries in UserDAO (~40ms improvement)</span>
-          </span>
-          <span className="block mb-0.5">
-            <span className="text-[#0a0a0a] bg-[#ff5f57] px-1.5 rounded-[2px] text-[11px] font-semibold">[fix]</span>
-            <span className="text-text-dim"> Resolved WebSocket race condition #442</span>
-          </span>
-          <span className="block mb-0.5">
-            <span className="text-[#0a0a0a] bg-[#58a6ff] px-1.5 rounded-[2px] text-[11px] font-semibold">[docs]</span>
-            <span className="text-text-dim"> Updated API endpoints in README.md</span>
-          </span>
-
-          <div className="h-3" />
-
-          <span className="block mb-0.5">
-            <span className="text-text-dim">Total: 4 commits, 12 files changed, +456/-128 LOC</span>
+            <span className="text-green">✓</span>
+            <span className="text-text-dim"> Ingestion complete</span>
           </span>
 
           <div className="h-3" />
 
           <span className="block mb-0.5">
             <span className="text-green">$ </span>
-            <span className="text-text-primary font-medium">devlog generate --target=slack </span>
+            <span className="text-text-primary font-medium">devlog worklog --days 7</span>
+          </span>
+
+          <div className="h-3" />
+
+          <span className="block mb-0.5">
+            <span className="text-[#febc2e] font-semibold">## Monday, February 10, 2026</span>
+          </span>
+          <span className="block mb-0.5">
+            <span className="text-text-dim">repo: </span>
+            <span className="text-[#58a6ff]">frontend</span>
+            <span className="text-text-dim"> | Branch: </span>
+            <span className="text-green">feature/payments</span>
+          </span>
+
+          <div className="h-2" />
+
+          <span className="block mb-0.5">
+            <span className="text-text-primary font-medium">### Updates</span>
+          </span>
+          <span className="block mb-0.5">
+            <span className="text-green">•</span>
+            <span className="text-text-dim"> Built checkout flow with Stripe integration</span>
+          </span>
+          <span className="block mb-0.5">
+            <span className="text-green">•</span>
+            <span className="text-text-dim"> Added client-side form validation</span>
+          </span>
+
+          <div className="h-2" />
+
+          <span className="block mb-0.5">
+            <span className="text-text-primary font-medium">### Commits</span>
+          </span>
+          <span className="block mb-0.5">
+            <span className="text-[#febc2e]">16:45</span>
+            <span className="text-text-dim"> </span>
+            <span className="text-[#58a6ff]">f8a9b0c</span>
+            <span className="text-text-dim"> Add Stripe checkout component </span>
+            <span className="text-green">(+320/-15)</span>
+          </span>
+          <span className="block mb-0.5">
+            <span className="text-[#febc2e]">14:20</span>
+            <span className="text-text-dim"> </span>
+            <span className="text-[#58a6ff]">c3d4e5f</span>
+            <span className="text-text-dim"> Add card validation helpers </span>
+            <span className="text-green">(+95/-10)</span>
+          </span>
+
+          <div className="h-3" />
+
+          <span className="block mb-0.5">
+            <span className="text-green">$ </span>
+            <span className="text-text-primary font-medium">devlog console </span>
             <span className="inline-block w-2 h-4 bg-green animate-blink align-text-bottom" aria-hidden="true" />
+          </span>
+          <span className="block mb-0.5">
+            <span className="text-[#58a6ff]">→</span>
+            <span className="text-text-dim"> Launching interactive TUI...</span>
           </span>
         </div>
       </figure>
@@ -221,9 +273,9 @@ function Features() {
           <br />
           <span className="text-green">Love DevLog</span>
         </h2>
-        <p className="mt-3 text-sm text-text-secondary max-w-[460px]">
-          Designed for the terminal native. No UI to click. No forms to fill. Just pure
-          productivity extraction from your existing workflow.
+        <p className="mt-3 text-sm text-text-secondary max-w-[540px]">
+          You context-switch constantly. Your standups are painful. You work across multiple repos.
+          DevLog tracks all of it — across repos and branches — so you don't have to.
         </p>
       </header>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6" role="list">
@@ -280,9 +332,13 @@ function CTA() {
   return (
     <section className="py-[120px] px-6 text-center" aria-labelledby="cta-title" id="pricing">
       <span className="text-green text-[40px] font-bold font-display" aria-hidden="true">&gt; </span>
-      <h2 id="cta-title" className="font-display text-[32px] md:text-5xl font-bold tracking-[-1.5px] mb-10">
+      <h2 id="cta-title" className="font-display text-[32px] md:text-5xl font-bold tracking-[-1.5px] mb-4">
         Ready to commit?
       </h2>
+      <p className="text-sm text-text-secondary mb-10 max-w-[480px] mx-auto">
+        Professional markdown work logs, generated from your actual commits.<br />
+        Multi-repo, multi-branch, zero effort.
+      </p>
       <button
         className="group inline-flex items-center gap-3 py-4 px-6 bg-bg-secondary border border-border-main rounded-md text-sm text-text-primary cursor-pointer transition-all duration-200 mb-6 hover:border-border-green hover:shadow-[0_0_20px_rgba(0,255,65,0.15)]"
         onClick={handleCopy}
@@ -297,7 +353,7 @@ function CTA() {
           <Copy size={16} className="text-text-dim transition-colors duration-200 group-hover:text-green" aria-hidden="true" />
         )}
       </button>
-      <span className="block mt-4 text-xs text-text-dim">Free &amp; Open Source. MIT License.</span>
+      <span className="block mt-4 text-xs text-text-dim">Free &amp; Open Source. MIT License. Local-first.</span>
     </section>
   )
 }
@@ -305,14 +361,22 @@ function CTA() {
 function Footer() {
   return (
     <footer className="py-6 px-5 md:px-12 flex flex-col md:flex-row items-center justify-between gap-4 md:gap-0 text-center md:text-left border-t border-border-main text-[11px] text-text-dim">
-      <span className="font-mono font-bold text-green text-[13px]">
-        <span className="opacity-50" aria-hidden="true">&gt;_ </span>DevLog
-      </span>
+      <div className="flex flex-col gap-1 items-center md:items-start">
+        <span className="font-mono font-bold text-green text-[13px]">
+          <span className="opacity-50" aria-hidden="true">&gt;_ </span>DevLog
+        </span>
+        <a 
+          href="https://devlog.ishaan812.com" 
+          className="text-text-dim no-underline text-[10px] transition-colors duration-200 hover:text-green"
+        >
+          devlog.ishaan812.com
+        </a>
+      </div>
       <nav className="flex gap-6" aria-label="Footer navigation">
-        <a href="#" className="text-text-dim no-underline uppercase tracking-[1px] text-[11px] transition-colors duration-200 hover:text-green">Privacy</a>
-        <a href="#" className="text-text-dim no-underline uppercase tracking-[1px] text-[11px] transition-colors duration-200 hover:text-green">Terms</a>
-        <a href="https://twitter.com" target="_blank" rel="noopener noreferrer" className="text-text-dim no-underline uppercase tracking-[1px] text-[11px] transition-colors duration-200 hover:text-green">X (Twitter)</a>
+        <a href="https://www.npmjs.com/package/@ishaan812/devlog" target="_blank" rel="noopener noreferrer" className="text-text-dim no-underline uppercase tracking-[1px] text-[11px] transition-colors duration-200 hover:text-green">NPM</a>
+        <a href="https://github.com/ishaan812/devlog#quick-start" target="_blank" rel="noopener noreferrer" className="text-text-dim no-underline uppercase tracking-[1px] text-[11px] transition-colors duration-200 hover:text-green">Docs</a>
         <a href="https://github.com/ishaan812/devlog" target="_blank" rel="noopener noreferrer" className="text-text-dim no-underline uppercase tracking-[1px] text-[11px] transition-colors duration-200 hover:text-green">GitHub</a>
+        <a href="https://github.com/ishaan812/devlog/blob/master/LICENSE" target="_blank" rel="noopener noreferrer" className="text-text-dim no-underline uppercase tracking-[1px] text-[11px] transition-colors duration-200 hover:text-green">MIT License</a>
       </nav>
     </footer>
   )

@@ -24,12 +24,12 @@ ollama serve
 ## Pull a Model
 
 ```bash
-ollama pull llama3.2
+ollama pull gemma3:4b
 ```
 
 Other recommended models:
-- `llama3.2` - Fast, good for most tasks (default)
-- `llama3.1` - More capable, slower
+- `gemma3:4b` - Fast, lightweight (default)
+- `gemma3` - Fast, good for most tasks
 - `codellama` - Optimized for code
 - `mistral` - Good balance of speed/quality
 
@@ -37,17 +37,6 @@ Other recommended models:
 
 ```bash
 ollama list
-```
-
-## Use with DevLog
-
-```bash
-devlog ask "What did I work on today?"
-```
-
-Or explicitly:
-```bash
-devlog ask --provider ollama --model llama3.2 "What did I work on today?"
 ```
 
 ## Configuration
@@ -62,7 +51,7 @@ Or manually edit `~/.devlog/config.json`:
 {
   "default_provider": "ollama",
   "ollama_base_url": "http://localhost:11434",
-  "ollama_model": "llama3.2"
+  "ollama_model": "gemma3"
 }
 ```
 
@@ -77,5 +66,5 @@ Or manually edit `~/.devlog/config.json`:
 - Check available models with `ollama list`
 
 **Slow responses:**
-- Try a smaller model like `llama3.2`
+- Try a smaller model like `gemma3`
 - Ensure you have enough RAM (8GB+ recommended)
