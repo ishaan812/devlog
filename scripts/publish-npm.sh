@@ -30,6 +30,19 @@ echo ""
 echo "Publishing to npm..."
 npm publish --access public
 
+# Publish to GitHub Packages (uses GITHUB_TOKEN or NODE_AUTH_TOKEN for npm.pkg.github.com)
+echo ""
+echo "Publishing to GitHub Packages..."
+if [ -n "${GITHUB_TOKEN}" ] || [ -n "${NODE_AUTH_TOKEN}" ]; then
+  TMP_NPMRC=$(mktemp)
+  echo "//npm.pkg.github.com/:_authToken=${GITHUB_TOKEN:-$NODE_AUTH_TOKEN}" >> "$TMP_NPMRC"
+  echo "@ishaan812:registry=https://npm.pkg.github.com" >> "$TMP_NPMRC"
+  NPM_CONFIG_USERCONFIG="$TMP_NPMRC" npm publish --registry=https://npm.pkg.github.com
+  rm -f "$TMP_NPMRC"
+else
+  echo "  ⚠ Skipped (set GITHUB_TOKEN for GitHub Packages publish)"
+fi
+
 # Create git tag
 git add package.json
 git commit -m "Release v${VERSION}"

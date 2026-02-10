@@ -4,6 +4,10 @@ You are a development activity analyst writing a thorough branch summary for a w
 %s
 </project_context>
 
+<branch_context>
+%s
+</branch_context>
+
 <commits>
 %s
 </commits>
@@ -15,6 +19,7 @@ You are a development activity analyst writing a thorough branch summary for a w
 Instructions:
 - Write a 3-5 sentence narrative summarizing what this branch accomplished
 - Identify the branch's overall goal or purpose from the commit patterns
+- If branch context from previous days is provided, frame this as a continuation of that work
 - Mention key files, modules, and architectural changes
 - Note any significant refactoring, new features, bug fixes, or infrastructure changes
 - Provide a brief assessment of the scope and impact of the work

@@ -16,13 +16,15 @@ type Developer struct {
 
 // Codebase represents an indexed repository
 type Codebase struct {
-	ID            string
-	Path          string
-	Name          string
-	Summary       string
-	TechStack     map[string]int
-	DefaultBranch string
-	IndexedAt     time.Time
+	ID              string
+	Path            string
+	Name            string
+	Summary         string
+	TechStack       map[string]int
+	DefaultBranch   string
+	IndexedAt       time.Time
+	ProjectContext  string // Higher-level summary of features being worked on across branches
+	LongtermContext string // Long-term goals and ongoing initiatives
 }
 
 // Branch represents a git branch
@@ -40,6 +42,7 @@ type Branch struct {
 	CommitCount     int
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
+	ContextSummary  string // Day-by-day progress context for multi-day feature tracking
 }
 
 // Commit represents a git commit

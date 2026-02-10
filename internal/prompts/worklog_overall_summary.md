@@ -4,6 +4,10 @@ You are a development activity analyst writing an engaging summary of a develope
 %s
 </project_context>
 
+<codebase_context>
+%s
+</codebase_context>
+
 <commits>
 %s
 </commits>
@@ -15,6 +19,7 @@ You are a development activity analyst writing an engaging summary of a develope
 Instructions:
 - Write a 3-5 sentence overview paragraph summarizing the entire period's work
 - Identify major themes, initiatives, and patterns across all commits (e.g. "a large-scale migration from X to Y", "focused sprint on feature Z")
+- If codebase context (project goals or long-term initiatives) is provided, frame the work in that context
 - Call out significant architectural changes, new features, or important bug fixes by name
 - Mention specific modules, files, or areas of the codebase that saw the most activity
 - Be engaging and precise -- this should read like a compelling status update, not a dry list

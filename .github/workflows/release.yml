@@ -86,6 +86,9 @@ jobs:
   publish-npm:
     needs: release
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
 
@@ -106,3 +109,9 @@ jobs:
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish to GitHub Packages
+        run: |
+          echo "//npm.pkg.github.com/:_authToken=${{ github.token }}" >> $RUNNER_TEMP/.npmrc
+          echo "@ishaan812:registry=https://npm.pkg.github.com" >> $RUNNER_TEMP/.npmrc
+          NPM_CONFIG_USERCONFIG=$RUNNER_TEMP/.npmrc npm publish --registry=https://npm.pkg.github.com

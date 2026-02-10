@@ -4,6 +4,10 @@ You are a development activity analyst writing a thorough branch summary for a w
 %s
 </project_context>
 
+<branch_context>
+%s
+</branch_context>
+
 <commits>
 %s
 </commits>
@@ -15,6 +19,7 @@ You are a development activity analyst writing a thorough branch summary for a w
 Instructions:
 - Write a 3-5 sentence narrative summarizing what this branch accomplished in business terms
 - Focus on the feature or goal delivered, not the technical implementation
+- If branch context from previous days is provided, frame this as a continuation: mention the overall progress arc
 - Describe the user-facing impact and value provided by the work
 - Avoid mentioning specific files, code architecture, or technical details
 - Provide a brief assessment of the scope and business impact of the work

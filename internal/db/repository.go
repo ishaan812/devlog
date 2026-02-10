@@ -31,6 +31,8 @@ type Repository interface {
 	GetBranchByID(ctx context.Context, id string) (*Branch, error)
 	GetBranchesByCodebase(ctx context.Context, codebaseID string) ([]Branch, error)
 	GetBranchCommits(ctx context.Context, branchID string, limit int) ([]Commit, error)
+	UpdateBranchContext(ctx context.Context, branchID, contextSummary string) error
+	UpdateCodebaseContext(ctx context.Context, codebaseID, projectContext, longtermContext string) error
 	ClearDefaultBranch(ctx context.Context, codebaseID string) error
 
 	// Commit operations
@@ -159,13 +161,15 @@ func (r *SQLRepository) GetCurrentUser(ctx context.Context) (*Developer, error) 
 // UpsertCodebase creates or updates a codebase.
 func (r *SQLRepository) UpsertCodebase(ctx context.Context, codebase *Codebase) error {
 	_, err := r.db.ExecContext(ctx, `
-		INSERT INTO codebases (id, path, name, summary, tech_stack, default_branch, indexed_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO codebases (id, path, name, summary, tech_stack, default_branch, indexed_at, project_context, longterm_context)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		ON CONFLICT (path) DO UPDATE SET
 			name = EXCLUDED.name, summary = EXCLUDED.summary, tech_stack = EXCLUDED.tech_stack,
-			default_branch = EXCLUDED.default_branch, indexed_at = EXCLUDED.indexed_at`,
+			default_branch = EXCLUDED.default_branch, indexed_at = EXCLUDED.indexed_at,
+			project_context = EXCLUDED.project_context, longterm_context = EXCLUDED.longterm_context`,
 		codebase.ID, codebase.Path, codebase.Name, NullString(codebase.Summary),
-		ToJSON(codebase.TechStack), NullString(codebase.DefaultBranch), NullTime(codebase.IndexedAt))
+		ToJSON(codebase.TechStack), NullString(codebase.DefaultBranch), NullTime(codebase.IndexedAt),
+		NullString(codebase.ProjectContext), NullString(codebase.LongtermContext))
 	if err != nil {
 		return fmt.Errorf("upsert codebase: %w", err)
 	}
@@ -174,22 +178,22 @@ func (r *SQLRepository) UpsertCodebase(ctx context.Context, codebase *Codebase) 
 
 // GetCodebaseByPath retrieves a codebase by path.
 func (r *SQLRepository) GetCodebaseByPath(ctx context.Context, path string) (*Codebase, error) {
-	row := r.db.QueryRowContext(ctx, `SELECT id, path, name, summary, tech_stack, default_branch, indexed_at FROM codebases WHERE path = $1`, path)
+	row := r.db.QueryRowContext(ctx, `SELECT id, path, name, summary, tech_stack, default_branch, indexed_at, project_context, longterm_context FROM codebases WHERE path = $1`, path)
 	return r.scanCodebase(row)
 }
 
 // GetCodebaseByID retrieves a codebase by ID.
 func (r *SQLRepository) GetCodebaseByID(ctx context.Context, id string) (*Codebase, error) {
-	row := r.db.QueryRowContext(ctx, `SELECT id, path, name, summary, tech_stack, default_branch, indexed_at FROM codebases WHERE id = $1`, id)
+	row := r.db.QueryRowContext(ctx, `SELECT id, path, name, summary, tech_stack, default_branch, indexed_at, project_context, longterm_context FROM codebases WHERE id = $1`, id)
 	return r.scanCodebase(row)
 }
 
 func (r *SQLRepository) scanCodebase(row *sql.Row) (*Codebase, error) {
 	c := &Codebase{}
-	var summary, defaultBranch sql.NullString
+	var summary, defaultBranch, projectContext, longtermContext sql.NullString
 	var techStack any
 	var indexedAt sql.NullTime
-	err := row.Scan(&c.ID, &c.Path, &c.Name, &summary, &techStack, &defaultBranch, &indexedAt)
+	err := row.Scan(&c.ID, &c.Path, &c.Name, &summary, &techStack, &defaultBranch, &indexedAt, &projectContext, &longtermContext)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -202,12 +206,14 @@ func (r *SQLRepository) scanCodebase(row *sql.Row) (*Codebase, error) {
 		c.IndexedAt = indexedAt.Time
 	}
 	c.TechStack = convertToIntMap(techStack)
+	c.ProjectContext = projectContext.String
+	c.LongtermContext = longtermContext.String
 	return c, nil
 }
 
 // GetAllCodebases retrieves all codebases.
 func (r *SQLRepository) GetAllCodebases(ctx context.Context) ([]Codebase, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT id, path, name, summary, tech_stack, default_branch, indexed_at FROM codebases ORDER BY name`)
+	rows, err := r.db.QueryContext(ctx, `SELECT id, path, name, summary, tech_stack, default_branch, indexed_at, project_context, longterm_context FROM codebases ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("query codebases: %w", err)
 	}
@@ -215,10 +221,10 @@ func (r *SQLRepository) GetAllCodebases(ctx context.Context) ([]Codebase, error)
 	var codebases []Codebase
 	for rows.Next() {
 		c := Codebase{}
-		var summary, defaultBranch sql.NullString
+		var summary, defaultBranch, projectContext, longtermContext sql.NullString
 		var techStack any
 		var indexedAt sql.NullTime
-		if err := rows.Scan(&c.ID, &c.Path, &c.Name, &summary, &techStack, &defaultBranch, &indexedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.Path, &c.Name, &summary, &techStack, &defaultBranch, &indexedAt, &projectContext, &longtermContext); err != nil {
 			return nil, fmt.Errorf("scan codebase row: %w", err)
 		}
 		c.Summary = summary.String
@@ -227,6 +233,8 @@ func (r *SQLRepository) GetAllCodebases(ctx context.Context) ([]Codebase, error)
 			c.IndexedAt = indexedAt.Time
 		}
 		c.TechStack = convertToIntMap(techStack)
+		c.ProjectContext = projectContext.String
+		c.LongtermContext = longtermContext.String
 		codebases = append(codebases, c)
 	}
 	if err := rows.Err(); err != nil {
@@ -239,17 +247,18 @@ func (r *SQLRepository) GetAllCodebases(ctx context.Context) ([]Codebase, error)
 func (r *SQLRepository) UpsertBranch(ctx context.Context, branch *Branch) error {
 	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO branches (id, codebase_id, name, is_default, base_branch, summary, story, status,
-			first_commit_hash, last_commit_hash, commit_count, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+			first_commit_hash, last_commit_hash, commit_count, created_at, updated_at, context_summary)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 		ON CONFLICT (codebase_id, name) DO UPDATE SET
 			is_default = EXCLUDED.is_default, base_branch = EXCLUDED.base_branch,
 			summary = EXCLUDED.summary, story = EXCLUDED.story, status = EXCLUDED.status,
 			first_commit_hash = EXCLUDED.first_commit_hash, last_commit_hash = EXCLUDED.last_commit_hash,
-			commit_count = EXCLUDED.commit_count, updated_at = EXCLUDED.updated_at`,
+			commit_count = EXCLUDED.commit_count, updated_at = EXCLUDED.updated_at,
+			context_summary = EXCLUDED.context_summary`,
 		branch.ID, branch.CodebaseID, branch.Name, branch.IsDefault, NullString(branch.BaseBranch),
 		NullString(branch.Summary), NullString(branch.Story), NullString(branch.Status),
 		NullString(branch.FirstCommitHash), NullString(branch.LastCommitHash), branch.CommitCount,
-		NullTime(branch.CreatedAt), NullTime(branch.UpdatedAt))
+		NullTime(branch.CreatedAt), NullTime(branch.UpdatedAt), NullString(branch.ContextSummary))
 	if err != nil {
 		return fmt.Errorf("upsert branch: %w", err)
 	}
@@ -260,7 +269,7 @@ func (r *SQLRepository) UpsertBranch(ctx context.Context, branch *Branch) error 
 func (r *SQLRepository) GetBranch(ctx context.Context, codebaseID, name string) (*Branch, error) {
 	row := r.db.QueryRowContext(ctx, `
 		SELECT id, codebase_id, name, is_default, base_branch, summary, story, status,
-			first_commit_hash, last_commit_hash, commit_count, created_at, updated_at
+			first_commit_hash, last_commit_hash, commit_count, created_at, updated_at, context_summary
 		FROM branches WHERE codebase_id = $1 AND name = $2`, codebaseID, name)
 	return r.scanBranch(row)
 }
@@ -269,17 +278,17 @@ func (r *SQLRepository) GetBranch(ctx context.Context, codebaseID, name string) 
 func (r *SQLRepository) GetBranchByID(ctx context.Context, id string) (*Branch, error) {
 	row := r.db.QueryRowContext(ctx, `
 		SELECT id, codebase_id, name, is_default, base_branch, summary, story, status,
-			first_commit_hash, last_commit_hash, commit_count, created_at, updated_at
+			first_commit_hash, last_commit_hash, commit_count, created_at, updated_at, context_summary
 		FROM branches WHERE id = $1`, id)
 	return r.scanBranch(row)
 }
 
 func (r *SQLRepository) scanBranch(row *sql.Row) (*Branch, error) {
 	b := &Branch{}
-	var baseBranch, summary, story, status, firstHash, lastHash sql.NullString
+	var baseBranch, summary, story, status, firstHash, lastHash, contextSummary sql.NullString
 	var createdAt, updatedAt sql.NullTime
 	err := row.Scan(&b.ID, &b.CodebaseID, &b.Name, &b.IsDefault, &baseBranch, &summary, &story,
-		&status, &firstHash, &lastHash, &b.CommitCount, &createdAt, &updatedAt)
+		&status, &firstHash, &lastHash, &b.CommitCount, &createdAt, &updatedAt, &contextSummary)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -292,6 +301,7 @@ func (r *SQLRepository) scanBranch(row *sql.Row) (*Branch, error) {
 	b.Status = status.String
 	b.FirstCommitHash = firstHash.String
 	b.LastCommitHash = lastHash.String
+	b.ContextSummary = contextSummary.String
 	if createdAt.Valid {
 		b.CreatedAt = createdAt.Time
 	}
@@ -305,7 +315,7 @@ func (r *SQLRepository) scanBranch(row *sql.Row) (*Branch, error) {
 func (r *SQLRepository) GetBranchesByCodebase(ctx context.Context, codebaseID string) ([]Branch, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, codebase_id, name, is_default, base_branch, summary, story, status,
-			first_commit_hash, last_commit_hash, commit_count, created_at, updated_at
+			first_commit_hash, last_commit_hash, commit_count, created_at, updated_at, context_summary
 		FROM branches WHERE codebase_id = $1 ORDER BY is_default DESC, updated_at DESC`, codebaseID)
 	if err != nil {
 		return nil, fmt.Errorf("query branches: %w", err)
@@ -314,10 +324,10 @@ func (r *SQLRepository) GetBranchesByCodebase(ctx context.Context, codebaseID st
 	var branches []Branch
 	for rows.Next() {
 		b := Branch{}
-		var baseBranch, summary, story, status, firstHash, lastHash sql.NullString
+		var baseBranch, summary, story, status, firstHash, lastHash, contextSummary sql.NullString
 		var createdAt, updatedAt sql.NullTime
 		if err := rows.Scan(&b.ID, &b.CodebaseID, &b.Name, &b.IsDefault, &baseBranch, &summary, &story,
-			&status, &firstHash, &lastHash, &b.CommitCount, &createdAt, &updatedAt); err != nil {
+			&status, &firstHash, &lastHash, &b.CommitCount, &createdAt, &updatedAt, &contextSummary); err != nil {
 			return nil, fmt.Errorf("scan branch row: %w", err)
 		}
 		b.BaseBranch = baseBranch.String
@@ -326,6 +336,7 @@ func (r *SQLRepository) GetBranchesByCodebase(ctx context.Context, codebaseID st
 		b.Status = status.String
 		b.FirstCommitHash = firstHash.String
 		b.LastCommitHash = lastHash.String
+		b.ContextSummary = contextSummary.String
 		if createdAt.Valid {
 			b.CreatedAt = createdAt.Time
 		}
@@ -351,6 +362,25 @@ func (r *SQLRepository) GetBranchCommits(ctx context.Context, branchID string, l
 	}
 	defer rows.Close()
 	return r.scanCommits(rows)
+}
+
+// UpdateBranchContext updates just the context_summary for a branch.
+func (r *SQLRepository) UpdateBranchContext(ctx context.Context, branchID, contextSummary string) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE branches SET context_summary = $1 WHERE id = $2`, contextSummary, branchID)
+	if err != nil {
+		return fmt.Errorf("update branch context: %w", err)
+	}
+	return nil
+}
+
+// UpdateCodebaseContext updates the project_context and longterm_context for a codebase.
+func (r *SQLRepository) UpdateCodebaseContext(ctx context.Context, codebaseID, projectContext, longtermContext string) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE codebases SET project_context = $1, longterm_context = $2 WHERE id = $3`,
+		projectContext, longtermContext, codebaseID)
+	if err != nil {
+		return fmt.Errorf("update codebase context: %w", err)
+	}
+	return nil
 }
 
 // ClearDefaultBranch clears the default flag on all branches for a codebase.

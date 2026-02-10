@@ -1,5 +1,13 @@
 package db
 
+// Migrations defines ALTER TABLE statements for adding columns to existing databases.
+// Each migration is run individually; errors are silently ignored (column already exists).
+var Migrations = []string{
+	`ALTER TABLE branches ADD COLUMN context_summary VARCHAR DEFAULT ''`,
+	`ALTER TABLE codebases ADD COLUMN project_context VARCHAR DEFAULT ''`,
+	`ALTER TABLE codebases ADD COLUMN longterm_context VARCHAR DEFAULT ''`,
+}
+
 // Schema defines the DuckDB table schema
 const Schema = `
 -- Developers table
@@ -18,7 +26,9 @@ CREATE TABLE IF NOT EXISTS codebases (
     summary VARCHAR,
     tech_stack JSON,
     default_branch VARCHAR,
-    indexed_at TIMESTAMP
+    indexed_at TIMESTAMP,
+    project_context VARCHAR DEFAULT '',
+    longterm_context VARCHAR DEFAULT ''
 );
 
 -- Branches table
@@ -36,6 +46,7 @@ CREATE TABLE IF NOT EXISTS branches (
     commit_count INTEGER DEFAULT 0,
     created_at TIMESTAMP,
     updated_at TIMESTAMP,
+    context_summary VARCHAR DEFAULT '',
     UNIQUE(codebase_id, name)
 );
 

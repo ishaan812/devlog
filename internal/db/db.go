@@ -150,6 +150,10 @@ func initializeSchema(db *sql.DB) error {
 	if err != nil {
 		return fmt.Errorf("execute schema: %w", err)
 	}
+	// Run migrations for existing databases (add new columns).
+	for _, m := range Migrations {
+		_, _ = db.Exec(m)
+	}
 	return nil
 }
 
