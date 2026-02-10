@@ -16,10 +16,9 @@ CURRENT_ARCH=$(go env GOARCH)
 echo "Current platform: ${CURRENT_OS}/${CURRENT_ARCH}"
 echo ""
 
-# DuckDB requires CGO, so cross-compilation needs native C toolchains.
-# On macOS: darwin arm64/amd64 work natively; for Linux/Windows install:
-#   brew install filosottile/musl-cross/musl-cross mingw-w64
-# Or use GitHub Actions for full multi-platform builds (see .github/workflows/release.yml).
+# DuckDB requires CGO. Cross-compiling to Linux from macOS doesn't work (DuckDB's
+# prebuilt libs need glibc; musl has symbol mismatches). Use Docker for Linux locally.
+# Windows: brew install mingw-w64. Full multi-platform: push a tag for GitHub Actions.
 
 echo "Building macOS binaries (CGO_ENABLED=1)..."
 CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 go build -o ${OUTPUT_DIR}/devlog-darwin-amd64 ./cmd/devlog
@@ -27,26 +26,38 @@ echo "  ✓ darwin-amd64"
 CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 go build -o ${OUTPUT_DIR}/devlog-darwin-arm64 ./cmd/devlog
 echo "  ✓ darwin-arm64"
 
-# Try Linux/Windows builds (requires cross-compilers: brew install filosottile/musl-cross/musl-cross mingw-w64)
+# Windows: cross-compile with mingw-w64 (brew install mingw-w64)
 echo ""
-echo "Attempting Linux/Windows builds (may fail without cross-compilers)..."
-
-if CC=x86_64-linux-musl-gcc CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -ldflags "-extldflags -static" -trimpath -o ${OUTPUT_DIR}/devlog-linux-amd64 ./cmd/devlog 2>/dev/null; then
-  echo "  ✓ linux-amd64"
-else
-  echo "  ⚠ linux-amd64 skipped (no cross-compiler)"
-fi
-
-if CC=aarch64-linux-musl-gcc CGO_ENABLED=1 GOOS=linux GOARCH=arm64 go build -ldflags "-extldflags -static" -trimpath -o ${OUTPUT_DIR}/devlog-linux-arm64 ./cmd/devlog 2>/dev/null; then
-  echo "  ✓ linux-arm64"
-else
-  echo "  ⚠ linux-arm64 skipped (no cross-compiler)"
-fi
-
+echo "Building Windows binary..."
 if CC=x86_64-w64-mingw32-gcc CGO_ENABLED=1 GOOS=windows GOARCH=amd64 go build -trimpath -o ${OUTPUT_DIR}/devlog-windows-amd64.exe ./cmd/devlog 2>/dev/null; then
   echo "  ✓ windows-amd64"
 else
-  echo "  ⚠ windows-amd64 skipped (no cross-compiler)"
+  echo "  ⚠ windows-amd64 skipped (brew install mingw-w64)"
+fi
+
+# Linux: use Docker (DuckDB needs glibc; cross-compile from macOS doesn't work)
+echo ""
+echo "Building Linux binaries (via Docker)..."
+if command -v docker &>/dev/null; then
+  if docker run --rm --platform linux/amd64 \
+    -v "$(pwd):/app" -w /app \
+    -e CGO_ENABLED=1 -e GOOS=linux -e GOARCH=amd64 \
+    golang:1.24 go build -trimpath -o ${OUTPUT_DIR}/devlog-linux-amd64 ./cmd/devlog 2>/dev/null; then
+    echo "  ✓ linux-amd64"
+  else
+    echo "  ⚠ linux-amd64 failed"
+  fi
+  if docker run --rm --platform linux/arm64 \
+    -v "$(pwd):/app" -w /app \
+    -e CGO_ENABLED=1 -e GOOS=linux -e GOARCH=arm64 \
+    golang:1.24 go build -trimpath -o ${OUTPUT_DIR}/devlog-linux-arm64 ./cmd/devlog 2>/dev/null; then
+    echo "  ✓ linux-arm64"
+  else
+    echo "  ⚠ linux-arm64 failed"
+  fi
+else
+  echo "  ⚠ linux-amd64 skipped (install Docker, or push tag for GitHub Actions)"
+  echo "  ⚠ linux-arm64 skipped (install Docker, or push tag for GitHub Actions)"
 fi
 
 echo ""
