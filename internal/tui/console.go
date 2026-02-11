@@ -183,7 +183,7 @@ type ConsoleModel struct {
 
 	// Operation state
 	operationRunning bool
-	operationType    string // "ingest" or "worklog"
+	operationType    string // "ingest", "worklog", or "ingest+worklog"
 	operationRepo    string // repo ID
 	operationError   string
 	operationOutput  string // Full output from operation
@@ -277,6 +277,24 @@ func (m ConsoleModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 
 		// ── Operations on selected repo ────────────────────────────
+		case "G": // Shift+G - Run ingest + worklog on selected repo
+			if m.activePane == paneRepos && m.repoCursor >= 0 && m.repoCursor < len(m.codebases) && !m.operationRunning {
+				repo := m.codebases[m.repoCursor]
+				m.operationRunning = true
+				m.operationType = "ingest+worklog"
+				m.operationRepo = repo.ID
+				m.operationError = ""
+				m.operationOutput = ""
+				// Capture current dbRepo and nil it out (persists via returned m)
+				oldDB := m.dbRepo
+				m.dbRepo = nil
+				return m, tea.Batch(
+					tea.Tick(time.Millisecond*100, func(t time.Time) tea.Msg { return tickMsg(t) }),
+					runIngestAndWorklogCmd(repo, oldDB, m.profileName),
+				)
+			}
+			return m, nil
+
 		case "I": // Shift+I - Run ingest on selected repo
 			if m.activePane == paneRepos && m.repoCursor >= 0 && m.repoCursor < len(m.codebases) && !m.operationRunning {
 				repo := m.codebases[m.repoCursor]
@@ -493,6 +511,41 @@ func runWorklogCmd(repo ConsoleCodebase, currentDB *db.SQLRepository, profileNam
 			repoID: repoID,
 			err:    err,
 			output: output,
+		}
+	}
+}
+
+// runIngestAndWorklogCmd creates a command that runs ingest then worklog sequentially.
+func runIngestAndWorklogCmd(repo ConsoleCodebase, currentDB *db.SQLRepository, profileName string) tea.Cmd {
+	repoPath := repo.Path
+	repoID := repo.ID
+
+	return func() tea.Msg {
+		// Close read-only connection so subprocess can get write lock
+		closeReadOnlyConnection(currentDB)
+
+		// Run ingest first
+		ingestOutput, err := executeIngest(repoPath, profileName)
+		if err != nil {
+			return operationCompleteMsg{
+				opType: "ingest+worklog",
+				repoID: repoID,
+				err:    fmt.Errorf("ingest failed: %w", err),
+				output: ingestOutput,
+			}
+		}
+
+		// Run worklog after successful ingest
+		worklogOutput, err := executeWorklog(repoPath)
+		
+		// Combine outputs
+		combinedOutput := fmt.Sprintf("=== Ingest ===\n%s\n\n=== Worklog ===\n%s", ingestOutput, worklogOutput)
+
+		return operationCompleteMsg{
+			opType: "ingest+worklog",
+			repoID: repoID,
+			err:    err,
+			output: combinedOutput,
 		}
 	}
 }
@@ -1155,7 +1208,13 @@ func (m ConsoleModel) renderOperationStatus(width, height int) string {
 	}
 
 	// Operation type
-	opTitle := "Running " + strings.Title(m.operationType)
+	opType := m.operationType
+	if opType == "ingest+worklog" {
+		opType = "Ingest + Worklog"
+	} else {
+		opType = strings.Title(opType)
+	}
+	opTitle := "Running " + opType
 	pad := (width - len(opTitle)) / 2
 	if pad < 0 {
 		pad = 0
@@ -1283,6 +1342,7 @@ func (m ConsoleModel) renderLogo(width, height int) string {
 		key  string
 		desc string
 	}{
+		{"Shift+G", "Run ingest + worklog on selected repo"},
 		{"Shift+I", "Run ingest on selected repo"},
 		{"Shift+W", "Generate worklog for selected repo"},
 	}
@@ -1332,6 +1392,7 @@ func (m ConsoleModel) renderHelpBar() string {
 			items = []string{
 				helpItem("↑↓", "navigate"),
 				helpItem("enter", "select"),
+				helpItem("Shift+G", "ingest+log"),
 				helpItem("Shift+I", "ingest"),
 				helpItem("Shift+W", "worklog"),
 				helpItem("tab", "dates"),
@@ -1397,8 +1458,8 @@ func executeIngest(repoPath, profileName string) (string, error) {
 		return "", fmt.Errorf("failed to get executable path: %w", err)
 	}
 
-	// Run devlog ingest with --all-branches flag to avoid interactive prompts
-	cmd := exec.Command(devlogPath, "ingest", repoPath, "--all-branches")
+	// Run devlog ingest with --all-branches and --skip-worklog flags to avoid interactive prompts
+	cmd := exec.Command(devlogPath, "ingest", repoPath, "--all-branches", "--skip-worklog")
 	cmd.Dir = repoPath
 
 	// Capture output

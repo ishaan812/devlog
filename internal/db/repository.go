@@ -46,6 +46,7 @@ type Repository interface {
 	GetUserCommits(ctx context.Context, codebaseID string, since time.Time) ([]Commit, error)
 	GetCommitCount(ctx context.Context, codebaseID string) (int64, error)
 	GetCommitCountByPath(ctx context.Context, repoPath string) (int64, error)
+	GetEarliestCommitDate(ctx context.Context, codebaseID string) (time.Time, error)
 
 	// File change operations
 	// ----------------------
@@ -547,6 +548,23 @@ func (r *SQLRepository) GetCommitCountByPath(ctx context.Context, repoPath strin
 		return 0, fmt.Errorf("count commits by path: %w", err)
 	}
 	return count, nil
+}
+
+// GetEarliestCommitDate returns the earliest commit date for a codebase.
+func (r *SQLRepository) GetEarliestCommitDate(ctx context.Context, codebaseID string) (time.Time, error) {
+	var committedAt time.Time
+	err := r.db.QueryRowContext(ctx, `
+		SELECT committed_at FROM commits 
+		WHERE codebase_id = $1 
+		ORDER BY committed_at ASC 
+		LIMIT 1`, codebaseID).Scan(&committedAt)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return time.Time{}, nil
+		}
+		return time.Time{}, fmt.Errorf("get earliest commit date: %w", err)
+	}
+	return committedAt, nil
 }
 
 // CreateFileChange creates a file change.

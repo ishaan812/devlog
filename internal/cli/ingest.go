@@ -55,6 +55,7 @@ var (
 	ingestSkipCommitSums bool
 	ingestFillSummaries  bool
 	ingestForceReindex   bool
+	ingestSkipWorklog    bool
 )
 
 var ingestCmd = &cobra.Command{
@@ -104,6 +105,7 @@ func init() {
 	ingestCmd.Flags().BoolVar(&ingestSkipCommitSums, "skip-commit-summaries", false, "Skip LLM-generated commit summaries")
 	ingestCmd.Flags().BoolVar(&ingestFillSummaries, "fill-summaries", false, "Generate summaries for existing commits that are missing them")
 	ingestCmd.Flags().BoolVar(&ingestForceReindex, "force-reindex", false, "Force re-indexing all files, ignoring content hashes")
+	ingestCmd.Flags().BoolVar(&ingestSkipWorklog, "skip-worklog", false, "Skip worklog generation prompt after ingestion")
 }
 
 func runIngest(cmd *cobra.Command, args []string) error {
@@ -120,6 +122,7 @@ func runIngest(cmd *cobra.Command, args []string) error {
 	titleColor := color.New(color.FgHiCyan, color.Bold)
 	successColor := color.New(color.FgHiGreen)
 	dimColor := color.New(color.FgHiBlack)
+	promptColor := color.New(color.FgYellow)
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -146,10 +149,13 @@ func runIngest(cmd *cobra.Command, args []string) error {
 	dimColor.Printf("  %s\n", absPath)
 	dimColor.Printf("  Profile: %s\n\n", profileName)
 
+	gitHistoryIngested := false
 	if !ingestIndexOnly {
 		if err := ingestGitHistory(absPath, cfg); err != nil {
 			VerboseLog("Git ingest warning: %v", err)
 			dimColor.Printf("  Note: Git ingestion skipped (%v)\n\n", err)
+		} else {
+			gitHistoryIngested = true
 		}
 	}
 
@@ -161,7 +167,27 @@ func runIngest(cmd *cobra.Command, args []string) error {
 
 	fmt.Println()
 	successColor.Printf("  Ingestion Complete!\n\n")
-	dimColor.Println("  Use 'devlog worklog' to view your development activity")
+
+	// Prompt for worklog generation if git history was ingested
+	if gitHistoryIngested && !ingestSkipWorklog {
+		promptColor.Printf("  Generate worklog from ingested commits? [Y/n]: ")
+		var input string
+		fmt.Scanln(&input)
+		input = strings.ToLower(strings.TrimSpace(input))
+
+		if input == "" || input == "y" || input == "yes" {
+			fmt.Println()
+			if err := generateWorklogAfterIngest(absPath, cfg); err != nil {
+				dimColor.Printf("  Warning: Failed to generate worklog: %v\n", err)
+				dimColor.Println("  You can manually generate it with 'devlog worklog'")
+			}
+		} else {
+			dimColor.Println("  Skipped worklog generation")
+			dimColor.Println("  Use 'devlog worklog' to generate it later")
+		}
+	} else if gitHistoryIngested {
+		dimColor.Println("  Use 'devlog worklog' to view your development activity")
+	}
 	fmt.Println()
 
 	return nil
@@ -170,6 +196,115 @@ func runIngest(cmd *cobra.Command, args []string) error {
 type BranchSelection struct {
 	MainBranch       string
 	SelectedBranches []string
+}
+
+func generateWorklogAfterIngest(absPath string, cfg *config.Config) error {
+	ctx := context.Background()
+	titleColor := color.New(color.FgHiCyan, color.Bold)
+	successColor := color.New(color.FgHiGreen)
+	dimColor := color.New(color.FgHiBlack)
+
+	titleColor.Printf("  Generating Worklog\n")
+
+	dbRepo, err := db.GetRepository()
+	if err != nil {
+		return fmt.Errorf("failed to initialize database: %w", err)
+	}
+
+	codebase, err := dbRepo.GetCodebaseByPath(ctx, absPath)
+	if err != nil || codebase == nil {
+		return fmt.Errorf("codebase not found at %s", absPath)
+	}
+
+	loc := time.UTC
+	if tzName := cfg.GetTimezone(); tzName != "" {
+		if tzLoc, err := time.LoadLocation(tzName); err == nil {
+			loc = tzLoc
+		}
+	}
+
+	// Determine date range based on ingest flags
+	endDate := time.Now().In(loc)
+	var startDate time.Time
+	var days int
+
+	if ingestAll {
+		// For full history, get the earliest commit date
+		earliestCommit, err := dbRepo.GetEarliestCommitDate(ctx, codebase.ID)
+		if err == nil && !earliestCommit.IsZero() {
+			startDate = earliestCommit.In(loc)
+			days = int(endDate.Sub(startDate).Hours() / 24)
+		} else {
+			startDate = endDate.AddDate(0, 0, -30)
+			days = 30
+		}
+	} else if ingestSince != "" {
+		sinceDate, err := time.Parse("2006-01-02", ingestSince)
+		if err != nil {
+			return fmt.Errorf("invalid date format: %w", err)
+		}
+		startDate = sinceDate.In(loc)
+		days = int(endDate.Sub(startDate).Hours() / 24)
+	} else {
+		days = ingestDays
+		startDate = endDate.AddDate(0, 0, -days)
+	}
+
+	dimColor.Printf("  Period: %s to %s (%d days)\n", startDate.Format("Jan 2"), endDate.Format("Jan 2, 2006"), days)
+
+	commits, err := queryCommitsForWorklog(ctx, dbRepo, codebase, startDate, endDate, cfg)
+	if err != nil {
+		return fmt.Errorf("failed to query commits: %w", err)
+	}
+
+	if len(commits) == 0 {
+		dimColor.Println("  No commits found in the ingested range")
+		return nil
+	}
+
+	dimColor.Printf("  Found %d commits\n\n", len(commits))
+
+	// Create LLM client if needed
+	var client llm.Client
+	if !ingestSkipSummaries && !ingestSkipCommitSums {
+		client, err = createLLMClient(cfg)
+		if err != nil {
+			dimColor.Printf("  Skipping LLM summaries: %v\n", err)
+		}
+	}
+
+	projectContext := getProjectContext(codebase)
+	codebaseContext := getCodebaseContext(codebase)
+
+	style := cfg.GetWorklogStyle()
+	if style == "" {
+		style = "non-technical"
+	}
+
+	cache := &worklogCacheContext{
+		dbRepo:      dbRepo,
+		codebaseID:  codebase.ID,
+		profileName: cfg.GetActiveProfileName(),
+		loc:         loc,
+		noCache:     false,
+	}
+
+	groups := groupByDate(commits, loc)
+	markdown, err := generateWorklogMarkdown(groups, client, cfg, loc, projectContext, codebaseContext, cache, style)
+	if err != nil {
+		return fmt.Errorf("failed to generate markdown: %w", err)
+	}
+
+	outputPath := fmt.Sprintf("worklog_%s_%s.md", startDate.Format("2006-01-02"), endDate.Format("2006-01-02"))
+
+	if err := os.WriteFile(outputPath, []byte(markdown), 0644); err != nil {
+		return fmt.Errorf("failed to write file: %w", err)
+	}
+
+	fmt.Println()
+	successColor.Printf("  Worklog generated: %s\n", outputPath)
+
+	return nil
 }
 
 func ingestGitHistory(absPath string, cfg *config.Config) error {
