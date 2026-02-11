@@ -2,20 +2,18 @@ package constants
 
 import "strings"
 
-// Provider represents an LLM provider type
 type Provider string
 
-// LLM Providers
 const (
 	ProviderOllama     Provider = "ollama"
 	ProviderOpenAI     Provider = "openai"
+	ProviderChatGPT    Provider = "chatgpt"
 	ProviderAnthropic  Provider = "anthropic"
 	ProviderOpenRouter Provider = "openrouter"
 	ProviderBedrock    Provider = "bedrock"
 	ProviderGemini     Provider = "gemini"
 )
 
-// ProviderInfo contains display information about a provider
 type ProviderInfo struct {
 	Key         string
 	Name        string
@@ -23,7 +21,6 @@ type ProviderInfo struct {
 	SupportsLLM bool
 }
 
-// AllProviders returns all available LLM providers in order
 var AllProviders = []ProviderInfo{
 	{
 		Key:         "1",
@@ -45,25 +42,30 @@ var AllProviders = []ProviderInfo{
 	},
 	{
 		Key:         "4",
+		Name:        "ChatGPT",
+		Description: "OpenAI via browser login — requires Plus/Pro/Team/Enterprise plan",
+		SupportsLLM: true,
+	},
+	{
+		Key:         "5",
 		Name:        "OpenRouter",
 		Description: "Unified API — Gemini, Claude, GPT, Llama, DeepSeek & free models",
 		SupportsLLM: true,
 	},
 	{
-		Key:         "5",
+		Key:         "6",
 		Name:        "Gemini",
 		Description: "Google Gemini — Flash, Pro, 1M context",
 		SupportsLLM: true,
 	},
 	{
-		Key:         "6",
+		Key:         "7",
 		Name:        "Bedrock",
 		Description: "Claude via AWS (enterprise)",
 		SupportsLLM: true,
 	},
 }
 
-// GetProviderByKey returns the provider for a given key
 func GetProviderByKey(key string) Provider {
 	for _, p := range AllProviders {
 		if p.Key == key {
@@ -73,7 +75,6 @@ func GetProviderByKey(key string) Provider {
 	return ""
 }
 
-// GetProviderInfo returns information about a provider
 func GetProviderInfo(provider Provider) *ProviderInfo {
 	providerName := string(provider)
 	for _, p := range AllProviders {
@@ -84,13 +85,14 @@ func GetProviderInfo(provider Provider) *ProviderInfo {
 	return nil
 }
 
-// ProviderDescription returns a human-readable description of a provider
 func ProviderDescription(provider Provider) string {
 	switch provider {
 	case ProviderOllama:
 		return "Ollama (local, free)"
 	case ProviderOpenAI:
 		return "OpenAI (GPT-5.2, GPT-4o)"
+	case ProviderChatGPT:
+		return "ChatGPT (web login, GPT-5.2, GPT-4o)"
 	case ProviderAnthropic:
 		return "Anthropic (Claude Opus/Sonnet)"
 	case ProviderBedrock:
@@ -104,16 +106,15 @@ func ProviderDescription(provider Provider) string {
 	}
 }
 
-// ProviderSetupInfo holds setup/configuration metadata for a provider
 type ProviderSetupInfo struct {
-	APIKeyURL    string // Where to get the API key
-	APIKeyPrefix string // Expected prefix for validation (e.g. "sk-ant-")
-	Placeholder  string // Input placeholder text
-	SetupHint    string // Help text shown during setup
-	NeedsAPIKey  bool   // Whether this provider requires an API key
+	APIKeyURL    string
+	APIKeyPrefix string
+	Placeholder  string
+	SetupHint    string
+	NeedsAPIKey  bool
+	WebLogin     bool
 }
 
-// GetProviderSetupInfo returns setup metadata for a provider
 func GetProviderSetupInfo(provider Provider) ProviderSetupInfo {
 	switch provider {
 	case ProviderOllama:
@@ -137,6 +138,15 @@ func GetProviderSetupInfo(provider Provider) ProviderSetupInfo {
 			Placeholder:  "sk-...",
 			SetupHint:    "Get your API key from: platform.openai.com/api-keys",
 			NeedsAPIKey:  true,
+		}
+	case ProviderChatGPT:
+		return ProviderSetupInfo{
+			APIKeyURL:    "https://platform.openai.com/api-keys",
+			APIKeyPrefix: "sk-",
+			Placeholder:  "sk-...",
+			SetupHint:    "Your browser will open to platform.openai.com — create or copy an API key",
+			NeedsAPIKey:  true,
+			WebLogin:     true,
 		}
 	case ProviderOpenRouter:
 		return ProviderSetupInfo{

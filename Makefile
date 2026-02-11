@@ -1,4 +1,4 @@
-.PHONY: build install install-local clean test run-ingest run-worklog run-onboard fmt lint tools uninstall-all
+.PHONY: build install install-local clean clean-all clean-profiles test run-ingest run-worklog run-onboard fmt lint tools uninstall-all
 
 BINARY_NAME=devlog
 BUILD_DIR=./bin
@@ -60,6 +60,12 @@ clean:
 clean-all:
 	rm -rf $(BUILD_DIR)
 	rm -rf ~/.devlog
+
+clean-profiles:
+	@echo "Deleting all devlog profiles and config..."
+	rm -rf ~/.devlog/profiles
+	rm -f ~/.devlog/config.json
+	@echo "All profiles deleted. Run 'devlog onboard' to set up again."
 
 test:
 	go test -v ./...

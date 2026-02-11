@@ -2,14 +2,18 @@ package cli
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
+	"github.com/briandowns/spinner"
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
+	"github.com/ishaan812/devlog/internal/auth"
 	"github.com/ishaan812/devlog/internal/config"
 	"github.com/ishaan812/devlog/internal/constants"
 	"github.com/ishaan812/devlog/internal/tui"
@@ -40,31 +44,26 @@ func init() {
 }
 
 func runConfigure(cmd *cobra.Command, args []string) error {
-	// Load existing config
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 
-	// Ensure default profile exists
 	if err := cfg.EnsureDefaultProfile(); err != nil {
 		return fmt.Errorf("failed to ensure default profile: %w", err)
 	}
 
-	// Check if we should use the TUI (requires a terminal)
 	if !configureLegacy && term.IsTerminal(int(os.Stdin.Fd())) {
 		updatedCfg, err := tui.RunConfigure(cfg)
 		if err != nil {
-			// If TUI fails or is canceled, fall back to legacy
 			if err.Error() == "configuration canceled" {
 				fmt.Println("Configuration canceled.")
 				return nil
 			}
-			// For other errors, try legacy mode
 			fmt.Println("Falling back to text-based configuration...")
 			return runConfigureLegacy(cfg)
 		}
-		_ = updatedCfg // Config is already saved by TUI
+		_ = updatedCfg
 		return nil
 	}
 
@@ -81,11 +80,12 @@ func runConfigureLegacy(cfg *config.Config) error {
 	infoColor := color.New(color.FgHiWhite)
 	accentColor := color.New(color.FgHiMagenta)
 
+	cfg.HydrateGlobalFromActiveProfile()
+
 	fmt.Println()
 	titleColor.Println("DevLog Configuration")
 	fmt.Println()
 
-	// Show current configuration
 	fmt.Println()
 	titleColor.Println("Current Settings:")
 	dimColor.Println(strings.Repeat("─", 40))
@@ -101,7 +101,6 @@ func runConfigureLegacy(cfg *config.Config) error {
 	}
 	fmt.Println()
 
-	// Configuration menu
 	for {
 		fmt.Println()
 		titleColor.Println("What would you like to configure?")
@@ -148,7 +147,7 @@ func runConfigureLegacy(cfg *config.Config) error {
 		case "4":
 			displayCurrentSettings(cfg)
 		case "5":
-			// Save and exit
+			cfg.CopyLLMConfigToProfile(cfg.GetActiveProfileName())
 			if err := cfg.Save(); err != nil {
 				return fmt.Errorf("failed to save config: %w", err)
 			}
@@ -181,7 +180,6 @@ func configureLLMProvider(cfg *config.Config, reader *bufio.Reader) error {
 	infoColor.Printf("Current provider: %s\n", cfg.DefaultProvider)
 	fmt.Println()
 
-	// Display providers
 	for _, p := range constants.AllProviders {
 		if !p.SupportsLLM {
 			continue
@@ -201,7 +199,6 @@ func configureLLMProvider(cfg *config.Config, reader *bufio.Reader) error {
 		return nil
 	}
 
-	// Find provider by key
 	var selectedProvider constants.Provider
 	for _, p := range constants.AllProviders {
 		if p.Key == choice && p.SupportsLLM {
@@ -217,7 +214,6 @@ func configureLLMProvider(cfg *config.Config, reader *bufio.Reader) error {
 
 	cfg.DefaultProvider = string(selectedProvider)
 
-	// Configure provider-specific settings
 	switch selectedProvider {
 	case constants.ProviderOllama:
 		configureOllama(cfg, reader)
@@ -227,6 +223,10 @@ func configureLLMProvider(cfg *config.Config, reader *bufio.Reader) error {
 		}
 	case constants.ProviderOpenAI:
 		if err := configureOpenAI(cfg, reader); err != nil {
+			return err
+		}
+	case constants.ProviderChatGPT:
+		if err := configureChatGPT(cfg, reader); err != nil {
 			return err
 		}
 	case constants.ProviderOpenRouter:
@@ -255,7 +255,6 @@ func configureUserInfo(cfg *config.Config, reader *bufio.Reader) error {
 	dimColor.Println(strings.Repeat("─", 40))
 	fmt.Println()
 
-	// GitHub Username
 	promptColor.Print("GitHub username")
 	if cfg.GitHubUsername != "" {
 		dimColor.Printf(" [current: %s]", cfg.GitHubUsername)
@@ -267,7 +266,6 @@ func configureUserInfo(cfg *config.Config, reader *bufio.Reader) error {
 		cfg.GitHubUsername = username
 	}
 
-	// User Email
 	promptColor.Print("Email")
 	if cfg.UserEmail != "" {
 		dimColor.Printf(" [current: %s]", cfg.UserEmail)
@@ -279,7 +277,6 @@ func configureUserInfo(cfg *config.Config, reader *bufio.Reader) error {
 		cfg.UserEmail = email
 	}
 
-	// User Name
 	promptColor.Print("Name")
 	if cfg.UserName != "" {
 		dimColor.Printf(" [current: %s]", cfg.UserName)
@@ -316,8 +313,9 @@ func configureAPIKeys(cfg *config.Config, reader *bufio.Reader) error {
 	}{
 		{"1", "Anthropic", "Update Anthropic API key"},
 		{"2", "OpenAI", "Update OpenAI API key"},
-		{"3", "OpenRouter", "Update OpenRouter API key"},
-		{"4", "AWS Bedrock", "Update AWS credentials"},
+		{"3", "ChatGPT", "Sign in with ChatGPT (OAuth)"},
+		{"4", "OpenRouter", "Update OpenRouter API key"},
+		{"5", "AWS Bedrock", "Update AWS credentials"},
 		{"0", "Back", "Return to main menu"},
 	}
 
@@ -344,11 +342,29 @@ func configureAPIKeys(cfg *config.Config, reader *bufio.Reader) error {
 		cfg.OpenAIAPIKey = strings.TrimSpace(key)
 		successColor.Println("OpenAI API key updated!")
 	case "3":
+		infoColor.Println("Sign in with ChatGPT...")
+		dimColor.Println("A browser window will open for you to sign in.")
+		dimColor.Println("Requires a Plus, Pro, Team, or Enterprise plan.")
+		s := spinner.New(spinner.CharSets[14], 100*time.Millisecond)
+		s.Suffix = " Waiting for browser login..."
+		s.Start()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		tokens, authErr := auth.LoginWithChatGPT(ctx)
+		cancel()
+		s.Stop()
+		if authErr != nil {
+			errorColor.Printf("Login failed: %v\n", authErr)
+		} else {
+			cfg.ChatGPTAccessToken = tokens.BearerToken()
+			cfg.ChatGPTRefreshToken = tokens.RefreshToken
+			successColor.Println("Signed in with ChatGPT!")
+		}
+	case "4":
 		promptColor.Print("OpenRouter API Key: ")
 		key, _ := reader.ReadString('\n')
 		cfg.OpenRouterAPIKey = strings.TrimSpace(key)
 		successColor.Println("OpenRouter API key updated!")
-	case "4":
+	case "5":
 		promptColor.Print("AWS Access Key ID: ")
 		accessKey, _ := reader.ReadString('\n')
 		cfg.AWSAccessKeyID = strings.TrimSpace(accessKey)
@@ -396,7 +412,6 @@ func displayCurrentSettings(cfg *config.Config) {
 	}
 	fmt.Println()
 
-	// User Information
 	successColor.Println("User Information:")
 	if cfg.GitHubUsername != "" {
 		infoColor.Printf("  GitHub: %s\n", cfg.GitHubUsername)
@@ -409,7 +424,6 @@ func displayCurrentSettings(cfg *config.Config) {
 	}
 	fmt.Println()
 
-	// API Keys (masked)
 	successColor.Println("API Keys:")
 	if cfg.AnthropicAPIKey != "" {
 		infoColor.Printf("  Anthropic: %s\n", maskAPIKey(cfg.AnthropicAPIKey))
@@ -425,7 +439,6 @@ func displayCurrentSettings(cfg *config.Config) {
 	}
 	fmt.Println()
 
-	// Profile Information
 	if cfg.ActiveProfile != "" {
 		successColor.Println("Active Profile:")
 		infoColor.Printf("  %s\n", cfg.ActiveProfile)

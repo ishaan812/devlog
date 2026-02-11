@@ -23,10 +23,8 @@ import (
 	"github.com/ishaan812/devlog/internal/tui"
 )
 
-// githubNoReplyRegex matches GitHub noreply emails: username@users.noreply.github.com or 12345+username@users.noreply.github.com
 var githubNoReplyRegex = regexp.MustCompile(`^(?:\d+\+)?([^@]+)@users\.noreply\.github\.com$`)
 
-// extractGitHubUsername extracts the GitHub username from an email if it's a GitHub noreply email
 func extractGitHubUsername(email string) string {
 	matches := githubNoReplyRegex.FindStringSubmatch(strings.ToLower(email))
 	if len(matches) >= 2 {
@@ -35,7 +33,6 @@ func extractGitHubUsername(email string) string {
 	return ""
 }
 
-// isUserCommitByGitHub checks if a commit author matches the configured GitHub username
 func isUserCommitByGitHub(authorEmail string, githubUsername string) bool {
 	if githubUsername == "" {
 		return false
@@ -45,21 +42,14 @@ func isUserCommitByGitHub(authorEmail string, githubUsername string) bool {
 }
 
 var (
-	// Git history flags
-	ingestDays  int
-	ingestAll   bool
-	ingestSince string
-
-	// Branch selection flags
+	ingestDays           int
+	ingestAll            bool
+	ingestSince          string
 	ingestBranches       []string
 	ingestAllBranches    bool
 	ingestReselectBranch bool
-
-	// Indexing flags
-	ingestSkipSummaries bool
-	ingestMaxFiles      int
-
-	// Mode flags
+	ingestSkipSummaries  bool
+	ingestMaxFiles       int
 	ingestGitOnly        bool
 	ingestIndexOnly      bool
 	ingestSkipCommitSums bool
@@ -101,21 +91,14 @@ Examples:
 func init() {
 	rootCmd.AddCommand(ingestCmd)
 
-	// Git history flags
 	ingestCmd.Flags().IntVar(&ingestDays, "days", 30, "Number of days of history to ingest")
 	ingestCmd.Flags().BoolVar(&ingestAll, "all", false, "Ingest full git history (ignores --days)")
 	ingestCmd.Flags().StringVar(&ingestSince, "since", "", "Ingest commits since date (YYYY-MM-DD)")
-
-	// Branch selection flags
 	ingestCmd.Flags().StringSliceVar(&ingestBranches, "branches", nil, "Specific branches to ingest (comma-separated)")
 	ingestCmd.Flags().BoolVar(&ingestAllBranches, "all-branches", false, "Ingest all branches without prompting")
 	ingestCmd.Flags().BoolVar(&ingestReselectBranch, "reselect-branches", false, "Re-select branches (ignore saved selection)")
-
-	// Indexing flags
 	ingestCmd.Flags().BoolVar(&ingestSkipSummaries, "skip-summaries", false, "Skip LLM-generated summaries")
 	ingestCmd.Flags().IntVar(&ingestMaxFiles, "max-files", 500, "Maximum files to index")
-
-	// Mode flags
 	ingestCmd.Flags().BoolVar(&ingestGitOnly, "git-only", false, "Only ingest git history")
 	ingestCmd.Flags().BoolVar(&ingestIndexOnly, "index-only", false, "Only index codebase")
 	ingestCmd.Flags().BoolVar(&ingestSkipCommitSums, "skip-commit-summaries", false, "Skip LLM-generated commit summaries")
@@ -134,26 +117,21 @@ func runIngest(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("invalid path: %w", err)
 	}
 
-	// Colors
 	titleColor := color.New(color.FgHiCyan, color.Bold)
 	successColor := color.New(color.FgHiGreen)
 	dimColor := color.New(color.FgHiBlack)
 
-	// Load config and add repo to profile
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 
-	// Ensure default profile exists
 	if err := cfg.EnsureDefaultProfile(); err != nil {
 		return fmt.Errorf("failed to ensure default profile: %w", err)
 	}
 
-	// Set active profile for DB operations
 	db.SetActiveProfile(cfg.GetActiveProfileName())
 
-	// Add repo to active profile
 	profileName := cfg.GetActiveProfileName()
 	if err := cfg.AddRepoToProfile(profileName, absPath); err != nil {
 		VerboseLog("Warning: failed to add repo to profile: %v", err)
@@ -163,29 +141,24 @@ func runIngest(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Header
 	fmt.Println()
 	titleColor.Printf("  Ingesting Repository\n")
 	dimColor.Printf("  %s\n", absPath)
 	dimColor.Printf("  Profile: %s\n\n", profileName)
 
-	// Phase 1: Git History (unless --index-only)
 	if !ingestIndexOnly {
 		if err := ingestGitHistory(absPath, cfg); err != nil {
-			// If git fails, still try indexing (repo might not be git initialized)
 			VerboseLog("Git ingest warning: %v", err)
 			dimColor.Printf("  Note: Git ingestion skipped (%v)\n\n", err)
 		}
 	}
 
-	// Phase 2: Codebase Indexing (unless --git-only)
 	if !ingestGitOnly {
 		if err := indexCodebase(absPath, cfg); err != nil {
 			return fmt.Errorf("indexing failed: %w", err)
 		}
 	}
 
-	// Final success message
 	fmt.Println()
 	successColor.Printf("  Ingestion Complete!\n\n")
 	dimColor.Println("  Use 'devlog worklog' to view your development activity")
@@ -194,7 +167,6 @@ func runIngest(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// BranchSelection holds the user's branch selection
 type BranchSelection struct {
 	MainBranch       string
 	SelectedBranches []string
@@ -242,7 +214,7 @@ func ingestGitHistory(absPath string, cfg *config.Config) error {
 		}
 	}
 
-	userEmail := cfg.UserEmail
+	userEmail := cfg.GetEffectiveUserEmail()
 	if userEmail == "" {
 		var gitErr error
 		userEmail, gitErr = repo.GetUserEmail()
@@ -250,10 +222,10 @@ func ingestGitHistory(absPath string, cfg *config.Config) error {
 			VerboseLog("Warning: failed to get git user email: %v", gitErr)
 		}
 	}
-	githubUsername := cfg.GitHubUsername
+	githubUsername := cfg.GetEffectiveGitHubUsername()
 
 	if userEmail != "" {
-		userName := cfg.UserName
+		userName := cfg.GetEffectiveUserName()
 		if userName == "" {
 			var nameErr error
 			userName, nameErr = repo.GetUserName()
@@ -316,8 +288,7 @@ func ingestGitHistory(absPath string, cfg *config.Config) error {
 	var totalCommits, totalFiles int
 	var llmClient llm.Client
 	if !ingestSkipCommitSums && !ingestSkipSummaries {
-		llmClient, err = createLLMClient(cfg)
-		if err != nil {
+		if llmClient, err = createLLMClient(cfg); err != nil {
 			return fmt.Errorf("failed to initialize LLM client: %w\n\nTo skip summaries, use: --skip-summaries or --skip-commit-summaries", err)
 		}
 	}
@@ -403,7 +374,6 @@ func selectBranches(branches []git.BranchInfo, detectedDefault string, cfg *conf
 	infoColor := color.New(color.FgCyan)
 	promptColor := color.New(color.FgYellow)
 
-	// If branches specified via flag, use them
 	if len(ingestBranches) > 0 {
 		mainBranch := ingestBranches[0]
 		return &BranchSelection{
@@ -412,7 +382,6 @@ func selectBranches(branches []git.BranchInfo, detectedDefault string, cfg *conf
 		}, nil
 	}
 
-	// If --all-branches flag, select all
 	if ingestAllBranches {
 		var branchNames []string
 		mainBranch := detectedDefault
@@ -428,13 +397,10 @@ func selectBranches(branches []git.BranchInfo, detectedDefault string, cfg *conf
 		}, nil
 	}
 
-	// Check for saved branch selection
 	profileName := cfg.GetActiveProfileName()
 	saved := cfg.GetBranchSelection(profileName, repoPath)
 
-	// If we have a saved selection and not forcing reselect, prompt for action
 	if saved != nil && len(saved.SelectedBranches) > 0 && !ingestReselectBranch {
-		// Validate that saved branches still exist
 		branchMap := make(map[string]bool)
 		for _, b := range branches {
 			branchMap[b.Name] = true
@@ -447,7 +413,6 @@ func selectBranches(branches []git.BranchInfo, detectedDefault string, cfg *conf
 			}
 		}
 
-		// Check if main branch still exists and we have valid branches
 		if branchMap[saved.MainBranch] && len(validBranches) > 0 {
 			fmt.Println()
 			infoColor.Printf("  Saved branch selection:\n")
@@ -463,7 +428,6 @@ func selectBranches(branches []git.BranchInfo, detectedDefault string, cfg *conf
 
 			switch input {
 			case "", "y", "yes":
-				// Use current selection
 				fmt.Println()
 				return &BranchSelection{
 					MainBranch:       saved.MainBranch,
@@ -471,7 +435,6 @@ func selectBranches(branches []git.BranchInfo, detectedDefault string, cfg *conf
 				}, nil
 
 			case "m", "modify":
-				// Modify existing selection - run TUI with pre-selected branches
 				fmt.Println()
 				selection, err := tui.RunBranchSelectionWithPreselected(branches, saved.MainBranch, validBranches)
 				if err != nil {
@@ -480,9 +443,7 @@ func selectBranches(branches []git.BranchInfo, detectedDefault string, cfg *conf
 				return saveBranchSelection(cfg, profileName, repoPath, selection, dimColor)
 
 			case "r", "reselect":
-				// Fall through to full reselection
 			default:
-				// Treat unknown input as using current selection
 				fmt.Println()
 				return &BranchSelection{
 					MainBranch:       saved.MainBranch,
@@ -492,7 +453,6 @@ func selectBranches(branches []git.BranchInfo, detectedDefault string, cfg *conf
 		}
 	}
 
-	// Interactive selection using Bubbletea TUI
 	fmt.Println()
 	selection, err := tui.RunBranchSelection(branches, detectedDefault)
 	if err != nil {
@@ -506,7 +466,6 @@ func saveBranchSelection(cfg *config.Config, profileName, repoPath string, selec
 	fmt.Println()
 	dimColor.Printf("  Selected %d branch(es): %s\n", len(selection.SelectedBranches), strings.Join(selection.SelectedBranches, ", "))
 
-	// Save the selection for future use
 	if err := cfg.SaveBranchSelection(profileName, repoPath, selection.MainBranch, selection.SelectedBranches); err != nil {
 		VerboseLog("Warning: failed to save branch selection: %v", err)
 	} else {
@@ -696,7 +655,6 @@ func getCommitStats(repo *git.Repository, commit *git.Commit) (db.JSON, []*db.Fi
 		return stats, fileChanges, nil
 	}
 
-	// Get trees
 	parentTree, err := parent.Tree()
 	if err != nil {
 		return stats, fileChanges, fmt.Errorf("failed to get parent tree: %w", err)
@@ -707,7 +665,6 @@ func getCommitStats(repo *git.Repository, commit *git.Commit) (db.JSON, []*db.Fi
 		return stats, fileChanges, fmt.Errorf("failed to get commit tree: %w", err)
 	}
 
-	// Calculate diff
 	changes, err := parentTree.Diff(commitTree)
 	if err != nil {
 		return stats, fileChanges, fmt.Errorf("failed to diff trees: %w", err)
@@ -720,7 +677,6 @@ func getCommitStats(repo *git.Repository, commit *git.Commit) (db.JSON, []*db.Fi
 			ID: uuid.New().String(),
 		}
 
-		// Determine change type and path
 		action, err := change.Action()
 		if err != nil {
 			return stats, fileChanges, fmt.Errorf("failed to get change action: %w", err)
@@ -740,7 +696,6 @@ func getCommitStats(repo *git.Repository, commit *git.Commit) (db.JSON, []*db.Fi
 			continue
 		}
 
-		// Get patch for stats
 		patch, err := change.Patch()
 		if err == nil {
 			patchStr := patch.String()
@@ -753,7 +708,6 @@ func getCommitStats(repo *git.Repository, commit *git.Commit) (db.JSON, []*db.Fi
 					totalDeletions++
 				}
 			}
-			// Store patch if small enough
 			if len(patchStr) < 10000 {
 				fc.Patch = patchStr
 			}
@@ -831,14 +785,12 @@ func indexCodebase(absPath string, cfg *config.Config) error {
 	var summarizer *indexer.Summarizer
 
 	if !ingestSkipSummaries {
-		llmClient, err = createLLMClient(cfg)
-		if err != nil {
+		if llmClient, err = createLLMClient(cfg); err != nil {
 			return fmt.Errorf("failed to initialize LLM client: %w\n\nTo skip file/folder summaries, use: --skip-summaries", err)
 		}
 		summarizer = indexer.NewSummarizer(llmClient, IsVerbose())
 	}
 	if !ingestSkipSummaries && summarizer != nil {
-		// Read README.md for project context
 		readmeContent := ""
 		for _, readmeName := range []string{"README.md", "readme.md", "Readme.md"} {
 			readmePath := filepath.Join(absPath, readmeName)
@@ -874,7 +826,6 @@ func indexCodebase(absPath string, cfg *config.Config) error {
 		return fmt.Errorf("failed to fetch existing folders: %w", err)
 	}
 
-	// Build set of current file/folder paths for deletion detection
 	currentFilePaths := make(map[string]bool)
 	for _, f := range scanResult.Files {
 		currentFilePaths[f.Path] = true
@@ -884,7 +835,6 @@ func indexCodebase(absPath string, cfg *config.Config) error {
 		currentFolderPaths[path] = true
 	}
 
-	// Categorize files: new, changed, unchanged
 	var newFiles, changedFiles, unchangedFiles []indexer.FileInfo
 	for _, fileInfo := range scanResult.Files {
 		existing, exists := existingFiles[fileInfo.Path]
@@ -897,7 +847,6 @@ func indexCodebase(absPath string, cfg *config.Config) error {
 		}
 	}
 
-	// Find deleted files
 	var deletedFilePaths []string
 	for path := range existingFiles {
 		if !currentFilePaths[path] {
@@ -905,7 +854,6 @@ func indexCodebase(absPath string, cfg *config.Config) error {
 		}
 	}
 
-	// Find deleted folders
 	var deletedFolderPaths []string
 	for path := range existingFolders {
 		if !currentFolderPaths[path] {
@@ -913,7 +861,6 @@ func indexCodebase(absPath string, cfg *config.Config) error {
 		}
 	}
 
-	// Report incremental stats
 	if !isFirstIndex && !ingestForceReindex {
 		dimColor.Printf("  Incremental: %d new, %d changed, %d unchanged, %d deleted\n",
 			len(newFiles), len(changedFiles), len(unchangedFiles), len(deletedFilePaths))
@@ -932,14 +879,12 @@ func indexCodebase(absPath string, cfg *config.Config) error {
 		VerboseLog("Deleted %d removed folder indexes", len(deletedFolderPaths))
 	}
 
-	// Index folders (always update metadata, but only generate summaries for new/changed)
 	fmt.Println()
 	dimColor.Printf("  Indexing folders...")
 	folderCount := 0
 	folderIDMap := make(map[string]string)
 
 	for folderPath, folderInfo := range scanResult.Folders {
-		// Reuse existing folder ID if available
 		folderID := existingFolders[folderPath]
 		if folderID == "" {
 			folderID = uuid.New().String()
@@ -978,16 +923,13 @@ func indexCodebase(absPath string, cfg *config.Config) error {
 	}
 	fmt.Println()
 
-	// Index files (only new and changed files need summaries)
 	filesToProcess := append(newFiles, changedFiles...)
 	dimColor.Printf("  Indexing files...")
 	fileCount := 0
 	summarizedCount := 0
 	totalFiles := len(filesToProcess) + len(unchangedFiles)
 
-	// Process new and changed files (need summaries)
 	for _, fileInfo := range filesToProcess {
-		// Check if we had an existing ID to reuse
 		existingInfo := existingFiles[fileInfo.Path]
 		fileID := existingInfo.ID
 		if fileID == "" {
@@ -1035,7 +977,6 @@ func indexCodebase(absPath string, cfg *config.Config) error {
 		}
 	}
 
-	// Update unchanged files (just update metadata, keep existing summary)
 	for _, fileInfo := range unchangedFiles {
 		existingInfo := existingFiles[fileInfo.Path]
 
@@ -1095,30 +1036,32 @@ func indexCodebase(absPath string, cfg *config.Config) error {
 }
 
 func createLLMClient(cfg *config.Config) (llm.Client, error) {
-	provider := cfg.DefaultProvider
+	provider := cfg.GetEffectiveProvider()
 	if provider == "" {
 		return nil, fmt.Errorf("no provider configured; run 'devlog onboard' first")
 	}
-	llmCfg := llm.Config{Provider: llm.Provider(provider), Model: cfg.DefaultModel}
+	llmCfg := llm.Config{Provider: llm.Provider(provider), Model: cfg.GetEffectiveModel()}
 	switch llmCfg.Provider {
 	case llm.ProviderOpenAI:
-		llmCfg.APIKey = cfg.GetAPIKey("openai")
+		llmCfg.APIKey = cfg.GetEffectiveAPIKey("openai")
+	case llm.ProviderChatGPT:
+		llmCfg.APIKey = cfg.GetEffectiveAPIKey("chatgpt")
 	case llm.ProviderAnthropic:
-		llmCfg.APIKey = cfg.GetAPIKey("anthropic")
+		llmCfg.APIKey = cfg.GetEffectiveAPIKey("anthropic")
 	case llm.ProviderOpenRouter:
-		llmCfg.APIKey = cfg.GetAPIKey("openrouter")
+		llmCfg.APIKey = cfg.GetEffectiveAPIKey("openrouter")
 	case llm.ProviderGemini:
-		llmCfg.APIKey = cfg.GetAPIKey("gemini")
+		llmCfg.APIKey = cfg.GetEffectiveAPIKey("gemini")
 	case llm.ProviderBedrock:
-		llmCfg.AWSAccessKeyID = cfg.AWSAccessKeyID
-		llmCfg.AWSSecretAccessKey = cfg.AWSSecretAccessKey
-		llmCfg.AWSRegion = cfg.AWSRegion
+		llmCfg.AWSAccessKeyID = cfg.GetEffectiveAWSAccessKeyID()
+		llmCfg.AWSSecretAccessKey = cfg.GetEffectiveAWSSecretAccessKey()
+		llmCfg.AWSRegion = cfg.GetEffectiveAWSRegion()
 	case llm.ProviderOllama:
-		if cfg.OllamaBaseURL != "" {
-			llmCfg.BaseURL = cfg.OllamaBaseURL
+		if url := cfg.GetEffectiveOllamaBaseURL(); url != "" {
+			llmCfg.BaseURL = url
 		}
-		if cfg.OllamaModel != "" {
-			llmCfg.Model = cfg.OllamaModel
+		if model := cfg.GetEffectiveOllamaModel(); model != "" {
+			llmCfg.Model = model
 		}
 	}
 	return llm.NewClient(llmCfg)

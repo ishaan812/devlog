@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/ishaan812/devlog/internal/auth"
 	"github.com/ishaan812/devlog/internal/constants"
 )
 
@@ -36,6 +38,25 @@ type tickMsg time.Time
 type testResultMsg struct {
 	success bool
 	message string
+}
+
+// ── ChatGPT OAuth login ────────────────────────────────────────────────────
+
+// chatGPTLoginResultMsg is sent when the OAuth flow completes (or fails).
+type chatGPTLoginResultMsg struct {
+	tokens *auth.ChatGPTTokens
+	err    error
+}
+
+// runChatGPTLoginCmd starts the OAuth PKCE flow in the background.
+// It opens the browser, waits for the callback, and sends a result message.
+func runChatGPTLoginCmd() tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		tokens, err := auth.LoginWithChatGPT(ctx)
+		return chatGPTLoginResultMsg{tokens: tokens, err: err}
+	}
 }
 
 // ── Commands ───────────────────────────────────────────────────────────────
@@ -69,7 +90,7 @@ func testProvider(provider, apiKey, baseURL string) tea.Cmd {
 			return testResultMsg{false, fmt.Sprintf("Ollama returned status %d", resp.StatusCode)}
 		}
 
-		// API-key providers
+		// API-key providers (including ChatGPT which uses web login but still needs an API key)
 		if !setupInfo.NeedsAPIKey {
 			return testResultMsg{true, "Configuration saved!"}
 		}
@@ -78,6 +99,9 @@ func testProvider(provider, apiKey, baseURL string) tea.Cmd {
 		}
 		if setupInfo.APIKeyPrefix != "" && !strings.HasPrefix(apiKey, setupInfo.APIKeyPrefix) {
 			return testResultMsg{false, fmt.Sprintf("Invalid API key format (should start with %s)", setupInfo.APIKeyPrefix)}
+		}
+		if p == constants.ProviderChatGPT {
+			return testResultMsg{true, "API key valid — ChatGPT ready!"}
 		}
 		return testResultMsg{true, "API key format valid!"}
 	}

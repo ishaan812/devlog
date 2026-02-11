@@ -46,6 +46,10 @@ type ConfigModel struct {
 
 	// Menu state
 	menuOptions []menuOption
+
+	// ChatGPT OAuth login state
+	chatGPTLoggingIn bool
+	chatGPTLoginErr  string
 }
 
 type menuOption struct {
@@ -64,6 +68,10 @@ func NewConfigModel(cfg *config.Config) ConfigModel {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("86"))
+
+	// Hydrate global config fields from the active profile so that the TUI
+	// reads/writes the correct per-profile values during the interactive flow.
+	cfg.HydrateGlobalFromActiveProfile()
 
 	// Create a copy of the config to compare changes
 	originalCfg := *cfg
@@ -129,7 +137,7 @@ func (m ConfigModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.selectedIdx++
 			} else if m.step == configStepTimezone && m.selectedIdx < len(getTimezoneOptions())-1 {
 				m.selectedIdx++
-			} else if m.step == configStepAPIKeys && m.selectedIdx < 6 {
+			} else if m.step == configStepAPIKeys && m.selectedIdx < 7 {
 				m.selectedIdx++
 			}
 		case "esc":
@@ -152,6 +160,26 @@ func (m ConfigModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(cmd, tickCmd())
 		}
 		return m, tickCmd()
+
+	case chatGPTLoginResultMsg:
+		m.chatGPTLoggingIn = false
+		if msg.err != nil {
+			m.chatGPTLoginErr = fmt.Sprintf("Login failed: %v", msg.err)
+			return m, nil
+		}
+		m.config.ChatGPTAccessToken = msg.tokens.BearerToken()
+		m.config.ChatGPTRefreshToken = msg.tokens.RefreshToken
+		// Login succeeded with API key
+		// Show model selection if available, otherwise go back to menu
+		if constants.ProviderHasModelSelection(constants.Provider(m.config.DefaultProvider)) {
+			m.step = configStepLLMModelSelection
+			m.selectedIdx = 0
+			return m, nil
+		}
+		m.step = configStepMenu
+		m.selectedIdx = 0
+		m.prepareStep()
+		return m, nil
 
 	case testResultMsg:
 		m.testing = false
@@ -230,6 +258,11 @@ func (m ConfigModel) handleEnter() (tea.Model, tea.Cmd) {
 		m.config.DefaultProvider = strings.ToLower(providers[m.selectedIdx].Name)
 		m.step = configStepLLMConfig
 		m.prepareStep()
+		// Start OAuth flow for ChatGPT
+		if constants.Provider(m.config.DefaultProvider) == constants.ProviderChatGPT {
+			m.chatGPTLoggingIn = true
+			return m, tea.Batch(m.spinner.Tick, runChatGPTLoginCmd())
+		}
 		return m, nil
 
 	case configStepLLMConfig:
@@ -247,6 +280,17 @@ func (m ConfigModel) handleEnter() (tea.Model, tea.Cmd) {
 			if value != "" {
 				m.config.OpenAIAPIKey = value
 			}
+		case constants.ProviderChatGPT:
+			// ChatGPT uses OAuth — handled via chatGPTLoginResultMsg
+			if m.chatGPTLoggingIn {
+				return m, nil
+			}
+			if m.chatGPTLoginErr != "" {
+				m.chatGPTLoggingIn = true
+				m.chatGPTLoginErr = ""
+				return m, tea.Batch(m.spinner.Tick, runChatGPTLoginCmd())
+			}
+			return m, nil
 		case constants.ProviderOpenRouter:
 			if value != "" {
 				m.config.OpenRouterAPIKey = value
@@ -315,6 +359,13 @@ func (m ConfigModel) handleEnter() (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case configStepAPIKeys:
+		// Index 2 is ChatGPT — start OAuth instead of text input
+		if m.selectedIdx == 2 {
+			m.chatGPTLoggingIn = true
+			m.chatGPTLoginErr = ""
+			// Stay on this step so the user sees the spinner
+			return m, tea.Batch(m.spinner.Tick, runChatGPTLoginCmd())
+		}
 		value := strings.TrimSpace(m.textInput.Value())
 		if value != "" {
 			switch m.selectedIdx {
@@ -322,13 +373,13 @@ func (m ConfigModel) handleEnter() (tea.Model, tea.Cmd) {
 				m.config.AnthropicAPIKey = value
 			case 1:
 				m.config.OpenAIAPIKey = value
-			case 2:
-				m.config.OpenRouterAPIKey = value
 			case 3:
-				m.config.GeminiAPIKey = value
+				m.config.OpenRouterAPIKey = value
 			case 4:
-				m.config.AWSAccessKeyID = value
+				m.config.GeminiAPIKey = value
 			case 5:
+				m.config.AWSAccessKeyID = value
+			case 6:
 				m.config.AWSSecretAccessKey = value
 			}
 		}
@@ -352,6 +403,8 @@ func (m *ConfigModel) prepareStep() {
 	m.textInput.Reset()
 	m.testResult = ""
 	m.testSuccess = false
+	m.chatGPTLoggingIn = false
+	m.chatGPTLoginErr = ""
 
 	switch m.step {
 	case configStepLLMConfig:
@@ -382,6 +435,8 @@ func (m ConfigModel) getExistingAPIKey(provider constants.Provider) string {
 		return m.config.AnthropicAPIKey
 	case constants.ProviderOpenAI:
 		return m.config.OpenAIAPIKey
+	case constants.ProviderChatGPT:
+		return m.config.ChatGPTAccessToken
 	case constants.ProviderOpenRouter:
 		return m.config.OpenRouterAPIKey
 	case constants.ProviderGemini:
@@ -394,6 +449,12 @@ func (m ConfigModel) getExistingAPIKey(provider constants.Provider) string {
 }
 
 func (m ConfigModel) finishConfiguration() (tea.Model, tea.Cmd) {
+	// Copy the (potentially modified) global LLM fields back into the active profile.
+	// The TUI uses global Config fields as temporary storage during configuration.
+	if m.config.ActiveProfile != "" {
+		m.config.CopyLLMConfigToProfile(m.config.ActiveProfile)
+	}
+
 	// Save config
 	if err := m.config.Save(); err != nil {
 		m.err = err
@@ -489,7 +550,21 @@ func (m ConfigModel) viewLLMConfig() string {
 	setupInfo := constants.GetProviderSetupInfo(constants.Provider(m.config.DefaultProvider))
 
 	var body string
-	if setupInfo.NeedsAPIKey {
+	if setupInfo.WebLogin {
+		// OAuth-based login flow (ChatGPT)
+		if m.chatGPTLoggingIn {
+			body = m.spinner.View() + " " + normalStyle.Render("Waiting for browser login...") + "\n\n"
+			body += dimStyle.Render("A browser window should have opened.") + "\n"
+			body += dimStyle.Render("Sign in with your ChatGPT account to continue.") + "\n\n"
+			body += dimStyle.Render("Note: Requires a Plus, Pro, Team, or Enterprise plan.") + "\n"
+			body += dimStyle.Render("Free and Go plans are not supported. Use OpenAI provider instead.") + "\n"
+		} else if m.chatGPTLoginErr != "" {
+			body = errorStyle.Render("  "+m.chatGPTLoginErr) + "\n\n"
+			body += normalStyle.Render("Press Enter to try again, or Esc to go back.") + "\n"
+		} else {
+			body = successStyle.Render("  Signed in with ChatGPT!") + "\n"
+		}
+	} else if setupInfo.NeedsAPIKey {
 		body = normalStyle.Render(fmt.Sprintf("%s API key (leave empty to keep current):", providerName))
 		if setupInfo.APIKeyURL != "" {
 			body += "\n" + dimStyle.Render(fmt.Sprintf("Get one at: %s", setupInfo.APIKeyURL))
@@ -506,10 +581,33 @@ func (m ConfigModel) viewLLMConfig() string {
 		TestSuccess: m.testSuccess,
 	}
 
+	helpText := "Press Enter to save • Esc to cancel"
+	if setupInfo.WebLogin {
+		if m.chatGPTLoggingIn {
+			helpText = "Complete login in your browser..."
+		} else if m.chatGPTLoginErr != "" {
+			helpText = "Enter: retry • Esc: back"
+		} else {
+			helpText = "Signed in!"
+		}
+	}
+
+	if setupInfo.WebLogin {
+		var s strings.Builder
+		s.WriteString("\n")
+		s.WriteString(titleStyle.Render(fmt.Sprintf("Configure %s", providerName)))
+		s.WriteString("\n\n")
+		s.WriteString(body)
+		s.WriteString("\n")
+		s.WriteString(dimStyle.Render(helpText))
+		s.WriteString("\n")
+		return s.String()
+	}
+
 	return RenderTextInput(
 		fmt.Sprintf("Configure %s", providerName),
 		body, m.textInput, test,
-		"Press Enter to save • Esc to cancel",
+		helpText,
 	)
 }
 
@@ -598,6 +696,7 @@ func (m ConfigModel) viewAPIKeys() string {
 	}{
 		{"Anthropic", m.config.AnthropicAPIKey},
 		{"OpenAI", m.config.OpenAIAPIKey},
+		{"ChatGPT (OAuth)", m.config.ChatGPTAccessToken},
 		{"OpenRouter", m.config.OpenRouterAPIKey},
 		{"Gemini", m.config.GeminiAPIKey},
 		{"AWS Access Key", m.config.AWSAccessKeyID},
@@ -665,6 +764,7 @@ func (m ConfigModel) viewReview() string {
 
 	// API Keys (masked)
 	hasAPIKeys := m.config.AnthropicAPIKey != "" || m.config.OpenAIAPIKey != "" ||
+		m.config.ChatGPTAccessToken != "" ||
 		m.config.OpenRouterAPIKey != "" || m.config.GeminiAPIKey != "" || m.config.AWSAccessKeyID != ""
 
 	if hasAPIKeys {
@@ -676,6 +776,10 @@ func (m ConfigModel) viewReview() string {
 		}
 		if m.config.OpenAIAPIKey != "" {
 			s.WriteString(dimStyle.Render(fmt.Sprintf("  OpenAI: %s", maskKey(m.config.OpenAIAPIKey))))
+			s.WriteString("\n")
+		}
+		if m.config.ChatGPTAccessToken != "" {
+			s.WriteString(dimStyle.Render("  ChatGPT: signed in (OAuth)"))
 			s.WriteString("\n")
 		}
 		if m.config.OpenRouterAPIKey != "" {

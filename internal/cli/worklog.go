@@ -128,7 +128,6 @@ func runWorklog(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to load config: %w\n\nRun 'devlog onboard' to set up your configuration", err)
 	}
 
-	// Get timezone for the active profile
 	loc := getProfileTimezone(cfg)
 
 	dbRepo, err := db.GetRepository()
@@ -174,7 +173,6 @@ func runWorklog(cmd *cobra.Command, args []string) error {
 	projectContext := getProjectContext(codebase)
 	codebaseContext := getCodebaseContext(codebase)
 
-	// Determine worklog style
 	style := worklogStyle
 	if style == "" {
 		style = cfg.GetWorklogStyle() // defaults to "non-technical"
@@ -183,9 +181,6 @@ func runWorklog(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("invalid worklog style: %s (must be 'technical' or 'non-technical')", style)
 	}
 
-	// Set up cache context.
-	// Always create the cache context so regenerated entries get written back to DB.
-	// The noCache flag only skips cache READS, not writes.
 	var cache *worklogCacheContext
 	if codebase != nil {
 		cache = &worklogCacheContext{
@@ -309,7 +304,6 @@ func getString(m map[string]any, key string) string {
 	return ""
 }
 
-// getProjectContext returns the codebase summary for use as LLM context
 func getProjectContext(codebase *db.Codebase) string {
 	if codebase != nil && codebase.Summary != "" {
 		return codebase.Summary
@@ -317,7 +311,6 @@ func getProjectContext(codebase *db.Codebase) string {
 	return "(No project context available)"
 }
 
-// getCodebaseContext builds a combined context string from project and longterm context
 func getCodebaseContext(codebase *db.Codebase) string {
 	if codebase == nil {
 		return "(No codebase context available)"
@@ -335,14 +328,11 @@ func getCodebaseContext(codebase *db.Codebase) string {
 	return strings.Join(parts, "\n\n")
 }
 
-// extractContextLine extracts a short one-line summary from a generated section for branch context storage.
-// It looks for meaningful bullet points and avoids parroting headers or emoji-prefixed fix lines.
 func extractContextLine(section string) string {
 	lines := strings.Split(section, "\n")
 	var featureBullets []string
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		// Skip headings, commit lines, and fix/chore lines
 		if strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "- **") ||
 			strings.HasPrefix(trimmed, "- 🐛") || strings.HasPrefix(trimmed, "- 🔧") ||
 			trimmed == "" {
@@ -355,7 +345,6 @@ func extractContextLine(section string) string {
 	if len(featureBullets) == 0 {
 		return ""
 	}
-	// Use the first feature bullet, truncated to keep context concise
 	result := featureBullets[0]
 	if len(result) > 150 {
 		result = result[:147] + "..."
@@ -363,8 +352,6 @@ func extractContextLine(section string) string {
 	return result
 }
 
-// buildCommitContext builds a text block describing a single commit for LLM consumption
-// In non-technical mode, it excludes file paths and detailed stats
 func buildCommitContext(c commitData, style string) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Commit %s: %s\n", c.Hash[:7], strings.TrimSpace(c.Message)))
@@ -372,7 +359,6 @@ func buildCommitContext(c commitData, style string) string {
 		sb.WriteString(fmt.Sprintf("Summary: %s\n", c.Summary))
 	}
 
-	// Only include technical details in technical mode
 	if style == "technical" {
 		sb.WriteString(fmt.Sprintf("Stats: +%d/-%d lines\n", c.Additions, c.Deletions))
 		if len(c.Files) > 0 {
@@ -382,7 +368,6 @@ func buildCommitContext(c commitData, style string) string {
 	return sb.String()
 }
 
-// buildAggregateStats builds a stats summary string for a set of commits
 func buildAggregateStats(commits []commitData) string {
 	totalAdditions := 0
 	totalDeletions := 0
@@ -397,7 +382,6 @@ func buildAggregateStats(commits []commitData) string {
 	return fmt.Sprintf("%d commits | +%d/-%d lines | %d unique files changed", len(commits), totalAdditions, totalDeletions, len(fileSet))
 }
 
-// worklogCacheContext holds dependencies for cache operations during worklog generation
 type worklogCacheContext struct {
 	dbRepo      *db.SQLRepository
 	codebaseID  string
@@ -406,7 +390,6 @@ type worklogCacheContext struct {
 	noCache     bool
 }
 
-// computeCommitHashes returns sorted comma-joined hashes for a set of commits (used as cache key)
 func computeCommitHashes(commits []commitData) string {
 	hashes := make([]string, len(commits))
 	for i, c := range commits {
@@ -416,7 +399,6 @@ func computeCommitHashes(commits []commitData) string {
 	return strings.Join(hashes, ",")
 }
 
-// computeCommitStats returns aggregate additions and deletions for a set of commits
 func computeCommitStats(commits []commitData) (int, int) {
 	adds, dels := 0, 0
 	for _, c := range commits {
@@ -426,8 +408,6 @@ func computeCommitStats(commits []commitData) (int, int) {
 	return adds, dels
 }
 
-// getCachedOrGenerate checks the worklog cache and returns cached content if valid,
-// otherwise calls the generator function, stores the result, and returns it.
 func getCachedOrGenerate(
 	ctx context.Context,
 	cache *worklogCacheContext,
@@ -438,38 +418,32 @@ func getCachedOrGenerate(
 	generator func() (string, error),
 ) (string, bool, error) {
 	if cache == nil || cache.dbRepo == nil || cache.codebaseID == "" {
-		// No DB available at all -- just generate without caching
 		content, err := generator()
 		return content, false, err
 	}
 
-	// Don't read from cache for today's entries (day not yet complete) or when --no-cache is set
 	today := time.Now().In(cache.loc).Truncate(24 * time.Hour)
 	entryDay := date.In(cache.loc).Truncate(24 * time.Hour)
 	isToday := entryDay.Equal(today)
 	currentHashes := computeCommitHashes(commits)
 
 	if !cache.noCache && !isToday {
-		// Try cache lookup (only when cache reads are enabled)
 		cached, err := cache.dbRepo.GetWorklogEntry(ctx, cache.codebaseID, cache.profileName, date, branchID, entryType, groupBy)
 		if err == nil && cached != nil && cached.CommitHashes == currentHashes {
 			return cached.Content, true, nil
 		}
 	}
 
-	// Cache miss, today, or --no-cache -- generate fresh
 	content, err := generator()
 	if err != nil {
 		return "", false, err
 	}
 
-	// Always write back to DB so cache stays in sync with the generated output
 	storeCacheEntry(ctx, cache, date, branchID, branchName, entryType, groupBy, commits, content)
 
 	return content, false, nil
 }
 
-// storeCacheEntry saves a worklog entry to the cache
 func storeCacheEntry(ctx context.Context, cache *worklogCacheContext, date time.Time, branchID, branchName, entryType, groupBy string, commits []commitData, content string) {
 	if cache == nil || cache.dbRepo == nil || cache.codebaseID == "" {
 		return
@@ -483,7 +457,7 @@ func storeCacheEntry(ctx context.Context, cache *worklogCacheContext, date time.
 		BranchID:     branchID,
 		BranchName:   branchName,
 		EntryType:    entryType,
-		GroupBy:       groupBy,
+		GroupBy:      groupBy,
 		Content:      content,
 		CommitCount:  len(commits),
 		Additions:    adds,
@@ -515,7 +489,6 @@ func groupByDate(commits []commitData, loc *time.Location) []dayGroup {
 		})
 	}
 
-	// Sort by date ascending (oldest first) -- context must build chronologically
 	sort.Slice(groups, func(i, j int) bool {
 		return groups[i].Date.Before(groups[j].Date)
 	})
@@ -555,42 +528,45 @@ func groupByBranch(ctx context.Context, dbRepo *db.SQLRepository, commits []comm
 func createWorklogClient(cfg *config.Config) (llm.Client, error) {
 	selectedProvider := worklogProvider
 	if selectedProvider == "" {
-		selectedProvider = cfg.DefaultProvider
+		selectedProvider = cfg.GetEffectiveProvider()
 	}
 	if selectedProvider == "" {
 		return nil, fmt.Errorf("no provider configured; run 'devlog onboard' first")
 	}
 	selectedModel := worklogModel // from CLI flag
 	if selectedModel == "" {
-		selectedModel = cfg.DefaultModel
+		selectedModel = cfg.GetEffectiveModel()
 	}
 	llmCfg := llm.Config{Provider: llm.Provider(selectedProvider), Model: selectedModel}
 	switch llmCfg.Provider {
 	case llm.ProviderOpenAI:
-		llmCfg.APIKey = cfg.GetAPIKey("openai")
+		llmCfg.APIKey = cfg.GetEffectiveAPIKey("openai")
+	case llm.ProviderChatGPT:
+		llmCfg.APIKey = cfg.GetEffectiveAPIKey("chatgpt")
 	case llm.ProviderAnthropic:
-		llmCfg.APIKey = cfg.GetAPIKey("anthropic")
+		llmCfg.APIKey = cfg.GetEffectiveAPIKey("anthropic")
 	case llm.ProviderOpenRouter:
-		llmCfg.APIKey = cfg.GetAPIKey("openrouter")
+		llmCfg.APIKey = cfg.GetEffectiveAPIKey("openrouter")
 	case llm.ProviderGemini:
-		llmCfg.APIKey = cfg.GetAPIKey("gemini")
+		llmCfg.APIKey = cfg.GetEffectiveAPIKey("gemini")
 	case llm.ProviderBedrock:
-		llmCfg.AWSAccessKeyID = cfg.AWSAccessKeyID
-		llmCfg.AWSSecretAccessKey = cfg.AWSSecretAccessKey
-		llmCfg.AWSRegion = cfg.AWSRegion
+		llmCfg.AWSAccessKeyID = cfg.GetEffectiveAWSAccessKeyID()
+		llmCfg.AWSSecretAccessKey = cfg.GetEffectiveAWSSecretAccessKey()
+		llmCfg.AWSRegion = cfg.GetEffectiveAWSRegion()
 	case llm.ProviderOllama:
-		if cfg.OllamaBaseURL != "" {
-			llmCfg.BaseURL = cfg.OllamaBaseURL
+		if url := cfg.GetEffectiveOllamaBaseURL(); url != "" {
+			llmCfg.BaseURL = url
 		}
 		// Ollama uses its own model field as override
-		if selectedModel == "" && cfg.OllamaModel != "" {
-			llmCfg.Model = cfg.OllamaModel
+		if selectedModel == "" {
+			if model := cfg.GetEffectiveOllamaModel(); model != "" {
+				llmCfg.Model = model
+			}
 		}
 	}
 	return llm.NewClient(llmCfg)
 }
 
-// dayOutputSection holds a pre-generated day section used to decouple processing order from output order
 type dayOutputSection struct {
 	dayName  string
 	branches []branchOutputSection
@@ -607,27 +583,15 @@ func generateWorklogMarkdown(groups []dayGroup, client llm.Client, cfg *config.C
 	cacheColor := color.New(color.FgHiGreen)
 	warnColor := color.New(color.FgYellow)
 
-	// groups are sorted ascending (oldest first) for correct context flow.
-	// We process oldest->newest to build branch context chronologically,
-	// then reverse for markdown output (newest first in the document).
-
-	// In-memory branch context: built up day-by-day during processing.
-	// This is the single source of truth for context, NOT the database.
 	branchContextMap := make(map[string]string)
-
-	// Track which branches had a cache miss on any day. If a miss occurs,
-	// all later days on that branch must be regenerated since their context changed.
 	branchCacheBusted := make(map[string]bool)
 	cacheInvalidatedCount := 0
-
-	// Process all days oldest->newest, store generated sections
 	daySections := make([]dayOutputSection, 0, len(groups))
 
 	for _, group := range groups {
 		dayName := group.Date.In(loc).Format("Monday, January 2, 2006")
 		ds := dayOutputSection{dayName: dayName}
 
-		// Group commits by branch within this day
 		branchCommits := make(map[string][]commitData)
 		branchIDs := make(map[string]string)
 		branchOrder := []string{}
@@ -649,13 +613,11 @@ func generateWorklogMarkdown(groups []dayGroup, client llm.Client, cfg *config.C
 			commits := branchCommits[bName]
 			branchID := branchIDs[bName]
 
-			// Use in-memory context (built chronologically from older days processed so far)
 			branchCtx := branchContextMap[branchID]
 			if branchCtx == "" {
 				branchCtx = "(No previous context for this branch)"
 			}
 
-			// If this branch had a cache miss on an earlier day, force regeneration
 			forceRegen := branchCacheBusted[branchID]
 
 			var content string
@@ -663,12 +625,10 @@ func generateWorklogMarkdown(groups []dayGroup, client llm.Client, cfg *config.C
 			var err error
 
 			if forceRegen {
-				// Skip cache -- context has changed, must regenerate
 				content, err = buildDayBranchSection(commits, client, projectContext, branchCtx, loc, style)
 				if err != nil {
 					return "", fmt.Errorf("failed to generate day/branch updates: %w", err)
 				}
-				// Save to cache for future runs with correct context
 				storeCacheEntry(ctx, cache, group.Date, branchID, bName, "day_updates", "date", commits, content)
 			} else {
 				content, cached, err = getCachedOrGenerate(
@@ -692,11 +652,9 @@ func generateWorklogMarkdown(groups []dayGroup, client llm.Client, cfg *config.C
 				} else {
 					dimColor.Printf("  %s [%s]: generated\n", group.Date.In(loc).Format("Jan 2"), bName)
 				}
-				// Mark this branch as needing regeneration for all subsequent days
 				branchCacheBusted[branchID] = true
 			}
 
-			// Update in-memory context for this branch (flows forward to next day)
 			contextLine := extractContextLine(content)
 			if contextLine != "" {
 				dateStr := group.Date.In(loc).Format("Jan 2")
@@ -706,7 +664,6 @@ func generateWorklogMarkdown(groups []dayGroup, client llm.Client, cfg *config.C
 				} else {
 					branchContextMap[branchID] = entry
 				}
-				// Cap at 10 entries
 				lines := strings.Split(branchContextMap[branchID], "\n")
 				if len(lines) > 10 {
 					branchContextMap[branchID] = strings.Join(lines[len(lines)-10:], "\n")
@@ -719,7 +676,6 @@ func generateWorklogMarkdown(groups []dayGroup, client llm.Client, cfg *config.C
 		daySections = append(daySections, ds)
 	}
 
-	// Save final in-memory branch contexts to DB for future runs
 	if cache != nil && cache.dbRepo != nil {
 		for branchID, ctxSummary := range branchContextMap {
 			if err := cache.dbRepo.UpdateBranchContext(ctx, branchID, ctxSummary); err != nil {
@@ -733,12 +689,11 @@ func generateWorklogMarkdown(groups []dayGroup, client llm.Client, cfg *config.C
 		warnColor.Println("  Branch context flows chronologically, so newer days were re-summarized with updated context.")
 	}
 
-	// --- Build markdown output (newest first) ---
 	var sb strings.Builder
 
-	userName := cfg.UserName
+	userName := cfg.GetEffectiveUserName()
 	if userName == "" {
-		userName = cfg.GitHubUsername
+		userName = cfg.GetEffectiveGitHubUsername()
 	}
 	if userName == "" {
 		userName = "Developer"
@@ -748,7 +703,6 @@ func generateWorklogMarkdown(groups []dayGroup, client llm.Client, cfg *config.C
 	sb.WriteString(fmt.Sprintf("*Generated on %s*\n\n", time.Now().In(loc).Format("January 2, 2006")))
 
 	if len(groups) > 0 {
-		// groups[0] is oldest, groups[last] is newest (ascending order)
 		startDate := groups[0].Date.In(loc)
 		endDate := groups[len(groups)-1].Date.In(loc)
 		sb.WriteString(fmt.Sprintf("**Period:** %s - %s\n\n", startDate.Format("Jan 2"), endDate.Format("Jan 2, 2006")))
@@ -756,7 +710,6 @@ func generateWorklogMarkdown(groups []dayGroup, client llm.Client, cfg *config.C
 
 	sb.WriteString("---\n\n")
 
-	// Overall summary (always freshly generated)
 	if client != nil {
 		summary, err := generateOverallSummary(groups, client, projectContext, codebaseContext, style)
 		if err != nil {
@@ -769,7 +722,6 @@ func generateWorklogMarkdown(groups []dayGroup, client llm.Client, cfg *config.C
 		}
 	}
 
-	// Output day sections in reverse (newest first) for the markdown
 	for i := len(daySections) - 1; i >= 0; i-- {
 		ds := daySections[i]
 		sb.WriteString(fmt.Sprintf("# %s\n\n", ds.dayName))
@@ -793,10 +745,9 @@ func generateBranchWorklogMarkdown(groups []branchGroup, client llm.Client, cfg 
 
 	var sb strings.Builder
 
-	// Header
-	userName := cfg.UserName
+	userName := cfg.GetEffectiveUserName()
 	if userName == "" {
-		userName = cfg.GitHubUsername
+		userName = cfg.GetEffectiveGitHubUsername()
 	}
 	if userName == "" {
 		userName = "Developer"
@@ -815,10 +766,8 @@ func generateBranchWorklogMarkdown(groups []branchGroup, client llm.Client, cfg 
 			branchID = group.Branch.ID
 		}
 
-		// Branch heading
 		sb.WriteString(fmt.Sprintf("# Branch: %s\n\n", branchName))
 
-		// Stats
 		totalAdditions := 0
 		totalDeletions := 0
 		for _, c := range group.Commits {
@@ -826,10 +775,8 @@ func generateBranchWorklogMarkdown(groups []branchGroup, client llm.Client, cfg 
 			totalDeletions += c.Deletions
 		}
 
-		// Summary section - LLM-generated summary of all commits in this branch
 		sb.WriteString("## Summary\n\n")
 
-		// Load branch context for multi-day continuity
 		var dbRepoRef *db.SQLRepository
 		if cache != nil {
 			dbRepoRef = cache.dbRepo
@@ -841,9 +788,7 @@ func generateBranchWorklogMarkdown(groups []branchGroup, client llm.Client, cfg 
 			}
 		}
 
-		// Generate a consolidated summary using LLM if available (with cache)
 		if client != nil {
-			// For branch summary, use the earliest commit date as the entry date
 			var entryDate time.Time
 			if len(group.Commits) > 0 {
 				entryDate = group.Commits[0].CommittedAt.In(loc).Truncate(24 * time.Hour)
@@ -870,11 +815,9 @@ func generateBranchWorklogMarkdown(groups []branchGroup, client llm.Client, cfg 
 			}
 		}
 
-		// Daily Activity section within this branch
 		sb.WriteString("## Daily Activity\n\n")
 		sb.WriteString(fmt.Sprintf("**%d commits** | +%d / -%d lines\n\n", len(group.Commits), totalAdditions, totalDeletions))
 
-		// Group commits by date (in user's timezone)
 		commitsByDate := make(map[string][]commitData)
 		for _, c := range group.Commits {
 			localTime := c.CommittedAt.In(loc)
@@ -882,7 +825,6 @@ func generateBranchWorklogMarkdown(groups []branchGroup, client llm.Client, cfg 
 			commitsByDate[dateKey] = append(commitsByDate[dateKey], c)
 		}
 
-		// Sort dates (newest first for display)
 		var dates []string
 		for d := range commitsByDate {
 			dates = append(dates, d)
@@ -893,7 +835,6 @@ func generateBranchWorklogMarkdown(groups []branchGroup, client llm.Client, cfg 
 			date, _ := time.Parse("2006-01-02", dateStr)
 			dayCommits := commitsByDate[dateStr]
 
-			// Sort commits within day by time (newest first)
 			sort.Slice(dayCommits, func(i, j int) bool {
 				return dayCommits[i].CommittedAt.After(dayCommits[j].CommittedAt)
 			})
@@ -909,7 +850,6 @@ func generateBranchWorklogMarkdown(groups []branchGroup, client llm.Client, cfg 
 				}
 				sb.WriteString("\n")
 
-				// Add commit summary as nested bullet if available
 				if c.Summary != "" {
 					sb.WriteString(fmt.Sprintf("  - %s\n", c.Summary))
 				}
@@ -919,18 +859,14 @@ func generateBranchWorklogMarkdown(groups []branchGroup, client llm.Client, cfg 
 		sb.WriteString("---\n\n")
 	}
 
-	// Footer
 	sb.WriteString("*Generated by [DevLog](https://github.com/ishaan812/devlog)*\n")
 
 	return sb.String(), nil
 }
 
-// buildDayBranchSection builds the full markdown section for a day+branch, including
-// both the LLM-generated summary and the commit list. This is what gets cached.
 func buildDayBranchSection(commits []commitData, client llm.Client, projectContext string, branchContext string, loc *time.Location, style string) (string, error) {
 	var section strings.Builder
 
-	// Updates section - LLM-summarized bullet points (with commit classification)
 	if client != nil {
 		updatesSummary, err := generateDayBranchUpdates(commits, client, projectContext, branchContext, style)
 		if err != nil {
@@ -945,10 +881,8 @@ func buildDayBranchSection(commits []commitData, client llm.Client, projectConte
 	}
 	section.WriteString("\n")
 
-	// Commits section
 	section.WriteString("### Commits\n\n")
 
-	// Sort commits by time (newest first)
 	sorted := make([]commitData, len(commits))
 	copy(sorted, commits)
 	sort.Slice(sorted, func(i, j int) bool {
@@ -969,7 +903,6 @@ func buildDayBranchSection(commits []commitData, client llm.Client, projectConte
 }
 
 func generateBranchSummary(group branchGroup, client llm.Client, projectContext string, branchContext string, style string) (string, error) {
-	// Build context for each commit
 	var commitBlocks []string
 	for _, c := range group.Commits {
 		commitBlocks = append(commitBlocks, buildCommitContext(c, style))
@@ -998,7 +931,6 @@ func generateBranchSummary(group branchGroup, client llm.Client, projectContext 
 }
 
 func generateDayBranchUpdates(commits []commitData, client llm.Client, projectContext string, branchContext string, style string) (string, error) {
-	// Build context for each commit
 	var commitBlocks []string
 	for _, c := range commits {
 		commitBlocks = append(commitBlocks, buildCommitContext(c, style))
@@ -1025,7 +957,6 @@ func generateDayBranchUpdates(commits []commitData, client llm.Client, projectCo
 }
 
 func generateOverallSummary(groups []dayGroup, client llm.Client, projectContext string, codebaseContext string, style string) (string, error) {
-	// Build context for all commits
 	var allCommits []commitData
 	var commitBlocks []string
 	for _, g := range groups {

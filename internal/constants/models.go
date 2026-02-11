@@ -1,19 +1,21 @@
 package constants
 
-// ModelConfig holds model configuration for a provider
 type ModelConfig struct {
 	LLMModel  string
 	BaseURL   string
 	AWSRegion string
 }
 
-// DefaultModels contains default model configurations for each provider
 var DefaultModels = map[Provider]ModelConfig{
 	ProviderOllama: {
 		LLMModel: "llama3.1",
 		BaseURL:  "http://localhost:11434",
 	},
 	ProviderOpenAI: {
+		LLMModel: "gpt-5.2",
+		BaseURL:  "https://api.openai.com/v1",
+	},
+	ProviderChatGPT: {
 		LLMModel: "gpt-5.2",
 		BaseURL:  "https://api.openai.com/v1",
 	},
@@ -26,7 +28,7 @@ var DefaultModels = map[Provider]ModelConfig{
 	},
 	ProviderGemini: {
 		LLMModel: "gemini-3-flash-preview",
-		BaseURL:  "", // SDK handles endpoint
+		BaseURL:  "",
 	},
 	ProviderBedrock: {
 		LLMModel:  "anthropic.claude-opus-4-6-20260205-v1:0",
@@ -34,14 +36,12 @@ var DefaultModels = map[Provider]ModelConfig{
 	},
 }
 
-// ModelOption represents a selectable model with metadata for TUI/CLI display
 type ModelOption struct {
-	ID          string // Short key like "1", "2", etc.
-	Model       string // The actual model identifier
-	Description string // Human-readable description
+	ID          string
+	Model       string
+	Description string
 }
 
-// GetLLMModels returns available LLM model options for a provider
 func GetLLMModels(provider Provider) []ModelOption {
 	models, ok := llmModels[provider]
 	if !ok {
@@ -50,7 +50,6 @@ func GetLLMModels(provider Provider) []ModelOption {
 	return models
 }
 
-// llmModels contains selectable LLM models per provider
 var llmModels = map[Provider][]ModelOption{
 	ProviderOllama: {
 		{ID: "1", Model: "llama3.2", Description: "Meta Llama 3.2 (default, recommended) "},
@@ -63,6 +62,12 @@ var llmModels = map[Provider][]ModelOption{
 		{ID: "8", Model: "kimi-k2.5", Description: "Kimi K2.5 (multimodal, agentic)"},
 	},
 	ProviderOpenAI: {
+		{ID: "1", Model: "gpt-5.2", Description: "GPT-5.2 (latest flagship)"},
+		{ID: "2", Model: "gpt-5.3-codex", Description: "GPT-5.3 Codex (best for coding)"},
+		{ID: "3", Model: "gpt-4o", Description: "GPT-4o (fast, multimodal)"},
+		{ID: "4", Model: "gpt-4o-mini", Description: "GPT-4o Mini (cheap, fast)"},
+	},
+	ProviderChatGPT: {
 		{ID: "1", Model: "gpt-5.2", Description: "GPT-5.2 (latest flagship)"},
 		{ID: "2", Model: "gpt-5.3-codex", Description: "GPT-5.3 Codex (best for coding)"},
 		{ID: "3", Model: "gpt-4o", Description: "GPT-4o (fast, multimodal)"},
@@ -100,7 +105,6 @@ var llmModels = map[Provider][]ModelOption{
 	},
 }
 
-// GetDefaultModel returns the default LLM model for a provider
 func GetDefaultModel(provider Provider) string {
 	if config, ok := DefaultModels[provider]; ok {
 		return config.LLMModel
@@ -108,7 +112,6 @@ func GetDefaultModel(provider Provider) string {
 	return ""
 }
 
-// GetDefaultBaseURL returns the default base URL for a provider
 func GetDefaultBaseURL(provider Provider) string {
 	if config, ok := DefaultModels[provider]; ok {
 		return config.BaseURL
@@ -116,12 +119,10 @@ func GetDefaultBaseURL(provider Provider) string {
 	return ""
 }
 
-// GetDefaultAWSRegion returns the default AWS region for Bedrock
 func GetDefaultAWSRegion() string {
 	return "us-east-1"
 }
 
-// ProviderHasModelSelection returns whether a provider should show a model picker
 func ProviderHasModelSelection(provider Provider) bool {
 	models := GetLLMModels(provider)
 	return len(models) > 1

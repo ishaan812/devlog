@@ -53,6 +53,10 @@ type Model struct {
 	// Existing profiles
 	existingProfiles []string
 	useExisting      bool
+
+	// ChatGPT OAuth login state
+	chatGPTLoggingIn bool   // OAuth flow is in progress
+	chatGPTLoginErr  string // Error from the OAuth flow
 }
 
 // NewModel creates a new onboarding model
@@ -164,6 +168,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.advanceStep()
 		}
 
+	case chatGPTLoginResultMsg:
+		m.chatGPTLoggingIn = false
+		if msg.err != nil {
+			m.chatGPTLoginErr = fmt.Sprintf("Login failed: %v", msg.err)
+			return m, nil
+		}
+		// Store the API key and refresh token
+		m.config.ChatGPTAccessToken = msg.tokens.BearerToken()
+		m.config.ChatGPTRefreshToken = msg.tokens.RefreshToken
+		// Auto-advance to model selection or next step
+		m.testSuccess = true
+		m.testResult = "Signed in with ChatGPT!"
+		return m.advanceStep()
+
 	case spinner.TickMsg:
 		m.spinner, cmd = m.spinner.Update(msg)
 		return m, cmd
@@ -258,11 +276,30 @@ func (m Model) handleEnter() (tea.Model, tea.Cmd) {
 	case stepProvider:
 		providers := getLLMProviders()
 		m.config.DefaultProvider = strings.ToLower(providers[m.selectedIdx].Name)
+		// For ChatGPT: start OAuth flow directly (no manual key input needed)
+		if constants.Provider(m.config.DefaultProvider) == constants.ProviderChatGPT {
+			m.step = stepProviderConfig
+			m.prepareStep()
+			m.chatGPTLoggingIn = true
+			return m, tea.Batch(m.spinner.Tick, runChatGPTLoginCmd())
+		}
 		m.step = stepProviderConfig
 		m.prepareStep()
 		return m, nil
 
 	case stepProviderConfig:
+		// ChatGPT uses OAuth — Enter retries the flow if it failed
+		if m.config.DefaultProvider == "chatgpt" {
+			if m.chatGPTLoggingIn {
+				return m, nil // still waiting for OAuth
+			}
+			if m.chatGPTLoginErr != "" {
+				m.chatGPTLoggingIn = true
+				m.chatGPTLoginErr = ""
+				return m, tea.Batch(m.spinner.Tick, runChatGPTLoginCmd())
+			}
+			return m, nil
+		}
 		value := strings.TrimSpace(m.textInput.Value())
 		switch m.config.DefaultProvider {
 		case "ollama":
@@ -323,10 +360,10 @@ func (m Model) advanceStep() (tea.Model, tea.Cmd) {
 			m.step = stepModelSelection
 			m.selectedIdx = 0
 		} else {
-		m.step = stepGitHubUsername
-		m.selectedIdx = 0
-	}
-	m.prepareStep()
+			m.step = stepGitHubUsername
+			m.selectedIdx = 0
+		}
+		m.prepareStep()
 	}
 	return m, nil
 }
@@ -335,6 +372,8 @@ func (m *Model) prepareStep() {
 	m.textInput.Reset()
 	m.testResult = ""
 	m.testSuccess = false
+	m.chatGPTLoggingIn = false
+	m.chatGPTLoginErr = ""
 
 	switch m.step {
 	case stepProfileName:
@@ -382,6 +421,12 @@ func (m Model) finishOnboarding() (tea.Model, tea.Cmd) {
 	// Set as active profile
 	m.config.ActiveProfile = m.profileName
 	m.config.OnboardingComplete = true
+
+	// Copy LLM config (provider, model, API keys, user info) into the profile.
+	// During the TUI flow these were written to the global Config fields as
+	// temporary storage; now persist them on the profile so each profile has
+	// its own independent LLM configuration.
+	m.config.CopyLLMConfigToProfile(m.profileName)
 
 	// Save config
 	if err := m.config.Save(); err != nil {
@@ -534,7 +579,7 @@ func (m Model) viewWorklogStyle() string {
 			Description: "Include file paths, code changes, and technical details",
 		},
 	}
-	
+
 	return RenderSelectList(
 		"Step 3: Worklog Style",
 		normalStyle.Render("Choose how detailed your work logs should be."),
@@ -561,7 +606,21 @@ func (m Model) viewProviderConfig() string {
 	setupInfo := constants.GetProviderSetupInfo(constants.Provider(m.config.DefaultProvider))
 
 	var body string
-	if setupInfo.NeedsAPIKey {
+	if setupInfo.WebLogin {
+		// OAuth-based login flow (ChatGPT)
+		if m.chatGPTLoggingIn {
+			body = m.spinner.View() + " " + normalStyle.Render("Waiting for browser login...") + "\n\n"
+			body += dimStyle.Render("A browser window should have opened.") + "\n"
+			body += dimStyle.Render("Sign in with your ChatGPT account to continue.") + "\n\n"
+			body += dimStyle.Render("Note: Requires a Plus, Pro, Team, or Enterprise plan.") + "\n"
+			body += dimStyle.Render("Free and Go plans are not supported. Use OpenAI provider instead.") + "\n"
+		} else if m.chatGPTLoginErr != "" {
+			body = errorStyle.Render("  "+m.chatGPTLoginErr) + "\n\n"
+			body += normalStyle.Render("Press Enter to try again, or Esc to go back.") + "\n"
+		} else {
+			body = successStyle.Render("  Signed in with ChatGPT!") + "\n"
+		}
+	} else if setupInfo.NeedsAPIKey {
 		body = normalStyle.Render(fmt.Sprintf("Enter your %s API key:", providerName))
 		if setupInfo.APIKeyURL != "" {
 			body += "\n" + dimStyle.Render(fmt.Sprintf("Get one at: %s", setupInfo.APIKeyURL))
@@ -579,10 +638,34 @@ func (m Model) viewProviderConfig() string {
 		TestSuccess: m.testSuccess,
 	}
 
+	helpText := "Press Enter to test and continue"
+	if setupInfo.WebLogin {
+		if m.chatGPTLoggingIn {
+			helpText = "Complete login in your browser..."
+		} else if m.chatGPTLoginErr != "" {
+			helpText = "Enter: retry • Esc: back"
+		} else {
+			helpText = "Signed in!"
+		}
+	}
+
+	if setupInfo.WebLogin {
+		// OAuth flow: don't show text input, just the status
+		var s strings.Builder
+		s.WriteString("\n")
+		s.WriteString(titleStyle.Render(fmt.Sprintf("Step 3: Configure %s", providerName)))
+		s.WriteString("\n\n")
+		s.WriteString(body)
+		s.WriteString("\n")
+		s.WriteString(dimStyle.Render(helpText))
+		s.WriteString("\n")
+		return s.String()
+	}
+
 	return RenderTextInput(
 		fmt.Sprintf("Step 3: Configure %s", providerName),
 		body, m.textInput, test,
-		"Press Enter to test and continue",
+		helpText,
 	)
 }
 

@@ -2,8 +2,11 @@ package cli
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
+	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 
@@ -11,6 +14,8 @@ import (
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
+
+	"github.com/ishaan812/devlog/internal/auth"
 
 	"github.com/ishaan812/devlog/internal/config"
 	"github.com/ishaan812/devlog/internal/constants"
@@ -36,7 +41,6 @@ func init() {
 	onboardCmd.Flags().BoolVar(&onboardLegacy, "legacy", false, "Use legacy text-based setup")
 }
 
-// Color helpers for legacy mode
 var (
 	titleColor   = color.New(color.FgHiCyan, color.Bold)
 	successColor = color.New(color.FgHiGreen)
@@ -48,20 +52,17 @@ var (
 )
 
 func runOnboard(cmd *cobra.Command, args []string) error {
-	// Check if we should use the TUI (requires a terminal)
 	if !onboardLegacy && term.IsTerminal(int(os.Stdin.Fd())) {
 		cfg, err := tui.RunOnboard()
 		if err != nil {
-			// If TUI fails or is canceled, fall back to legacy
 			if err.Error() == "onboarding canceled" {
 				fmt.Println("Onboarding canceled.")
 				return nil
 			}
-			// For other errors, try legacy mode
 			fmt.Println("Falling back to text-based setup...")
 			return runOnboardLegacy()
 		}
-		_ = cfg // Config is already saved by TUI
+		_ = cfg
 		return nil
 	}
 
@@ -71,10 +72,8 @@ func runOnboard(cmd *cobra.Command, args []string) error {
 func runOnboardLegacy() error {
 	reader := bufio.NewReader(os.Stdin)
 
-	// Welcome banner
 	printBanner()
 
-	// Load existing config
 	cfg, err := config.Load()
 	if err != nil {
 		cfg = &config.Config{}
@@ -87,7 +86,6 @@ func runOnboardLegacy() error {
 	infoColor.Println("using natural language powered by LLMs.")
 	fmt.Println()
 
-	// Step 1: Create profile
 	printStep(1, "Create a Profile")
 	fmt.Println()
 
@@ -103,16 +101,13 @@ func runOnboardLegacy() error {
 	profileDesc, _ := reader.ReadString('\n')
 	profileDesc = strings.TrimSpace(profileDesc)
 
-	// Create the profile
 	if err := cfg.CreateProfile(profileName, profileDesc); err != nil {
-		// Profile might already exist, that's okay
 		if !strings.Contains(err.Error(), "already exists") {
 			return fmt.Errorf("failed to create profile: %w", err)
 		}
 	}
 	cfg.ActiveProfile = profileName
 
-	// Ask for worklog style preference
 	fmt.Println()
 	promptColor.Print("Worklog style preference: ")
 	fmt.Println()
@@ -123,19 +118,17 @@ func runOnboardLegacy() error {
 	dimColor.Print("[1] ")
 	styleChoice, _ := reader.ReadString('\n')
 	styleChoice = strings.TrimSpace(styleChoice)
-	
+
 	worklogStyle := "non-technical"
 	if styleChoice == "2" {
 		worklogStyle = "technical"
 	}
-	
-	// Set the worklog style for the profile
+
 	if profile := cfg.Profiles[profileName]; profile != nil {
 		profile.WorklogStyle = worklogStyle
 	}
 	successColor.Printf("✓ Worklog style set to: %s\n", worklogStyle)
 
-	// Step 2: Choose provider
 	fmt.Println()
 	printStep(2, "Choose your LLM provider")
 	fmt.Println()
@@ -154,7 +147,6 @@ func runOnboardLegacy() error {
 	choice, _ := reader.ReadString('\n')
 	choice = strings.TrimSpace(choice)
 
-	// Find provider by key
 	var selectedProvider constants.Provider
 	for _, p := range constants.AllProviders {
 		if p.Key == choice && p.SupportsLLM {
@@ -181,6 +173,10 @@ func runOnboardLegacy() error {
 		if err := configureOpenAI(cfg, reader); err != nil {
 			return err
 		}
+	case constants.ProviderChatGPT:
+		if err := configureChatGPT(cfg, reader); err != nil {
+			return err
+		}
 	case constants.ProviderOpenRouter:
 		if err := configureOpenRouter(cfg, reader); err != nil {
 			return err
@@ -191,7 +187,6 @@ func runOnboardLegacy() error {
 		}
 	}
 
-	// Step 3: User info
 	fmt.Println()
 	printStep(3, "Your information (optional)")
 	fmt.Println()
@@ -217,7 +212,6 @@ func runOnboardLegacy() error {
 		cfg.UserName = name
 	}
 
-	// Save config
 	fmt.Println()
 	s := spinner.New(spinner.CharSets[14], 100*time.Millisecond)
 	s.Suffix = " Saving configuration..."
@@ -226,6 +220,9 @@ func runOnboardLegacy() error {
 	time.Sleep(500 * time.Millisecond)
 
 	cfg.OnboardingComplete = true
+
+	cfg.CopyLLMConfigToProfile(profileName)
+
 	if err := cfg.Save(); err != nil {
 		s.Stop()
 		errorColor.Printf("Failed to save config: %v\n", err)
@@ -234,14 +231,12 @@ func runOnboardLegacy() error {
 	s.Stop()
 	successColor.Println("Configuration saved!")
 
-	// Step 4: Quick tutorial
 	fmt.Println()
 	printStep(4, "Quick Tutorial")
 	fmt.Println()
 
 	printTutorial()
 
-	// Done
 	fmt.Println()
 	successColor.Println("Setup complete! You're ready to use DevLog.")
 	fmt.Println()
@@ -294,7 +289,6 @@ func configureOllama(cfg *config.Config, reader *bufio.Reader) {
 		cfg.OllamaBaseURL = defaultURL
 	}
 
-	// Model selection
 	fmt.Println()
 	infoColor.Println("Select a model (or press Enter for default):")
 	fmt.Println()
@@ -350,7 +344,6 @@ func configureAnthropic(cfg *config.Config, reader *bufio.Reader) error {
 
 	cfg.AnthropicAPIKey = key
 
-	// Model selection
 	fmt.Println()
 	infoColor.Println("Select a model (or press Enter for default):")
 	fmt.Println()
@@ -404,7 +397,6 @@ func configureOpenAI(cfg *config.Config, reader *bufio.Reader) error {
 
 	cfg.OpenAIAPIKey = key
 
-	// Model selection
 	fmt.Println()
 	infoColor.Println("Select a model (or press Enter for default):")
 	fmt.Println()
@@ -439,6 +431,84 @@ func configureOpenAI(cfg *config.Config, reader *bufio.Reader) error {
 	return nil
 }
 
+func configureChatGPT(cfg *config.Config, reader *bufio.Reader) error {
+	defaultModel := constants.GetDefaultModel(constants.ProviderChatGPT)
+
+	fmt.Println()
+	infoColor.Println("Sign in with ChatGPT")
+	dimColor.Println("A browser window will open for you to sign in with your ChatGPT account.")
+	dimColor.Println("Requires a Plus, Pro, Team, or Enterprise plan.")
+	dimColor.Println("Free and Go plans are not supported — use the OpenAI provider instead.")
+	fmt.Println()
+
+	s := spinner.New(spinner.CharSets[14], 100*time.Millisecond)
+	s.Suffix = " Waiting for browser login..."
+	s.Start()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	tokens, err := auth.LoginWithChatGPT(ctx)
+	s.Stop()
+
+	if err != nil {
+		errorColor.Printf("Login failed: %v\n", err)
+		return fmt.Errorf("ChatGPT login failed: %w", err)
+	}
+
+	cfg.ChatGPTAccessToken = tokens.BearerToken()
+	cfg.ChatGPTRefreshToken = tokens.RefreshToken
+
+	fmt.Println()
+	successColor.Println("Signed in with ChatGPT!")
+
+	fmt.Println()
+	infoColor.Println("Select a model (or press Enter for default):")
+	fmt.Println()
+
+	models := constants.GetLLMModels(constants.ProviderChatGPT)
+	for _, m := range models {
+		accentColor.Printf("  [%s] ", m.ID)
+		infoColor.Printf("%-25s", m.Model)
+		dimColor.Printf(" - %s\n", m.Description)
+	}
+
+	fmt.Println()
+	promptColor.Print("Select model: ")
+	dimColor.Printf("[1] ")
+	modelChoice, _ := reader.ReadString('\n')
+	modelChoice = strings.TrimSpace(modelChoice)
+
+	selectedModel := defaultModel
+	for _, m := range models {
+		if m.ID == modelChoice {
+			selectedModel = m.Model
+			break
+		}
+	}
+
+	cfg.DefaultModel = selectedModel
+
+	fmt.Println()
+	successColor.Println("ChatGPT configured!")
+	dimColor.Printf("Model: %s\n", selectedModel)
+
+	return nil
+}
+
+func openBrowserURL(url string) error {
+	switch runtime.GOOS {
+	case "darwin":
+		return exec.Command("open", url).Start()
+	case "linux":
+		return exec.Command("xdg-open", url).Start()
+	case "windows":
+		return exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
+	default:
+		return fmt.Errorf("unsupported platform: %s", runtime.GOOS)
+	}
+}
+
 func configureOpenRouter(cfg *config.Config, reader *bufio.Reader) error {
 	setupInfo := constants.GetProviderSetupInfo(constants.ProviderOpenRouter)
 	defaultModel := constants.GetDefaultModel(constants.ProviderOpenRouter)
@@ -458,7 +528,6 @@ func configureOpenRouter(cfg *config.Config, reader *bufio.Reader) error {
 
 	cfg.OpenRouterAPIKey = key
 
-	// Model selection
 	fmt.Println()
 	infoColor.Println("Select a model (or press Enter for auto-routing):")
 	fmt.Println()
@@ -532,7 +601,6 @@ func configureBedrock(cfg *config.Config, reader *bufio.Reader) error {
 	cfg.AWSSecretAccessKey = secretKey
 	cfg.AWSRegion = region
 
-	// Model selection
 	fmt.Println()
 	infoColor.Println("Select a model (or press Enter for default):")
 	fmt.Println()

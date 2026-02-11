@@ -74,11 +74,11 @@ func runConsole(cmd *cobra.Command, args []string) error {
 		}
 
 		consoleCodebases = append(consoleCodebases, tui.ConsoleCodebase{
-			ID:       cb.ID,
-			Name:     cb.Name,
-			Path:     cb.Path,
+			ID:        cb.ID,
+			Name:      cb.Name,
+			Path:      cb.Path,
 			DateCount: len(dates),
-			Dates:    tuiDates,
+			Dates:     tuiDates,
 		})
 	}
 

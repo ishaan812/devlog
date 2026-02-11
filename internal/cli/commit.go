@@ -56,7 +56,6 @@ func runCommitMessage(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to load config: %w\n\nRun 'devlog onboard' to set up your configuration", err)
 	}
 
-	// Get the diff using git CLI
 	diff, err := getGitDiff(commitAll)
 	if err != nil {
 		return fmt.Errorf("failed to get git diff: %w", err)
@@ -71,7 +70,6 @@ func runCommitMessage(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Load project context from codebase summary if available
 	projectContext := "(No project context available)"
 	codebasePath, err := filepath.Abs(".")
 	if err == nil {
@@ -84,7 +82,6 @@ func runCommitMessage(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Create LLM client
 	client, err := createCommitClient(cfg)
 	if err != nil {
 		return fmt.Errorf("failed to create LLM client: %w\n\nRun 'devlog onboard' to configure your LLM provider", err)
@@ -96,7 +93,6 @@ func runCommitMessage(cmd *cobra.Command, args []string) error {
 		dimColor.Println("  Analyzing staged changes...")
 	}
 
-	// Generate commit message
 	prompt := prompts.BuildCommitMessagePrompt(projectContext, diff)
 
 	llmCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
@@ -109,13 +105,11 @@ func runCommitMessage(cmd *cobra.Command, args []string) error {
 
 	result = strings.TrimSpace(result)
 
-	// Display the result
 	fmt.Println()
 	titleColor.Println("  Commit Message")
 	dimColor.Println("  " + strings.Repeat("─", 50))
 	fmt.Println()
 
-	// Split title and body for display
 	lines := strings.SplitN(result, "\n", 2)
 	msgColor.Printf("  %s\n", lines[0])
 	if len(lines) > 1 {
@@ -136,7 +130,6 @@ func runCommitMessage(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// getGitDiff runs git diff and returns the output
 func getGitDiff(all bool) (string, error) {
 	var cmd *exec.Cmd
 	if all {
@@ -147,7 +140,6 @@ func getGitDiff(all bool) (string, error) {
 
 	output, err := cmd.Output()
 	if err != nil {
-		// If --cached returns nothing and all is false, the user may not have staged anything
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			return "", fmt.Errorf("git diff failed: %s", string(exitErr.Stderr))
 		}
@@ -160,35 +152,39 @@ func getGitDiff(all bool) (string, error) {
 func createCommitClient(cfg *config.Config) (llm.Client, error) {
 	selectedProvider := commitProvider
 	if selectedProvider == "" {
-		selectedProvider = cfg.DefaultProvider
+		selectedProvider = cfg.GetEffectiveProvider()
 	}
 	if selectedProvider == "" {
 		return nil, fmt.Errorf("no provider configured; run 'devlog onboard' first")
 	}
 	selectedModel := commitModel
 	if selectedModel == "" {
-		selectedModel = cfg.DefaultModel
+		selectedModel = cfg.GetEffectiveModel()
 	}
 	llmCfg := llm.Config{Provider: llm.Provider(selectedProvider), Model: selectedModel}
 	switch llmCfg.Provider {
 	case llm.ProviderOpenAI:
-		llmCfg.APIKey = cfg.GetAPIKey("openai")
+		llmCfg.APIKey = cfg.GetEffectiveAPIKey("openai")
+	case llm.ProviderChatGPT:
+		llmCfg.APIKey = cfg.GetEffectiveAPIKey("chatgpt")
 	case llm.ProviderAnthropic:
-		llmCfg.APIKey = cfg.GetAPIKey("anthropic")
+		llmCfg.APIKey = cfg.GetEffectiveAPIKey("anthropic")
 	case llm.ProviderOpenRouter:
-		llmCfg.APIKey = cfg.GetAPIKey("openrouter")
+		llmCfg.APIKey = cfg.GetEffectiveAPIKey("openrouter")
 	case llm.ProviderGemini:
-		llmCfg.APIKey = cfg.GetAPIKey("gemini")
+		llmCfg.APIKey = cfg.GetEffectiveAPIKey("gemini")
 	case llm.ProviderBedrock:
-		llmCfg.AWSAccessKeyID = cfg.AWSAccessKeyID
-		llmCfg.AWSSecretAccessKey = cfg.AWSSecretAccessKey
-		llmCfg.AWSRegion = cfg.AWSRegion
+		llmCfg.AWSAccessKeyID = cfg.GetEffectiveAWSAccessKeyID()
+		llmCfg.AWSSecretAccessKey = cfg.GetEffectiveAWSSecretAccessKey()
+		llmCfg.AWSRegion = cfg.GetEffectiveAWSRegion()
 	case llm.ProviderOllama:
-		if cfg.OllamaBaseURL != "" {
-			llmCfg.BaseURL = cfg.OllamaBaseURL
+		if url := cfg.GetEffectiveOllamaBaseURL(); url != "" {
+			llmCfg.BaseURL = url
 		}
-		if selectedModel == "" && cfg.OllamaModel != "" {
-			llmCfg.Model = cfg.OllamaModel
+		if selectedModel == "" {
+			if model := cfg.GetEffectiveOllamaModel(); model != "" {
+				llmCfg.Model = model
+			}
 		}
 	}
 	return llm.NewClient(llmCfg)

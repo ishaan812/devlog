@@ -116,7 +116,7 @@ func runProfileShow(cmd *cobra.Command, args []string) error {
 			infoColor.Printf("  Description: %s\n", profile.Description)
 		}
 		dimColor.Printf("  Created: %s\n", profile.CreatedAt)
-		
+
 		worklogStyle := profile.WorklogStyle
 		if worklogStyle == "" {
 			worklogStyle = "non-technical (default)"

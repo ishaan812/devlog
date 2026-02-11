@@ -7,33 +7,28 @@ import (
 	"github.com/ishaan812/devlog/internal/constants"
 )
 
-// Message represents a chat message.
 type Message struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
 }
 
-// Client defines the interface for LLM operations.
 type Client interface {
 	Complete(ctx context.Context, prompt string) (string, error)
 	ChatComplete(ctx context.Context, messages []Message) (string, error)
 }
 
-// Provider represents an LLM provider type.
-// This is an alias to the constants.Provider type for backwards compatibility
 type Provider = constants.Provider
 
-// Re-export provider constants for backwards compatibility
 const (
 	ProviderOllama     = constants.ProviderOllama
 	ProviderOpenAI     = constants.ProviderOpenAI
+	ProviderChatGPT    = constants.ProviderChatGPT
 	ProviderAnthropic  = constants.ProviderAnthropic
 	ProviderBedrock    = constants.ProviderBedrock
 	ProviderOpenRouter = constants.ProviderOpenRouter
 	ProviderGemini     = constants.ProviderGemini
 )
 
-// Config holds configuration for creating an LLM client.
 type Config struct {
 	Provider           Provider
 	Model              string
@@ -44,25 +39,20 @@ type Config struct {
 	AWSSecretAccessKey string
 }
 
-// Option is a functional option for configuring LLM clients.
 type Option func(*Config)
 
-// WithModel sets the model.
 func WithModel(model string) Option {
 	return func(c *Config) { c.Model = model }
 }
 
-// WithBaseURL sets the base URL.
 func WithBaseURL(url string) Option {
 	return func(c *Config) { c.BaseURL = url }
 }
 
-// WithAPIKey sets the API key.
 func WithAPIKey(key string) Option {
 	return func(c *Config) { c.APIKey = key }
 }
 
-// WithAWSCredentials sets AWS credentials.
 func WithAWSCredentials(accessKeyID, secretAccessKey, region string) Option {
 	return func(c *Config) {
 		c.AWSAccessKeyID = accessKeyID
@@ -74,7 +64,6 @@ func WithAWSCredentials(accessKeyID, secretAccessKey, region string) Option {
 func defaultConfig(provider Provider) *Config {
 	cfg := &Config{Provider: provider}
 
-	// Get defaults from constants package
 	modelConfig, ok := constants.DefaultModels[provider]
 	if ok {
 		cfg.Model = modelConfig.LLMModel
@@ -85,7 +74,6 @@ func defaultConfig(provider Provider) *Config {
 	return cfg
 }
 
-// NewOllamaClientWithOptions creates an Ollama client with options.
 func NewOllamaClientWithOptions(opts ...Option) Client {
 	cfg := defaultConfig(ProviderOllama)
 	for _, opt := range opts {
@@ -94,7 +82,6 @@ func NewOllamaClientWithOptions(opts ...Option) Client {
 	return NewOllamaClient(cfg.BaseURL, cfg.Model)
 }
 
-// NewOpenAIClientWithOptions creates an OpenAI client with options.
 func NewOpenAIClientWithOptions(apiKey string, opts ...Option) (Client, error) {
 	if apiKey == "" {
 		return nil, fmt.Errorf("OpenAI API key is required")
@@ -107,7 +94,18 @@ func NewOpenAIClientWithOptions(apiKey string, opts ...Option) (Client, error) {
 	return NewOpenAIClient(cfg.BaseURL, cfg.APIKey, cfg.Model), nil
 }
 
-// NewAnthropicClientWithOptions creates an Anthropic client with options.
+func NewChatGPTClientWithOptions(apiKey string, opts ...Option) (Client, error) {
+	if apiKey == "" {
+		return nil, fmt.Errorf("ChatGPT access token is required; sign in with 'devlog onboard'")
+	}
+	cfg := defaultConfig(ProviderChatGPT)
+	cfg.APIKey = apiKey
+	for _, opt := range opts {
+		opt(cfg)
+	}
+	return NewOpenAIClient(cfg.BaseURL, cfg.APIKey, cfg.Model), nil
+}
+
 func NewAnthropicClientWithOptions(apiKey string, opts ...Option) (Client, error) {
 	if apiKey == "" {
 		return nil, fmt.Errorf("Anthropic API key is required")
@@ -120,7 +118,6 @@ func NewAnthropicClientWithOptions(apiKey string, opts ...Option) (Client, error
 	return NewAnthropicClient(cfg.APIKey, cfg.Model), nil
 }
 
-// NewBedrockClientWithOptions creates a Bedrock client with options.
 func NewBedrockClientWithOptions(accessKeyID, secretAccessKey string, opts ...Option) (Client, error) {
 	if accessKeyID == "" || secretAccessKey == "" {
 		return nil, fmt.Errorf("AWS credentials are required for Bedrock")
@@ -134,7 +131,6 @@ func NewBedrockClientWithOptions(accessKeyID, secretAccessKey string, opts ...Op
 	return NewBedrockClient(cfg.AWSAccessKeyID, cfg.AWSSecretAccessKey, cfg.AWSRegion, cfg.Model), nil
 }
 
-// NewClient creates an LLM client from config.
 func NewClient(cfg Config) (Client, error) {
 	if cfg.Model == "" {
 		return nil, fmt.Errorf("no model specified for provider %q; run 'devlog onboard' to configure", cfg.Provider)
@@ -149,6 +145,15 @@ func NewClient(cfg Config) (Client, error) {
 	case ProviderOpenAI:
 		if cfg.APIKey == "" {
 			return nil, fmt.Errorf("OpenAI API key is required")
+		}
+		baseURL := cfg.BaseURL
+		if baseURL == "" {
+			baseURL = "https://api.openai.com/v1"
+		}
+		return NewOpenAIClient(baseURL, cfg.APIKey, cfg.Model), nil
+	case ProviderChatGPT:
+		if cfg.APIKey == "" {
+			return nil, fmt.Errorf("ChatGPT access token is required; sign in with 'devlog onboard'")
 		}
 		baseURL := cfg.BaseURL
 		if baseURL == "" {

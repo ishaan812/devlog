@@ -5,77 +5,81 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
-// DefaultConfigFileName is the name of the configuration file.
 const DefaultConfigFileName = "config.json"
 
-// RepoBranchSelection stores the saved branch selection for a repo.
 type RepoBranchSelection struct {
 	MainBranch       string   `json:"main_branch"`
 	SelectedBranches []string `json:"selected_branches"`
 }
 
-// Profile represents a work context with isolated data.
 type Profile struct {
 	Name             string                          `json:"name"`
 	Description      string                          `json:"description,omitempty"`
 	CreatedAt        string                          `json:"created_at"`
-	Timezone         string                          `json:"timezone,omitempty"`  // IANA timezone (e.g. "America/New_York")
-	WorklogStyle     string                          `json:"worklog_style,omitempty"` // "technical" or "non-technical" (default: non-technical)
-	Repos            []string                        `json:"repos"`               // Repo paths in this profile
-	BranchSelections map[string]*RepoBranchSelection `json:"branch_selections"`   // Saved branch selections per repo path
-}
+	Timezone         string                          `json:"timezone,omitempty"`
+	WorklogStyle     string                          `json:"worklog_style,omitempty"`
+	Repos            []string                        `json:"repos"`
+	BranchSelections map[string]*RepoBranchSelection `json:"branch_selections"`
 
-// Config holds all configuration for devlog.
-type Config struct {
-	// Provider configuration
-	DefaultProvider string `json:"default_provider"`
-	DefaultModel    string `json:"default_model"`
+	DefaultProvider string `json:"default_provider,omitempty"`
+	DefaultModel    string `json:"default_model,omitempty"`
 
-	// API Keys
-	AnthropicAPIKey  string `json:"anthropic_api_key,omitempty"`
-	OpenAIAPIKey     string `json:"openai_api_key,omitempty"`
-	OpenRouterAPIKey string `json:"openrouter_api_key,omitempty"`
-	GeminiAPIKey     string `json:"gemini_api_key,omitempty"`
+	AnthropicAPIKey     string `json:"anthropic_api_key,omitempty"`
+	OpenAIAPIKey        string `json:"openai_api_key,omitempty"`
+	ChatGPTAccessToken  string `json:"chatgpt_access_token,omitempty"`
+	ChatGPTRefreshToken string `json:"chatgpt_refresh_token,omitempty"`
+	OpenRouterAPIKey    string `json:"openrouter_api_key,omitempty"`
+	GeminiAPIKey        string `json:"gemini_api_key,omitempty"`
 
-	// Bedrock config
 	AWSRegion          string `json:"aws_region,omitempty"`
 	AWSAccessKeyID     string `json:"aws_access_key_id,omitempty"`
 	AWSSecretAccessKey string `json:"aws_secret_access_key,omitempty"`
 
-	// Ollama config
 	OllamaBaseURL string `json:"ollama_base_url,omitempty"`
 	OllamaModel   string `json:"ollama_model,omitempty"`
 
-	// User info
 	UserName       string `json:"user_name,omitempty"`
 	UserEmail      string `json:"user_email,omitempty"`
 	GitHubUsername string `json:"github_username,omitempty"`
-
-	// Onboarding
-	OnboardingComplete bool `json:"onboarding_complete"`
-
-	// Profiles
-	Profiles      map[string]*Profile `json:"profiles,omitempty"`
-	ActiveProfile string              `json:"active_profile,omitempty"`
-
-	// Internal: path where config was loaded from
-	path string
 }
 
-// Option is a functional option for configuring Config defaults.
+type Config struct {
+	OnboardingComplete bool                `json:"onboarding_complete"`
+	Profiles           map[string]*Profile `json:"profiles,omitempty"`
+	ActiveProfile      string              `json:"active_profile,omitempty"`
+
+	path string
+
+	DefaultProvider     string `json:"-"`
+	DefaultModel        string `json:"-"`
+	AnthropicAPIKey     string `json:"-"`
+	OpenAIAPIKey        string `json:"-"`
+	ChatGPTAccessToken  string `json:"-"`
+	ChatGPTRefreshToken string `json:"-"`
+	OpenRouterAPIKey    string `json:"-"`
+	GeminiAPIKey        string `json:"-"`
+	AWSRegion           string `json:"-"`
+	AWSAccessKeyID      string `json:"-"`
+	AWSSecretAccessKey  string `json:"-"`
+	OllamaBaseURL       string `json:"-"`
+	OllamaModel         string `json:"-"`
+	UserName            string `json:"-"`
+	UserEmail           string `json:"-"`
+	GitHubUsername      string `json:"-"`
+}
+
 type Option func(*Config)
 
-// WithDefaultProvider sets the default provider.
 func WithDefaultProvider(provider string) Option {
 	return func(c *Config) {
 		c.DefaultProvider = provider
 	}
 }
 
-// WithOllamaConfig sets Ollama configuration.
 func WithOllamaConfig(baseURL, model string) Option {
 	return func(c *Config) {
 		c.OllamaBaseURL = baseURL
@@ -83,7 +87,6 @@ func WithOllamaConfig(baseURL, model string) Option {
 	}
 }
 
-// WithAWSConfig sets AWS configuration.
 func WithAWSConfig(region, accessKeyID, secretAccessKey string) Option {
 	return func(c *Config) {
 		c.AWSRegion = region
@@ -92,13 +95,10 @@ func WithAWSConfig(region, accessKeyID, secretAccessKey string) Option {
 	}
 }
 
-// defaultConfig returns a new Config with empty fields.
-// Users must run 'devlog onboard' to populate the configuration.
 func defaultConfig() *Config {
 	return &Config{}
 }
 
-// GetConfigPath returns the default configuration file path.
 func GetConfigPath() string {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -107,7 +107,6 @@ func GetConfigPath() string {
 	return filepath.Join(homeDir, ".devlog", DefaultConfigFileName)
 }
 
-// GetDevlogDir returns the base devlog directory path.
 func GetDevlogDir() string {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -116,22 +115,18 @@ func GetDevlogDir() string {
 	return filepath.Join(homeDir, ".devlog")
 }
 
-// GetProfileDBPath returns the database path for a given profile.
 func GetProfileDBPath(name string) string {
 	return filepath.Join(GetDevlogDir(), "profiles", name, "devlog.db")
 }
 
-// Load loads configuration from the default path.
 func Load(opts ...Option) (*Config, error) {
 	return LoadFrom(GetConfigPath(), opts...)
 }
 
-// LoadFrom loads configuration from a specific path.
 func LoadFrom(path string, opts ...Option) (*Config, error) {
 	cfg := defaultConfig()
 	cfg.path = path
 
-	// Apply options
 	for _, opt := range opts {
 		opt(cfg)
 	}
@@ -148,13 +143,11 @@ func LoadFrom(path string, opts ...Option) (*Config, error) {
 		return nil, fmt.Errorf("parse config file: %w", err)
 	}
 
-	// Preserve the path
 	cfg.path = path
 
 	return cfg, nil
 }
 
-// Save saves the configuration to its original path.
 func (c *Config) Save() error {
 	path := c.path
 	if path == "" {
@@ -163,7 +156,6 @@ func (c *Config) Save() error {
 	return c.SaveTo(path)
 }
 
-// SaveTo saves the configuration to a specific path.
 func (c *Config) SaveTo(path string) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -182,7 +174,6 @@ func (c *Config) SaveTo(path string) error {
 	return nil
 }
 
-// GetAPIKey returns the API key for a provider.
 func (c *Config) GetAPIKey(provider string) string {
 	switch provider {
 	case "anthropic":
@@ -193,6 +184,11 @@ func (c *Config) GetAPIKey(provider string) string {
 	case "openai":
 		if c.OpenAIAPIKey != "" {
 			return c.OpenAIAPIKey
+		}
+		return os.Getenv("OPENAI_API_KEY")
+	case "chatgpt":
+		if c.ChatGPTAccessToken != "" {
+			return c.ChatGPTAccessToken
 		}
 		return os.Getenv("OPENAI_API_KEY")
 	case "openrouter":
@@ -212,7 +208,6 @@ func (c *Config) GetAPIKey(provider string) string {
 	}
 }
 
-// HasProvider checks if a provider is configured.
 func (c *Config) HasProvider(provider string) bool {
 	switch provider {
 	case "ollama":
@@ -221,6 +216,8 @@ func (c *Config) HasProvider(provider string) bool {
 		return c.GetAPIKey("anthropic") != ""
 	case "openai":
 		return c.GetAPIKey("openai") != ""
+	case "chatgpt":
+		return c.GetAPIKey("chatgpt") != ""
 	case "openrouter":
 		return c.GetAPIKey("openrouter") != ""
 	case "gemini":
@@ -232,7 +229,6 @@ func (c *Config) HasProvider(provider string) bool {
 	}
 }
 
-// GetActiveProfile returns the active profile, or nil if none.
 func (c *Config) GetActiveProfile() *Profile {
 	if c.ActiveProfile == "" || c.Profiles == nil {
 		return nil
@@ -240,7 +236,6 @@ func (c *Config) GetActiveProfile() *Profile {
 	return c.Profiles[c.ActiveProfile]
 }
 
-// GetActiveProfileName returns the active profile name, defaulting to "default".
 func (c *Config) GetActiveProfileName() string {
 	if c.ActiveProfile == "" {
 		return "default"
@@ -248,7 +243,6 @@ func (c *Config) GetActiveProfileName() string {
 	return c.ActiveProfile
 }
 
-// CreateProfile creates a new profile.
 func (c *Config) CreateProfile(name, description string) error {
 	if c.Profiles == nil {
 		c.Profiles = make(map[string]*Profile)
@@ -258,7 +252,13 @@ func (c *Config) CreateProfile(name, description string) error {
 		return fmt.Errorf("profile '%s' already exists", name)
 	}
 
-	// Create profile directory
+	nameLower := strings.ToLower(name)
+	for existingName := range c.Profiles {
+		if strings.ToLower(existingName) == nameLower {
+			return fmt.Errorf("profile '%s' conflicts with existing profile '%s' (names are case-insensitive on some filesystems)", name, existingName)
+		}
+	}
+
 	profileDir := filepath.Join(GetDevlogDir(), "profiles", name)
 	if err := os.MkdirAll(profileDir, 0755); err != nil {
 		return fmt.Errorf("create profile directory: %w", err)
@@ -274,7 +274,6 @@ func (c *Config) CreateProfile(name, description string) error {
 	return nil
 }
 
-// DeleteProfile removes a profile and optionally its data.
 func (c *Config) DeleteProfile(name string, deleteData bool) error {
 	if c.Profiles == nil {
 		return fmt.Errorf("profile '%s' not found", name)
@@ -299,7 +298,6 @@ func (c *Config) DeleteProfile(name string, deleteData bool) error {
 	return nil
 }
 
-// SetActiveProfile switches to a different profile.
 func (c *Config) SetActiveProfile(name string) error {
 	if c.Profiles == nil || c.Profiles[name] == nil {
 		return fmt.Errorf("profile '%s' not found", name)
@@ -308,7 +306,6 @@ func (c *Config) SetActiveProfile(name string) error {
 	return nil
 }
 
-// AddRepoToProfile adds a repository path to a profile's repo list.
 func (c *Config) AddRepoToProfile(profileName, repoPath string) error {
 	if c.Profiles == nil {
 		return fmt.Errorf("profile '%s' not found", profileName)
@@ -325,10 +322,9 @@ func (c *Config) AddRepoToProfile(profileName, repoPath string) error {
 		absPath = repoPath
 	}
 
-	// Check if already added
 	for _, r := range profile.Repos {
 		if r == absPath {
-			return nil // Already exists
+			return nil
 		}
 	}
 
@@ -336,7 +332,6 @@ func (c *Config) AddRepoToProfile(profileName, repoPath string) error {
 	return nil
 }
 
-// RemoveRepoFromProfile removes a repository path from a profile's repo list.
 func (c *Config) RemoveRepoFromProfile(profileName, repoPath string) error {
 	if c.Profiles == nil {
 		return fmt.Errorf("profile '%s' not found", profileName)
@@ -353,7 +348,6 @@ func (c *Config) RemoveRepoFromProfile(profileName, repoPath string) error {
 		absPath = repoPath
 	}
 
-	// Find and remove
 	for i, r := range profile.Repos {
 		if r == absPath {
 			profile.Repos = append(profile.Repos[:i], profile.Repos[i+1:]...)
@@ -531,5 +525,231 @@ func (c *Config) SetWorklogStyle(profileName, style string) error {
 	}
 
 	profile.WorklogStyle = style
+	return nil
+}
+
+// ── Per-profile LLM config helpers ─────────────────────────────────────────
+// LLM configuration lives exclusively on Profile. These helpers read from
+// the active profile, with environment-variable fallback for API keys.
+
+// GetEffectiveProvider returns the LLM provider for the active profile.
+func (c *Config) GetEffectiveProvider() string {
+	if p := c.GetActiveProfile(); p != nil {
+		return p.DefaultProvider
+	}
+	return ""
+}
+
+// GetEffectiveModel returns the LLM model for the active profile.
+func (c *Config) GetEffectiveModel() string {
+	if p := c.GetActiveProfile(); p != nil {
+		return p.DefaultModel
+	}
+	return ""
+}
+
+// GetEffectiveAPIKey returns the API key for a provider from the active profile,
+// falling back to environment variables.
+func (c *Config) GetEffectiveAPIKey(provider string) string {
+	if p := c.GetActiveProfile(); p != nil {
+		switch provider {
+		case "anthropic":
+			if p.AnthropicAPIKey != "" {
+				return p.AnthropicAPIKey
+			}
+		case "openai":
+			if p.OpenAIAPIKey != "" {
+				return p.OpenAIAPIKey
+			}
+		case "chatgpt":
+			if p.ChatGPTAccessToken != "" {
+				return p.ChatGPTAccessToken
+			}
+		case "openrouter":
+			if p.OpenRouterAPIKey != "" {
+				return p.OpenRouterAPIKey
+			}
+		case "gemini":
+			if p.GeminiAPIKey != "" {
+				return p.GeminiAPIKey
+			}
+		case "bedrock":
+			if p.AWSAccessKeyID != "" {
+				return p.AWSAccessKeyID
+			}
+		}
+	}
+	// Fall back to environment variables
+	switch provider {
+	case "anthropic":
+		return os.Getenv("ANTHROPIC_API_KEY")
+	case "openai":
+		return os.Getenv("OPENAI_API_KEY")
+	case "chatgpt":
+		return os.Getenv("OPENAI_API_KEY")
+	case "openrouter":
+		return os.Getenv("OPENROUTER_API_KEY")
+	case "gemini":
+		return os.Getenv("GEMINI_API_KEY")
+	default:
+		return ""
+	}
+}
+
+// GetEffectiveChatGPTRefreshToken returns the ChatGPT refresh token for the active profile.
+func (c *Config) GetEffectiveChatGPTRefreshToken() string {
+	if p := c.GetActiveProfile(); p != nil && p.ChatGPTRefreshToken != "" {
+		return p.ChatGPTRefreshToken
+	}
+	return ""
+}
+
+// GetEffectiveOllamaBaseURL returns the Ollama base URL for the active profile.
+func (c *Config) GetEffectiveOllamaBaseURL() string {
+	if p := c.GetActiveProfile(); p != nil {
+		return p.OllamaBaseURL
+	}
+	return ""
+}
+
+// GetEffectiveOllamaModel returns the Ollama model for the active profile.
+func (c *Config) GetEffectiveOllamaModel() string {
+	if p := c.GetActiveProfile(); p != nil {
+		return p.OllamaModel
+	}
+	return ""
+}
+
+// GetEffectiveAWSRegion returns the AWS region for the active profile.
+func (c *Config) GetEffectiveAWSRegion() string {
+	if p := c.GetActiveProfile(); p != nil {
+		return p.AWSRegion
+	}
+	return ""
+}
+
+// GetEffectiveAWSAccessKeyID returns the AWS access key ID for the active profile.
+func (c *Config) GetEffectiveAWSAccessKeyID() string {
+	if p := c.GetActiveProfile(); p != nil {
+		return p.AWSAccessKeyID
+	}
+	return ""
+}
+
+// GetEffectiveAWSSecretAccessKey returns the AWS secret access key for the active profile.
+func (c *Config) GetEffectiveAWSSecretAccessKey() string {
+	if p := c.GetActiveProfile(); p != nil {
+		return p.AWSSecretAccessKey
+	}
+	return ""
+}
+
+// GetEffectiveUserName returns the user name for the active profile.
+func (c *Config) GetEffectiveUserName() string {
+	if p := c.GetActiveProfile(); p != nil {
+		return p.UserName
+	}
+	return ""
+}
+
+// GetEffectiveUserEmail returns the user email for the active profile.
+func (c *Config) GetEffectiveUserEmail() string {
+	if p := c.GetActiveProfile(); p != nil {
+		return p.UserEmail
+	}
+	return ""
+}
+
+// GetEffectiveGitHubUsername returns the GitHub username for the active profile.
+func (c *Config) GetEffectiveGitHubUsername() string {
+	if p := c.GetActiveProfile(); p != nil {
+		return p.GitHubUsername
+	}
+	return ""
+}
+
+// CopyLLMConfigToProfile copies the transient Config fields into the named profile.
+// Used by TUI onboarding/configure flows that write to Config fields as scratch
+// space during the interactive session, then persist to the profile on save.
+func (c *Config) CopyLLMConfigToProfile(profileName string) {
+	if c.Profiles == nil {
+		return
+	}
+	profile, exists := c.Profiles[profileName]
+	if !exists || profile == nil {
+		return
+	}
+	profile.DefaultProvider = c.DefaultProvider
+	profile.DefaultModel = c.DefaultModel
+	profile.AnthropicAPIKey = c.AnthropicAPIKey
+	profile.OpenAIAPIKey = c.OpenAIAPIKey
+	profile.ChatGPTAccessToken = c.ChatGPTAccessToken
+	profile.ChatGPTRefreshToken = c.ChatGPTRefreshToken
+	profile.OpenRouterAPIKey = c.OpenRouterAPIKey
+	profile.GeminiAPIKey = c.GeminiAPIKey
+	profile.AWSRegion = c.AWSRegion
+	profile.AWSAccessKeyID = c.AWSAccessKeyID
+	profile.AWSSecretAccessKey = c.AWSSecretAccessKey
+	profile.OllamaBaseURL = c.OllamaBaseURL
+	profile.OllamaModel = c.OllamaModel
+	profile.UserName = c.UserName
+	profile.UserEmail = c.UserEmail
+	profile.GitHubUsername = c.GitHubUsername
+}
+
+// HydrateGlobalFromActiveProfile copies the active profile's config into the
+// transient Config fields. Used by TUI flows so they can read/write the Config
+// fields as scratch space during interactive configuration.
+func (c *Config) HydrateGlobalFromActiveProfile() {
+	p := c.GetActiveProfile()
+	if p == nil {
+		return
+	}
+	c.DefaultProvider = p.DefaultProvider
+	c.DefaultModel = p.DefaultModel
+	c.AnthropicAPIKey = p.AnthropicAPIKey
+	c.OpenAIAPIKey = p.OpenAIAPIKey
+	c.ChatGPTAccessToken = p.ChatGPTAccessToken
+	c.ChatGPTRefreshToken = p.ChatGPTRefreshToken
+	c.OpenRouterAPIKey = p.OpenRouterAPIKey
+	c.GeminiAPIKey = p.GeminiAPIKey
+	c.AWSRegion = p.AWSRegion
+	c.AWSAccessKeyID = p.AWSAccessKeyID
+	c.AWSSecretAccessKey = p.AWSSecretAccessKey
+	c.OllamaBaseURL = p.OllamaBaseURL
+	c.OllamaModel = p.OllamaModel
+	c.UserName = p.UserName
+	c.UserEmail = p.UserEmail
+	c.GitHubUsername = p.GitHubUsername
+}
+
+// ApplyLLMConfigToAllProfiles copies the named profile's LLM configuration
+// (provider, model, API keys) to every other profile. Used by `devlog models set --global`.
+func (c *Config) ApplyLLMConfigToAllProfiles(sourceProfileName string) error {
+	if c.Profiles == nil {
+		return fmt.Errorf("no profiles exist")
+	}
+	src, exists := c.Profiles[sourceProfileName]
+	if !exists || src == nil {
+		return fmt.Errorf("profile '%s' not found", sourceProfileName)
+	}
+	for name, profile := range c.Profiles {
+		if name == sourceProfileName {
+			continue
+		}
+		profile.DefaultProvider = src.DefaultProvider
+		profile.DefaultModel = src.DefaultModel
+		profile.AnthropicAPIKey = src.AnthropicAPIKey
+		profile.OpenAIAPIKey = src.OpenAIAPIKey
+		profile.ChatGPTAccessToken = src.ChatGPTAccessToken
+		profile.ChatGPTRefreshToken = src.ChatGPTRefreshToken
+		profile.OpenRouterAPIKey = src.OpenRouterAPIKey
+		profile.GeminiAPIKey = src.GeminiAPIKey
+		profile.AWSRegion = src.AWSRegion
+		profile.AWSAccessKeyID = src.AWSAccessKeyID
+		profile.AWSSecretAccessKey = src.AWSSecretAccessKey
+		profile.OllamaBaseURL = src.OllamaBaseURL
+		profile.OllamaModel = src.OllamaModel
+	}
 	return nil
 }
