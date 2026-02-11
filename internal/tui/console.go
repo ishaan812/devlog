@@ -81,12 +81,6 @@ var (
 	consoleStatStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("245"))
 
-	// Help bar
-	consoleHelpStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("241")).
-				Background(lipgloss.Color("236")).
-				Padding(0, 1)
-
 	// Content panel
 	consoleHeaderStyle = lipgloss.NewStyle().
 				Bold(true).
@@ -537,7 +531,7 @@ func runIngestAndWorklogCmd(repo ConsoleCodebase, currentDB *db.SQLRepository, p
 
 		// Run worklog after successful ingest
 		worklogOutput, err := executeWorklog(repoPath)
-		
+
 		// Combine outputs
 		combinedOutput := fmt.Sprintf("=== Ingest ===\n%s\n\n=== Worklog ===\n%s", ingestOutput, worklogOutput)
 
@@ -1027,13 +1021,13 @@ func (m ConsoleModel) renderRightPanel() string {
 
 func (m ConsoleModel) renderOperationSuccess(width, height int) string {
 	var b strings.Builder
-	
+
 	// Success icon and title
 	successTitle := "✓ Operation Complete"
 	successStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("40")).
 		Bold(true)
-	
+
 	b.WriteString("\n")
 	pad := (width - len(successTitle)) / 2
 	if pad < 0 {
@@ -1042,24 +1036,24 @@ func (m ConsoleModel) renderOperationSuccess(width, height int) string {
 	b.WriteString(strings.Repeat(" ", pad))
 	b.WriteString(successStyle.Render(successTitle))
 	b.WriteString("\n\n")
-	
+
 	// Show full output
 	if m.operationOutput != "" {
 		outputLines := wrapOutput(m.operationOutput, width-4)
 		maxLines := height - 8 // Reserve space for title and footer
-		
+
 		startLine := 0
 		if len(outputLines) > maxLines {
 			startLine = len(outputLines) - maxLines
 		}
-		
+
 		for i := startLine; i < len(outputLines) && i-startLine < maxLines; i++ {
 			line := outputLines[i]
 			b.WriteString("  ")
 			b.WriteString(consoleItemStyle.Render(line))
 			b.WriteString("\n")
 		}
-		
+
 		if len(outputLines) > maxLines {
 			b.WriteString("\n")
 			scrollHint := fmt.Sprintf("(showing last %d of %d lines)", maxLines, len(outputLines))
@@ -1071,9 +1065,9 @@ func (m ConsoleModel) renderOperationSuccess(width, height int) string {
 			b.WriteString(consoleDimStyle.Render(scrollHint))
 		}
 	}
-	
+
 	b.WriteString("\n")
-	
+
 	// Hint
 	hint := "Press any key to continue"
 	hintPad := (width - len(hint)) / 2
@@ -1082,19 +1076,19 @@ func (m ConsoleModel) renderOperationSuccess(width, height int) string {
 	}
 	b.WriteString(strings.Repeat(" ", hintPad))
 	b.WriteString(consoleDimStyle.Italic(true).Render(hint))
-	
+
 	return b.String()
 }
 
 func (m ConsoleModel) renderOperationError(width, height int) string {
 	var b strings.Builder
-	
+
 	// Error icon and title
 	errorTitle := "✗ Operation Failed"
 	errorStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("196")).
 		Bold(true)
-	
+
 	b.WriteString("\n")
 	pad := (width - len(errorTitle)) / 2
 	if pad < 0 {
@@ -1103,24 +1097,24 @@ func (m ConsoleModel) renderOperationError(width, height int) string {
 	b.WriteString(strings.Repeat(" ", pad))
 	b.WriteString(errorStyle.Render(errorTitle))
 	b.WriteString("\n\n")
-	
+
 	// Show full output if available, wrap long lines
 	if m.operationOutput != "" {
 		outputLines := wrapOutput(m.operationOutput, width-4)
 		maxLines := height - 8 // Reserve space for title and footer
-		
+
 		startLine := 0
 		if len(outputLines) > maxLines {
 			startLine = len(outputLines) - maxLines
 		}
-		
+
 		for i := startLine; i < len(outputLines) && i-startLine < maxLines; i++ {
 			line := outputLines[i]
 			b.WriteString("  ")
 			b.WriteString(consoleItemStyle.Render(line))
 			b.WriteString("\n")
 		}
-		
+
 		if len(outputLines) > maxLines {
 			b.WriteString("\n")
 			scrollHint := fmt.Sprintf("(showing last %d of %d lines)", maxLines, len(outputLines))
@@ -1141,9 +1135,9 @@ func (m ConsoleModel) renderOperationError(width, height int) string {
 			b.WriteString("\n")
 		}
 	}
-	
+
 	b.WriteString("\n")
-	
+
 	// Hint
 	hint := "Press any key to continue"
 	hintPad := (width - len(hint)) / 2
@@ -1152,7 +1146,7 @@ func (m ConsoleModel) renderOperationError(width, height int) string {
 	}
 	b.WriteString(strings.Repeat(" ", hintPad))
 	b.WriteString(consoleDimStyle.Italic(true).Render(hint))
-	
+
 	return b.String()
 }
 
@@ -1161,16 +1155,16 @@ func wrapOutput(text string, maxWidth int) []string {
 	if maxWidth < 10 {
 		maxWidth = 10
 	}
-	
+
 	lines := strings.Split(text, "\n")
 	var wrapped []string
-	
+
 	for _, line := range lines {
 		if len(line) <= maxWidth {
 			wrapped = append(wrapped, line)
 			continue
 		}
-		
+
 		// Wrap long lines
 		for len(line) > maxWidth {
 			// Try to break at a space
@@ -1181,16 +1175,16 @@ func wrapOutput(text string, maxWidth int) []string {
 					break
 				}
 			}
-			
+
 			wrapped = append(wrapped, strings.TrimRight(line[:breakPoint], " "))
 			line = strings.TrimLeft(line[breakPoint:], " ")
 		}
-		
+
 		if len(line) > 0 {
 			wrapped = append(wrapped, line)
 		}
 	}
-	
+
 	return wrapped
 }
 
@@ -1334,7 +1328,7 @@ func (m ConsoleModel) renderLogo(width, height int) string {
 	keyStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("86")).
 		Bold(true)
-	
+
 	descStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("245"))
 
@@ -1465,7 +1459,7 @@ func executeIngest(repoPath, profileName string) (string, error) {
 	// Capture output
 	output, err := cmd.CombinedOutput()
 	outputStr := string(output)
-	
+
 	if err != nil {
 		return outputStr, fmt.Errorf("ingest failed: %w", err)
 	}
@@ -1488,7 +1482,7 @@ func executeWorklog(repoPath string) (string, error) {
 	// Capture output
 	output, err := cmd.CombinedOutput()
 	outputStr := string(output)
-	
+
 	if err != nil {
 		return outputStr, fmt.Errorf("worklog failed: %w", err)
 	}

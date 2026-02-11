@@ -252,9 +252,8 @@ func (c *Config) CreateProfile(name, description string) error {
 		return fmt.Errorf("profile '%s' already exists", name)
 	}
 
-	nameLower := strings.ToLower(name)
 	for existingName := range c.Profiles {
-		if strings.ToLower(existingName) == nameLower {
+		if strings.EqualFold(existingName, name) {
 			return fmt.Errorf("profile '%s' conflicts with existing profile '%s' (names are case-insensitive on some filesystems)", name, existingName)
 		}
 	}

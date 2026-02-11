@@ -99,8 +99,8 @@ func openBrowser(url string) error {
 
 func buildAuthorizeURL(redirectURI, challenge, state string) string {
 	params := url.Values{
-		"response_type":               {"code"},
-		"client_id":                   {ClientID},
+		"response_type":              {"code"},
+		"client_id":                  {ClientID},
 		"redirect_uri":               {redirectURI},
 		"scope":                      {oauthScope},
 		"code_challenge":             {challenge},
@@ -262,7 +262,7 @@ p{color:#8b949e}
 // ── Main login flow ────────────────────────────────────────────────────────
 
 // LoginWithChatGPT runs the full OAuth PKCE flow synchronously.
-// It blocks until the user completes login in the browser (or ctx is cancelled).
+// It blocks until the user completes login in the browser (or ctx is canceled).
 // Returns the auth tokens on success.
 func LoginWithChatGPT(ctx context.Context) (*ChatGPTTokens, error) {
 	verifier, challenge, err := generatePKCE()
@@ -357,7 +357,10 @@ func LoginWithChatGPT(ctx context.Context) (*ChatGPTTokens, error) {
 		fmt.Fprint(w, successHTML)
 	})
 
-	server := &http.Server{Handler: mux}
+	server := &http.Server{
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
 
 	// Serve in background
 	go func() {

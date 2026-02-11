@@ -184,7 +184,7 @@ func binaryAssetName() string {
 }
 
 func downloadFile(url, dest string) error {
-	resp, err := http.Get(url)
+	resp, err := http.Get(url) // #nosec G107 - URL is from trusted GitHub API
 	if err != nil {
 		return fmt.Errorf("download request: %w", err)
 	}

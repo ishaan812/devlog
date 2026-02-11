@@ -127,22 +127,22 @@ func (m *Manager) GetRepositoryForProfile(profile string) (*SQLRepository, error
 // This allows multiple readers without conflicting with writers.
 func (m *Manager) GetReadOnlyDBForProfile(profile string) (*sql.DB, error) {
 	dbPath := config.GetProfileDBPath(profile)
-	
+
 	// Check if database exists
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
 		return nil, fmt.Errorf("database does not exist: %s", dbPath)
 	}
-	
+
 	connStr := fmt.Sprintf("%s?access_mode=read_only", dbPath)
 	db, err := sql.Open("duckdb", connStr)
 	if err != nil {
 		return nil, fmt.Errorf("open read-only database: %w", err)
 	}
-	
+
 	// Allow multiple read-only connections
 	db.SetMaxOpenConns(10)
 	db.SetMaxIdleConns(2)
-	
+
 	return db, nil
 }
 

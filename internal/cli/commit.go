@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -121,7 +122,8 @@ func getGitDiff(stagedOnly bool) (string, error) {
 
 	output, err := cmd.Output()
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
 			return "", fmt.Errorf("git diff failed: %s", string(exitErr.Stderr))
 		}
 		return "", err
@@ -215,9 +217,8 @@ func (m commitTUIModel) Init() tea.Cmd {
 }
 
 func (m commitTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		switch msg.String() {
+	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+		switch keyMsg.String() {
 		case "ctrl+c", "q":
 			m.quitting = true
 			return m, tea.Quit
@@ -284,7 +285,7 @@ func (m commitTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m commitTUIModel) View() string {
 	if m.quitting && m.err == nil && m.status == "" {
-		return commitDimStyle.Render("Cancelled.\n")
+		return commitDimStyle.Render("Canceled.\n")
 	}
 
 	if m.step == 3 {

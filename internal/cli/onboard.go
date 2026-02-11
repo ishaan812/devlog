@@ -5,8 +5,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
-	"runtime"
 	"strings"
 	"time"
 
@@ -16,7 +14,6 @@ import (
 	"golang.org/x/term"
 
 	"github.com/ishaan812/devlog/internal/auth"
-
 	"github.com/ishaan812/devlog/internal/config"
 	"github.com/ishaan812/devlog/internal/constants"
 	"github.com/ishaan812/devlog/internal/tui"
@@ -494,19 +491,6 @@ func configureChatGPT(cfg *config.Config, reader *bufio.Reader) error {
 	dimColor.Printf("Model: %s\n", selectedModel)
 
 	return nil
-}
-
-func openBrowserURL(url string) error {
-	switch runtime.GOOS {
-	case "darwin":
-		return exec.Command("open", url).Start()
-	case "linux":
-		return exec.Command("xdg-open", url).Start()
-	case "windows":
-		return exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
-	default:
-		return fmt.Errorf("unsupported platform: %s", runtime.GOOS)
-	}
 }
 
 func configureOpenRouter(cfg *config.Config, reader *bufio.Reader) error {
