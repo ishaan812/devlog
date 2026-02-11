@@ -123,6 +123,38 @@ func (m *Manager) GetRepositoryForProfile(profile string) (*SQLRepository, error
 	return repo, nil
 }
 
+// GetReadOnlyDBForProfile returns a read-only database connection for a specific profile.
+// This allows multiple readers without conflicting with writers.
+func (m *Manager) GetReadOnlyDBForProfile(profile string) (*sql.DB, error) {
+	dbPath := config.GetProfileDBPath(profile)
+	
+	// Check if database exists
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		return nil, fmt.Errorf("database does not exist: %s", dbPath)
+	}
+	
+	connStr := fmt.Sprintf("%s?access_mode=read_only", dbPath)
+	db, err := sql.Open("duckdb", connStr)
+	if err != nil {
+		return nil, fmt.Errorf("open read-only database: %w", err)
+	}
+	
+	// Allow multiple read-only connections
+	db.SetMaxOpenConns(10)
+	db.SetMaxIdleConns(2)
+	
+	return db, nil
+}
+
+// GetReadOnlyRepositoryForProfile returns a read-only repository for a specific profile.
+func (m *Manager) GetReadOnlyRepositoryForProfile(profile string) (*SQLRepository, error) {
+	db, err := m.GetReadOnlyDBForProfile(profile)
+	if err != nil {
+		return nil, err
+	}
+	return NewRepository(db), nil
+}
+
 // CloseDB closes the database for a profile.
 func (m *Manager) CloseDB(profile string) {
 	m.mu.Lock()
@@ -208,3 +240,8 @@ func CloseDB(profile string) { globalManager.CloseDB(profile) }
 
 // CloseAllDBs closes all databases on the global manager.
 func CloseAllDBs() { globalManager.CloseAllDBs() }
+
+// GetReadOnlyRepositoryForProfile returns a read-only repository for a profile from the global manager.
+func GetReadOnlyRepositoryForProfile(profile string) (*SQLRepository, error) {
+	return globalManager.GetReadOnlyRepositoryForProfile(profile)
+}

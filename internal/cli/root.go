@@ -26,8 +26,8 @@ Use 'devlog ingest' to scan a repository and 'devlog worklog' to view your activ
 Profiles allow you to maintain separate databases for different work contexts.
 Use 'devlog profile' to manage profiles.`,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-		// Skip profile setup for onboard command (it handles its own setup)
-		if cmd.Name() == "onboard" {
+		// Skip profile setup for commands that don't need it
+		if cmd.Name() == "onboard" || cmd.Name() == "update" {
 			return nil
 		}
 

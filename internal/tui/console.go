@@ -3,6 +3,8 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -18,11 +20,13 @@ import (
 
 // ConsoleCodebase holds codebase info for the console TUI.
 type ConsoleCodebase struct {
-	ID        string
-	Name      string
-	Path      string
-	DateCount int
-	Dates     []ConsoleDate
+	ID          string
+	Name        string
+	Path        string
+	DateCount   int
+	Dates       []ConsoleDate
+	CommitCount int  // Total commits ingested
+	IsIngested  bool // Whether ingest has been run
 }
 
 // ConsoleDate holds date info for the console TUI.
@@ -139,6 +143,15 @@ const (
 
 // ── Model ──────────────────────────────────────────────────────────────────
 
+// ── Operation messages ─────────────────────────────────────────────────────
+
+type operationCompleteMsg struct {
+	opType string
+	repoID string
+	err    error
+	output string
+}
+
 // ConsoleModel is the Bubbletea model for the full-screen console TUI.
 type ConsoleModel struct {
 	// Layout
@@ -167,6 +180,13 @@ type ConsoleModel struct {
 	selectedRepo  int
 	selectedDate  int
 	contentHeader string
+
+	// Operation state
+	operationRunning bool
+	operationType    string // "ingest" or "worklog"
+	operationRepo    string // repo ID
+	operationError   string
+	operationOutput  string // Full output from operation
 
 	// State
 	quitting bool
@@ -202,6 +222,39 @@ func (m ConsoleModel) Init() tea.Cmd {
 
 func (m ConsoleModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tickMsg:
+		if m.operationRunning {
+			return m, tea.Tick(time.Millisecond*100, func(t time.Time) tea.Msg {
+				return tickMsg(t)
+			})
+		}
+		return m, nil
+
+	case operationCompleteMsg:
+		m.operationRunning = false
+		m.operationOutput = msg.output
+		if msg.err != nil {
+			m.operationError = msg.err.Error()
+		} else {
+			m.operationError = ""
+		}
+		// Always reconnect and reload data (db was closed before operation)
+		return m, reloadConsoleDataCmd(m.profileName)
+
+	case reloadDataMsg:
+		m.codebases = msg.codebases
+		if msg.dbRepo != nil {
+			m.dbRepo = msg.dbRepo
+		}
+		// Adjust cursor if needed
+		if m.repoCursor >= len(m.codebases) {
+			m.repoCursor = len(m.codebases) - 1
+		}
+		if m.repoCursor < 0 {
+			m.repoCursor = 0
+		}
+		return m, nil
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -209,10 +262,56 @@ func (m ConsoleModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		// Clear error and output on any keypress
+		if m.operationError != "" || m.operationOutput != "" {
+			m.operationError = ""
+			m.operationOutput = ""
+			return m, nil
+		}
+
 		switch msg.String() {
 		case "q", "ctrl+c":
 			m.quitting = true
+			// Close database connection on exit
+			closeReadOnlyConnection(m.dbRepo)
 			return m, tea.Quit
+
+		// ── Operations on selected repo ────────────────────────────
+		case "I": // Shift+I - Run ingest on selected repo
+			if m.activePane == paneRepos && m.repoCursor >= 0 && m.repoCursor < len(m.codebases) && !m.operationRunning {
+				repo := m.codebases[m.repoCursor]
+				m.operationRunning = true
+				m.operationType = "ingest"
+				m.operationRepo = repo.ID
+				m.operationError = ""
+				m.operationOutput = ""
+				// Capture current dbRepo and nil it out (persists via returned m)
+				oldDB := m.dbRepo
+				m.dbRepo = nil
+				return m, tea.Batch(
+					tea.Tick(time.Millisecond*100, func(t time.Time) tea.Msg { return tickMsg(t) }),
+					runIngestCmd(repo, oldDB, m.profileName),
+				)
+			}
+			return m, nil
+
+		case "W": // Shift+W - Generate worklog on selected repo
+			if m.activePane == paneRepos && m.repoCursor >= 0 && m.repoCursor < len(m.codebases) && !m.operationRunning {
+				repo := m.codebases[m.repoCursor]
+				m.operationRunning = true
+				m.operationType = "worklog"
+				m.operationRepo = repo.ID
+				m.operationError = ""
+				m.operationOutput = ""
+				// Capture current dbRepo and nil it out (persists via returned m)
+				oldDB := m.dbRepo
+				m.dbRepo = nil
+				return m, tea.Batch(
+					tea.Tick(time.Millisecond*100, func(t time.Time) tea.Msg { return tickMsg(t) }),
+					runWorklogCmd(repo, oldDB, m.profileName),
+				)
+			}
+			return m, nil
 
 		// ── Panel switching ────────────────────────────────────────
 
@@ -355,6 +454,113 @@ func (m ConsoleModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// ── Operation runners ──────────────────────────────────────────────────────
+
+// runIngestCmd creates a command that closes the db, runs ingest, and returns the result.
+// Uses standalone function (not pointer receiver) to avoid Bubbletea value-receiver issues.
+func runIngestCmd(repo ConsoleCodebase, currentDB *db.SQLRepository, profileName string) tea.Cmd {
+	repoPath := repo.Path
+	repoID := repo.ID
+
+	return func() tea.Msg {
+		// Close read-only connection so subprocess can get write lock
+		closeReadOnlyConnection(currentDB)
+
+		output, err := executeIngest(repoPath, profileName)
+
+		return operationCompleteMsg{
+			opType: "ingest",
+			repoID: repoID,
+			err:    err,
+			output: output,
+		}
+	}
+}
+
+// runWorklogCmd creates a command that closes the db, runs worklog, and returns the result.
+func runWorklogCmd(repo ConsoleCodebase, currentDB *db.SQLRepository, profileName string) tea.Cmd {
+	repoPath := repo.Path
+	repoID := repo.ID
+
+	return func() tea.Msg {
+		// Close read-only connection so subprocess can get write lock
+		closeReadOnlyConnection(currentDB)
+
+		output, err := executeWorklog(repoPath)
+
+		return operationCompleteMsg{
+			opType: "worklog",
+			repoID: repoID,
+			err:    err,
+			output: output,
+		}
+	}
+}
+
+// reloadConsoleDataCmd creates a fresh read-only connection and reloads all data.
+// The new dbRepo is returned inside the message so Update() can set it on the model.
+func reloadConsoleDataCmd(profileName string) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+
+		// Get a fresh read-only connection to see updated data
+		newRepo, err := db.GetReadOnlyRepositoryForProfile(profileName)
+		if err != nil {
+			return reloadDataMsg{} // empty; will be handled gracefully
+		}
+
+		// Reload codebases
+		codebases, err := newRepo.GetAllCodebases(ctx)
+		if err != nil {
+			return reloadDataMsg{dbRepo: newRepo}
+		}
+
+		// Rebuild console data
+		var newCodebases []ConsoleCodebase
+		for _, cb := range codebases {
+			dates, err := newRepo.ListWorklogDates(ctx, cb.ID, profileName)
+			if err != nil {
+				continue
+			}
+
+			tuiDates := make([]ConsoleDate, len(dates))
+			for i, d := range dates {
+				tuiDates[i] = ConsoleDate{
+					EntryDate:   d.EntryDate,
+					EntryCount:  d.EntryCount,
+					CommitCount: d.CommitCount,
+					Additions:   d.Additions,
+					Deletions:   d.Deletions,
+				}
+			}
+
+			// Check if repository has been ingested
+			commitCount, err := newRepo.GetCommitCount(ctx, cb.ID)
+			if err != nil {
+				commitCount = 0
+			}
+
+			newCodebases = append(newCodebases, ConsoleCodebase{
+				ID:          cb.ID,
+				Name:        cb.Name,
+				Path:        cb.Path,
+				DateCount:   len(dates),
+				Dates:       tuiDates,
+				CommitCount: int(commitCount),
+				IsIngested:  commitCount > 0,
+			})
+		}
+
+		// Return message with both new data AND the new db connection
+		return reloadDataMsg{codebases: newCodebases, dbRepo: newRepo}
+	}
+}
+
+type reloadDataMsg struct {
+	codebases []ConsoleCodebase
+	dbRepo    *db.SQLRepository
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 func (m *ConsoleModel) currentDates() []ConsoleDate {
@@ -432,6 +638,9 @@ func (m *ConsoleModel) maxVisibleDates() int {
 
 func (m *ConsoleModel) loadContent() {
 	if m.selectedRepo < 0 || m.selectedRepo >= len(m.codebases) {
+		return
+	}
+	if m.dbRepo == nil {
 		return
 	}
 	dates := m.currentDates()
@@ -601,8 +810,21 @@ func (m ConsoleModel) renderReposSection(width int) string {
 		}
 
 		name := cb.Name
-		if len(name) > width-10 {
-			name = name[:width-13] + "..."
+		maxNameLen := width - 18 // Reserve space for badges
+		if len(name) > maxNameLen {
+			name = name[:maxNameLen-3] + "..."
+		}
+
+		// Status indicator
+		statusIndicator := ""
+		if cb.IsIngested {
+			statusIndicator = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("40")).
+				Render("✓")
+		} else {
+			statusIndicator = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("241")).
+				Render("○")
 		}
 
 		badge := ""
@@ -612,11 +834,11 @@ func (m ConsoleModel) renderReposSection(width int) string {
 
 		var line string
 		if isCursor {
-			line = consoleCursorStyle.Render(cursor + name)
+			line = consoleCursorStyle.Render(cursor + statusIndicator + " " + name)
 		} else if isSelected {
-			line = consoleItemStyle.Bold(true).Render(cursor + name)
+			line = consoleItemStyle.Bold(true).Render(cursor + statusIndicator + " " + name)
 		} else {
-			line = consoleItemStyle.Render(cursor + name)
+			line = consoleItemStyle.Render(cursor + statusIndicator + " " + name)
 		}
 
 		b.WriteString(line + badge)
@@ -713,7 +935,15 @@ func (m ConsoleModel) renderRightPanel() string {
 	panelHeight := m.height - 3
 
 	var content string
-	if !m.contentReady {
+
+	// Show operation status if running
+	if m.operationRunning {
+		content = m.renderOperationStatus(rightW, panelHeight)
+	} else if m.operationError != "" {
+		content = m.renderOperationError(rightW, panelHeight)
+	} else if m.operationOutput != "" {
+		content = m.renderOperationSuccess(rightW, panelHeight)
+	} else if !m.contentReady {
 		content = m.renderLogo(rightW, panelHeight)
 	} else {
 		header := consoleHeaderStyle.Render(m.contentHeader)
@@ -742,6 +972,239 @@ func (m ConsoleModel) renderRightPanel() string {
 		Render(content)
 }
 
+func (m ConsoleModel) renderOperationSuccess(width, height int) string {
+	var b strings.Builder
+	
+	// Success icon and title
+	successTitle := "✓ Operation Complete"
+	successStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("40")).
+		Bold(true)
+	
+	b.WriteString("\n")
+	pad := (width - len(successTitle)) / 2
+	if pad < 0 {
+		pad = 2
+	}
+	b.WriteString(strings.Repeat(" ", pad))
+	b.WriteString(successStyle.Render(successTitle))
+	b.WriteString("\n\n")
+	
+	// Show full output
+	if m.operationOutput != "" {
+		outputLines := wrapOutput(m.operationOutput, width-4)
+		maxLines := height - 8 // Reserve space for title and footer
+		
+		startLine := 0
+		if len(outputLines) > maxLines {
+			startLine = len(outputLines) - maxLines
+		}
+		
+		for i := startLine; i < len(outputLines) && i-startLine < maxLines; i++ {
+			line := outputLines[i]
+			b.WriteString("  ")
+			b.WriteString(consoleItemStyle.Render(line))
+			b.WriteString("\n")
+		}
+		
+		if len(outputLines) > maxLines {
+			b.WriteString("\n")
+			scrollHint := fmt.Sprintf("(showing last %d of %d lines)", maxLines, len(outputLines))
+			scrollPad := (width - len(scrollHint)) / 2
+			if scrollPad < 0 {
+				scrollPad = 2
+			}
+			b.WriteString(strings.Repeat(" ", scrollPad))
+			b.WriteString(consoleDimStyle.Render(scrollHint))
+		}
+	}
+	
+	b.WriteString("\n")
+	
+	// Hint
+	hint := "Press any key to continue"
+	hintPad := (width - len(hint)) / 2
+	if hintPad < 0 {
+		hintPad = 2
+	}
+	b.WriteString(strings.Repeat(" ", hintPad))
+	b.WriteString(consoleDimStyle.Italic(true).Render(hint))
+	
+	return b.String()
+}
+
+func (m ConsoleModel) renderOperationError(width, height int) string {
+	var b strings.Builder
+	
+	// Error icon and title
+	errorTitle := "✗ Operation Failed"
+	errorStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("196")).
+		Bold(true)
+	
+	b.WriteString("\n")
+	pad := (width - len(errorTitle)) / 2
+	if pad < 0 {
+		pad = 2
+	}
+	b.WriteString(strings.Repeat(" ", pad))
+	b.WriteString(errorStyle.Render(errorTitle))
+	b.WriteString("\n\n")
+	
+	// Show full output if available, wrap long lines
+	if m.operationOutput != "" {
+		outputLines := wrapOutput(m.operationOutput, width-4)
+		maxLines := height - 8 // Reserve space for title and footer
+		
+		startLine := 0
+		if len(outputLines) > maxLines {
+			startLine = len(outputLines) - maxLines
+		}
+		
+		for i := startLine; i < len(outputLines) && i-startLine < maxLines; i++ {
+			line := outputLines[i]
+			b.WriteString("  ")
+			b.WriteString(consoleItemStyle.Render(line))
+			b.WriteString("\n")
+		}
+		
+		if len(outputLines) > maxLines {
+			b.WriteString("\n")
+			scrollHint := fmt.Sprintf("(showing last %d of %d lines)", maxLines, len(outputLines))
+			scrollPad := (width - len(scrollHint)) / 2
+			if scrollPad < 0 {
+				scrollPad = 2
+			}
+			b.WriteString(strings.Repeat(" ", scrollPad))
+			b.WriteString(consoleDimStyle.Render(scrollHint))
+		}
+	} else {
+		// Just show error message
+		errLines := wrapOutput(m.operationError, width-4)
+		for _, line := range errLines {
+			errPad := 2
+			b.WriteString(strings.Repeat(" ", errPad))
+			b.WriteString(consoleDimStyle.Render(line))
+			b.WriteString("\n")
+		}
+	}
+	
+	b.WriteString("\n")
+	
+	// Hint
+	hint := "Press any key to continue"
+	hintPad := (width - len(hint)) / 2
+	if hintPad < 0 {
+		hintPad = 2
+	}
+	b.WriteString(strings.Repeat(" ", hintPad))
+	b.WriteString(consoleDimStyle.Italic(true).Render(hint))
+	
+	return b.String()
+}
+
+// wrapOutput wraps text to fit within the specified width
+func wrapOutput(text string, maxWidth int) []string {
+	if maxWidth < 10 {
+		maxWidth = 10
+	}
+	
+	lines := strings.Split(text, "\n")
+	var wrapped []string
+	
+	for _, line := range lines {
+		if len(line) <= maxWidth {
+			wrapped = append(wrapped, line)
+			continue
+		}
+		
+		// Wrap long lines
+		for len(line) > maxWidth {
+			// Try to break at a space
+			breakPoint := maxWidth
+			for i := maxWidth - 1; i > maxWidth/2; i-- {
+				if line[i] == ' ' || line[i] == ',' || line[i] == ':' {
+					breakPoint = i + 1
+					break
+				}
+			}
+			
+			wrapped = append(wrapped, strings.TrimRight(line[:breakPoint], " "))
+			line = strings.TrimLeft(line[breakPoint:], " ")
+		}
+		
+		if len(line) > 0 {
+			wrapped = append(wrapped, line)
+		}
+	}
+	
+	return wrapped
+}
+
+func (m ConsoleModel) renderOperationStatus(width, height int) string {
+	var b strings.Builder
+
+	// Center vertically
+	topPad := (height - 10) / 2
+	if topPad < 2 {
+		topPad = 2
+	}
+
+	for i := 0; i < topPad; i++ {
+		b.WriteString("\n")
+	}
+
+	// Operation type
+	opTitle := "Running " + strings.Title(m.operationType)
+	pad := (width - len(opTitle)) / 2
+	if pad < 0 {
+		pad = 0
+	}
+	b.WriteString(strings.Repeat(" ", pad))
+	b.WriteString(logoMainStyle.Render(opTitle))
+	b.WriteString("\n\n")
+
+	// Spinner/progress indicator
+	spinner := "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+	spinChar := string(spinner[int(time.Now().Unix())%len(spinner)])
+	spinnerLine := fmt.Sprintf("%s  Processing...", spinChar)
+	spinPad := (width - len(spinnerLine)) / 2
+	if spinPad < 0 {
+		spinPad = 0
+	}
+	b.WriteString(strings.Repeat(" ", spinPad))
+	b.WriteString(logoSubStyle.Render(spinnerLine))
+	b.WriteString("\n\n")
+
+	// Repo info
+	if m.operationRepo != "" {
+		for _, cb := range m.codebases {
+			if cb.ID == m.operationRepo {
+				repoLine := fmt.Sprintf("Repository: %s", cb.Name)
+				repoPad := (width - len(repoLine)) / 2
+				if repoPad < 0 {
+					repoPad = 0
+				}
+				b.WriteString(strings.Repeat(" ", repoPad))
+				b.WriteString(consoleDimStyle.Render(repoLine))
+				b.WriteString("\n")
+				break
+			}
+		}
+	}
+
+	b.WriteString("\n\n")
+	hint := "Please wait, this may take a few moments..."
+	hintPad := (width - len(hint)) / 2
+	if hintPad < 0 {
+		hintPad = 0
+	}
+	b.WriteString(strings.Repeat(" ", hintPad))
+	b.WriteString(consoleDimStyle.Italic(true).Render(hint))
+
+	return b.String()
+}
+
 func (m ConsoleModel) renderLogo(width, height int) string {
 	logo := []string{
 		"    ____            __              ",
@@ -755,7 +1218,7 @@ func (m ConsoleModel) renderLogo(width, height int) string {
 	var b strings.Builder
 
 	// Center the logo vertically
-	logoHeight := len(logo) + 6 // logo lines + spacing + subtitle + hints
+	logoHeight := len(logo) + 14 // logo lines + spacing + subtitle + hints + shortcuts
 	topPad := (height - logoHeight) / 2
 	if topPad < 2 {
 		topPad = 2
@@ -796,7 +1259,46 @@ func (m ConsoleModel) renderLogo(width, height int) string {
 	}
 	b.WriteString(strings.Repeat(" ", authorPad))
 	b.WriteString(logoDimStyle.Render(author))
+	b.WriteString("\n\n\n")
+
+	// Quick Actions section
+	actionsTitle := "Quick Actions"
+	actionsPad := (width - len(actionsTitle)) / 2
+	if actionsPad < 0 {
+		actionsPad = 2
+	}
+	b.WriteString(strings.Repeat(" ", actionsPad))
+	b.WriteString(logoSubStyle.Bold(true).Render(actionsTitle))
 	b.WriteString("\n\n")
+
+	// Keyboard shortcuts - styled nicely
+	keyStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("86")).
+		Bold(true)
+	
+	descStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("245"))
+
+	shortcuts := []struct {
+		key  string
+		desc string
+	}{
+		{"Shift+I", "Run ingest on selected repo"},
+		{"Shift+W", "Generate worklog for selected repo"},
+	}
+
+	for _, sc := range shortcuts {
+		line := fmt.Sprintf("%s  %s", keyStyle.Render(sc.key), descStyle.Render(sc.desc))
+		linePad := (width - lipgloss.Width(line)) / 2
+		if linePad < 0 {
+			linePad = 2
+		}
+		b.WriteString(strings.Repeat(" ", linePad))
+		b.WriteString(line)
+		b.WriteString("\n")
+	}
+
+	b.WriteString("\n")
 
 	// Hint
 	hint := "Select a repo and date to view worklogs"
@@ -821,13 +1323,21 @@ func (m ConsoleModel) renderHelpBar() string {
 	var items []string
 	switch m.activePane {
 	case paneRepos:
-		items = []string{
-			helpItem("↑↓", "navigate"),
-			helpItem("enter", "select"),
-			helpItem("tab", "dates"),
-			helpItem("→", "content"),
-			helpItem("pgup/dn", "scroll"),
-			helpItem("q", "quit"),
+		if m.operationRunning {
+			items = []string{
+				helpItem("...", "operation in progress"),
+				helpItem("q", "quit"),
+			}
+		} else {
+			items = []string{
+				helpItem("↑↓", "navigate"),
+				helpItem("enter", "select"),
+				helpItem("Shift+I", "ingest"),
+				helpItem("Shift+W", "worklog"),
+				helpItem("tab", "dates"),
+				helpItem("→", "content"),
+				helpItem("q", "quit"),
+			}
 		}
 	case paneDates:
 		items = []string{
@@ -868,4 +1378,59 @@ func RunConsole(codebases []ConsoleCodebase, profileName string, dbRepo *db.SQLR
 	p := tea.NewProgram(model, tea.WithAltScreen())
 	_, err := p.Run()
 	return err
+}
+
+// ── External command executors ─────────────────────────────────────────────
+
+// closeReadOnlyConnection safely closes a read-only database connection
+func closeReadOnlyConnection(repo *db.SQLRepository) {
+	if repo != nil {
+		repo.Close()
+	}
+}
+
+// executeIngest runs the ingest command on a repository
+func executeIngest(repoPath, profileName string) (string, error) {
+	// Get the path to the current devlog executable
+	devlogPath, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("failed to get executable path: %w", err)
+	}
+
+	// Run devlog ingest with --all-branches flag to avoid interactive prompts
+	cmd := exec.Command(devlogPath, "ingest", repoPath, "--all-branches")
+	cmd.Dir = repoPath
+
+	// Capture output
+	output, err := cmd.CombinedOutput()
+	outputStr := string(output)
+	
+	if err != nil {
+		return outputStr, fmt.Errorf("ingest failed: %w", err)
+	}
+
+	return outputStr, nil
+}
+
+// executeWorklog runs the worklog command on a repository
+func executeWorklog(repoPath string) (string, error) {
+	// Get the path to the current devlog executable
+	devlogPath, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("failed to get executable path: %w", err)
+	}
+
+	// Run devlog worklog
+	cmd := exec.Command(devlogPath, "worklog")
+	cmd.Dir = repoPath
+
+	// Capture output
+	output, err := cmd.CombinedOutput()
+	outputStr := string(output)
+	
+	if err != nil {
+		return outputStr, fmt.Errorf("worklog failed: %w", err)
+	}
+
+	return outputStr, nil
 }

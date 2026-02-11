@@ -34,6 +34,7 @@ You ship code across 5 repos, 12 branches, and 3 teams. Monday morning standup h
 npm install -g @ishaan812/devlog  # Install
 devlog onboard              # Set up (works with free local Ollama)
 devlog ingest               # Point it at your repos
+devlog commit               # Generate smart commit messages
 devlog worklog --days 7     # Get your week's work, organized by branch
 devlog console              # Browse worklogs in an interactive TUI
 ```
@@ -63,6 +64,7 @@ DevLog is **local-first**. Run it with [Ollama](https://ollama.ai) and your data
 | Feature | Description |
 |---------|-------------|
 | **Smart Work Logs** | Auto-generated markdown summaries organized by branch, date, and repo — ready for standups, PRs, or performance reviews |
+| **AI Commit Messages** | Generate contextual commit messages from your changes with interactive staging and commit workflow |
 | **Interactive Console** | Full-screen terminal UI to browse repos and navigate through your cached worklogs day-by-day |
 | **Multi-Repo Ingestion** | Ingest as many repos as you want into a single profile. See your full picture. |
 | **Multi-Branch Tracking** | Branch-aware ingestion remembers your selections per repo. Track `main`, `develop`, and every feature branch. |
@@ -227,6 +229,24 @@ devlog worklog --no-llm            # Skip AI summaries
 devlog worklog --group-by date     # Group by date instead of branch
 ```
 
+### `devlog commit`
+
+Generate AI-powered commit messages from your changes.
+
+```bash
+devlog commit                     # Analyze all changes (staged + unstaged)
+devlog commit --staged-only       # Only analyze staged changes
+devlog commit --provider openai   # Override LLM provider
+devlog commit --model gpt-5.2     # Override model
+```
+
+After generating a commit message, DevLog launches an interactive TUI that:
+1. Shows the generated message and asks for approval
+2. Optionally stages all changes with `git add .`
+3. Commits with the generated message
+
+The command analyzes your git diff using AI to create meaningful, contextual commit messages. If you've run `devlog ingest`, it also uses your codebase summary for better context.
+
 ### `devlog console`
 
 Interactive terminal UI to browse repositories and worklogs.
@@ -352,6 +372,21 @@ DevLog stores all data in `~/.devlog/`:
 | `github_username` | GitHub username | Optional |
 
 ## Tips & Tricks
+
+### AI-Powered Commit Messages
+
+Never write a generic "fix stuff" commit message again:
+```bash
+# Make your changes
+git add .  # Optional - devlog can stage for you
+devlog commit
+
+# Interactive flow:
+# 1. Shows generated message
+# 2. Asks to stage changes (if not staged)
+# 3. Asks to commit
+# Result: Professional commit message in seconds
+```
 
 ### Faster Ingestion
 

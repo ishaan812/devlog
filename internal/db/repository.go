@@ -101,6 +101,14 @@ func NewRepository(db *sql.DB) *SQLRepository {
 	return &SQLRepository{db: db}
 }
 
+// Close closes the underlying database connection.
+func (r *SQLRepository) Close() error {
+	if r.db != nil {
+		return r.db.Close()
+	}
+	return nil
+}
+
 // DB returns the underlying database connection.
 func (r *SQLRepository) DB() *sql.DB {
 	return r.db

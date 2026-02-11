@@ -38,7 +38,8 @@ func runConsole(cmd *cobra.Command, args []string) error {
 
 	profileName := cfg.GetActiveProfileName()
 
-	dbRepo, err := db.GetRepository()
+	// Use read-only connection so we don't conflict with write operations
+	dbRepo, err := db.GetReadOnlyRepositoryForProfile(profileName)
 	if err != nil {
 		return fmt.Errorf("failed to initialize database: %w", err)
 	}
@@ -73,12 +74,20 @@ func runConsole(cmd *cobra.Command, args []string) error {
 			}
 		}
 
+		// Check if repository has been ingested
+		commitCount, err := dbRepo.GetCommitCount(ctx, cb.ID)
+		if err != nil {
+			commitCount = 0
+		}
+
 		consoleCodebases = append(consoleCodebases, tui.ConsoleCodebase{
-			ID:        cb.ID,
-			Name:      cb.Name,
-			Path:      cb.Path,
-			DateCount: len(dates),
-			Dates:     tuiDates,
+			ID:          cb.ID,
+			Name:        cb.Name,
+			Path:        cb.Path,
+			DateCount:   len(dates),
+			Dates:       tuiDates,
+			CommitCount: int(commitCount),
+			IsIngested:  commitCount > 0,
 		})
 	}
 
