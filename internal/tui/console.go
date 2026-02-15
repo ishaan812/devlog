@@ -25,6 +25,8 @@ type ConsoleCodebase struct {
 	Path        string
 	DateCount   int
 	Dates       []ConsoleDate
+	Weeks       []ConsoleWeek
+	Months      []ConsoleMonth
 	CommitCount int  // Total commits ingested
 	IsIngested  bool // Whether ingest has been run
 }
@@ -36,6 +38,31 @@ type ConsoleDate struct {
 	CommitCount int
 	Additions   int
 	Deletions   int
+}
+
+// ConsoleWeek holds week info for the console TUI.
+type ConsoleWeek struct {
+	WeekStart   time.Time
+	WeekEnd     time.Time
+	DateCount   int
+	EntryCount  int
+	CommitCount int
+	Additions   int
+	Deletions   int
+	Dates       []ConsoleDate
+}
+
+// ConsoleMonth holds month info for the console TUI.
+type ConsoleMonth struct {
+	MonthStart  time.Time
+	MonthEnd    time.Time
+	DateCount   int
+	WeekCount   int
+	EntryCount  int
+	CommitCount int
+	Additions   int
+	Deletions   int
+	Weeks       []ConsoleWeek
 }
 
 // ── Styles ─────────────────────────────────────────────────────────────────
@@ -137,6 +164,17 @@ const (
 
 // ── Model ──────────────────────────────────────────────────────────────────
 
+// DateItem represents an item in the hierarchical date view
+type DateItem struct {
+	Type        string    // "month", "week", or "day"
+	Date        time.Time // The date (month start, week start, or day)
+	DisplayText string
+	Stats       string
+	Indent      int
+	IsExpanded  bool
+	Children    []DateItem
+}
+
 // ── Operation messages ─────────────────────────────────────────────────────
 
 type operationCompleteMsg struct {
@@ -165,8 +203,11 @@ type ConsoleModel struct {
 	repoScroll int
 
 	// Dates pane
-	dateCursor int
-	dateScroll int
+	dateCursor     int
+	dateScroll     int
+	dateItems      []DateItem // Flattened hierarchical view of dates
+	expandedMonths map[string]bool
+	expandedWeeks  map[string]bool
 
 	// Content pane (read-only, no focus)
 	viewport      viewport.Model
@@ -197,14 +238,16 @@ func NewConsoleModel(codebases []ConsoleCodebase, profileName string, dbRepo *db
 	}
 
 	return ConsoleModel{
-		codebases:    codebases,
-		profileName:  profileName,
-		dbRepo:       dbRepo,
-		activePane:   paneRepos,
-		repoCursor:   0,
-		selectedRepo: selectedRepo,
-		selectedDate: -1,
-		viewport:     vp,
+		codebases:      codebases,
+		profileName:    profileName,
+		dbRepo:         dbRepo,
+		activePane:     paneRepos,
+		repoCursor:     0,
+		selectedRepo:   selectedRepo,
+		selectedDate:   -1,
+		viewport:       vp,
+		expandedMonths: make(map[string]bool),
+		expandedWeeks:  make(map[string]bool),
 	}
 }
 
@@ -400,8 +443,10 @@ func (m ConsoleModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.ensureRepoVisible()
 				}
 			case paneDates:
-				dates := m.currentDates()
-				if m.dateCursor < len(dates)-1 {
+				if len(m.dateItems) == 0 {
+					m.dateItems = m.buildDateHierarchy()
+				}
+				if m.dateCursor < len(m.dateItems)-1 {
 					m.dateCursor++
 					m.ensureDateVisible()
 				}
@@ -423,14 +468,36 @@ func (m ConsoleModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.contentReady = false
 					m.viewport.SetContent("")
 					m.contentHeader = ""
+					m.dateItems = m.buildDateHierarchy() // Rebuild hierarchy
 					m.activePane = paneDates
 				}
 			case paneDates:
-				dates := m.currentDates()
-				if m.dateCursor >= 0 && m.dateCursor < len(dates) {
-					m.selectedDate = m.dateCursor
-					m.loadContent()
-					// Stay on dates pane
+				// Rebuild date items if needed
+				if len(m.dateItems) == 0 {
+					m.dateItems = m.buildDateHierarchy()
+				}
+
+				if m.dateCursor >= 0 && m.dateCursor < len(m.dateItems) {
+					item := m.dateItems[m.dateCursor]
+
+					switch item.Type {
+					case "month":
+						// Toggle month expansion
+						monthKey := item.Date.Format("2006-01")
+						m.expandedMonths[monthKey] = !m.expandedMonths[monthKey]
+						m.dateItems = m.buildDateHierarchy()
+
+					case "week":
+						// Toggle week expansion - use consistent week key format
+						weekKey := item.Date.Format("2006-W01-02")
+						m.expandedWeeks[weekKey] = !m.expandedWeeks[weekKey]
+						m.dateItems = m.buildDateHierarchy()
+
+					case "day":
+						// Load day content
+						m.selectedDate = m.dateCursor
+						m.loadContent()
+					}
 				}
 			}
 			return m, nil
@@ -581,6 +648,63 @@ func reloadConsoleDataCmd(profileName string) tea.Cmd {
 				}
 			}
 
+			// Load weeks
+			weeks, err := newRepo.ListWorklogWeeks(ctx, cb.ID, profileName)
+			if err != nil {
+				weeks = nil
+			}
+
+			tuiWeeks := make([]ConsoleWeek, len(weeks))
+			for i, w := range weeks {
+				// Find dates that belong to this week
+				var weekDates []ConsoleDate
+				for _, d := range tuiDates {
+					if !d.EntryDate.Before(w.WeekStart) && !d.EntryDate.After(w.WeekEnd) {
+						weekDates = append(weekDates, d)
+					}
+				}
+
+				tuiWeeks[i] = ConsoleWeek{
+					WeekStart:   w.WeekStart,
+					WeekEnd:     w.WeekEnd,
+					DateCount:   w.DateCount,
+					EntryCount:  w.EntryCount,
+					CommitCount: w.CommitCount,
+					Additions:   w.Additions,
+					Deletions:   w.Deletions,
+					Dates:       weekDates,
+				}
+			}
+
+			// Load months
+			months, err := newRepo.ListWorklogMonths(ctx, cb.ID, profileName)
+			if err != nil {
+				months = nil
+			}
+
+			tuiMonths := make([]ConsoleMonth, len(months))
+			for i, m := range months {
+				// Find weeks that belong to this month
+				var monthWeeks []ConsoleWeek
+				for _, w := range tuiWeeks {
+					if !w.WeekStart.Before(m.MonthStart) && !w.WeekStart.After(m.MonthEnd) {
+						monthWeeks = append(monthWeeks, w)
+					}
+				}
+
+				tuiMonths[i] = ConsoleMonth{
+					MonthStart:  m.MonthStart,
+					MonthEnd:    m.MonthEnd,
+					DateCount:   m.DateCount,
+					WeekCount:   m.WeekCount,
+					EntryCount:  m.EntryCount,
+					CommitCount: m.CommitCount,
+					Additions:   m.Additions,
+					Deletions:   m.Deletions,
+					Weeks:       monthWeeks,
+				}
+			}
+
 			// Check if repository has been ingested
 			commitCount, err := newRepo.GetCommitCount(ctx, cb.ID)
 			if err != nil {
@@ -593,6 +717,8 @@ func reloadConsoleDataCmd(profileName string) tea.Cmd {
 				Path:        cb.Path,
 				DateCount:   len(dates),
 				Dates:       tuiDates,
+				Weeks:       tuiWeeks,
+				Months:      tuiMonths,
 				CommitCount: int(commitCount),
 				IsIngested:  commitCount > 0,
 			})
@@ -615,6 +741,108 @@ func (m *ConsoleModel) currentDates() []ConsoleDate {
 		return m.codebases[m.selectedRepo].Dates
 	}
 	return nil
+}
+
+// buildDateHierarchy creates a flattened hierarchical view of months, weeks, and days
+func (m *ConsoleModel) buildDateHierarchy() []DateItem {
+	if m.selectedRepo < 0 || m.selectedRepo >= len(m.codebases) {
+		return nil
+	}
+
+	cb := m.codebases[m.selectedRepo]
+	var items []DateItem
+
+	// If we have months with weeks, show hierarchical view
+	if len(cb.Months) > 0 {
+		for _, month := range cb.Months {
+			monthKey := month.MonthStart.Format("2006-01")
+			monthItem := DateItem{
+				Type:        "month",
+				Date:        month.MonthStart,
+				DisplayText: month.MonthStart.Format("January 2006"),
+				Stats:       fmt.Sprintf("+%d/-%d", month.Additions, month.Deletions),
+				Indent:      0,
+				IsExpanded:  m.expandedMonths[monthKey],
+			}
+
+			items = append(items, monthItem)
+
+			// If month is expanded, add weeks
+			if m.expandedMonths[monthKey] && len(month.Weeks) > 0 {
+				for _, week := range month.Weeks {
+					// Use consistent week key format across all contexts
+					weekKey := week.WeekStart.Format("2006-W01-02") // e.g., "2026-W02-09"
+					weekItem := DateItem{
+						Type:        "week",
+						Date:        week.WeekStart,
+						DisplayText: fmt.Sprintf("Week of %s", week.WeekStart.Format("Jan 2")),
+						Stats:       fmt.Sprintf("+%d/-%d", week.Additions, week.Deletions),
+						Indent:      1,
+						IsExpanded:  m.expandedWeeks[weekKey],
+					}
+
+					items = append(items, weekItem)
+
+					// If week is expanded, add days
+					if m.expandedWeeks[weekKey] && len(week.Dates) > 0 {
+						for _, day := range week.Dates {
+							dayItem := DateItem{
+								Type:        "day",
+								Date:        day.EntryDate,
+								DisplayText: day.EntryDate.Format("Mon, Jan 2"),
+								Stats:       fmt.Sprintf("+%d/-%d", day.Additions, day.Deletions),
+								Indent:      2,
+							}
+							items = append(items, dayItem)
+						}
+					}
+				}
+			}
+		}
+	} else if len(cb.Weeks) > 0 {
+		// Show weeks with days if no months
+		for _, week := range cb.Weeks {
+			// Use consistent week key format
+			weekKey := week.WeekStart.Format("2006-W01-02")
+			weekItem := DateItem{
+				Type:        "week",
+				Date:        week.WeekStart,
+				DisplayText: fmt.Sprintf("Week of %s", week.WeekStart.Format("Jan 2")),
+				Stats:       fmt.Sprintf("+%d/-%d", week.Additions, week.Deletions),
+				Indent:      0,
+				IsExpanded:  m.expandedWeeks[weekKey],
+			}
+
+			items = append(items, weekItem)
+
+			// If week is expanded, add days
+			if m.expandedWeeks[weekKey] && len(week.Dates) > 0 {
+				for _, day := range week.Dates {
+					dayItem := DateItem{
+						Type:        "day",
+						Date:        day.EntryDate,
+						DisplayText: day.EntryDate.Format("Mon, Jan 2"),
+						Stats:       fmt.Sprintf("+%d/-%d", day.Additions, day.Deletions),
+						Indent:      1,
+					}
+					items = append(items, dayItem)
+				}
+			}
+		}
+	} else {
+		// Fall back to flat date list
+		for _, day := range cb.Dates {
+			items = append(items, DateItem{
+				Type:        "day",
+				Date:        day.EntryDate,
+				DisplayText: day.EntryDate.Format("Mon, Jan 2"),
+				Stats:       fmt.Sprintf("+%d/-%d", day.Additions, day.Deletions),
+				Indent:      0,
+			})
+		}
+	}
+
+	return items
 }
 
 func (m *ConsoleModel) leftPanelWidth() int {
@@ -690,25 +918,66 @@ func (m *ConsoleModel) loadContent() {
 	if m.dbRepo == nil {
 		return
 	}
-	dates := m.currentDates()
-	if m.selectedDate < 0 || m.selectedDate >= len(dates) {
+
+	// Rebuild date items if needed
+	if len(m.dateItems) == 0 {
+		m.dateItems = m.buildDateHierarchy()
+	}
+
+	if m.selectedDate < 0 || m.selectedDate >= len(m.dateItems) {
 		return
 	}
 
 	cb := m.codebases[m.selectedRepo]
-	date := dates[m.selectedDate]
+	item := m.dateItems[m.selectedDate]
 
 	ctx := context.Background()
-	entries, err := m.dbRepo.ListWorklogEntriesByDate(ctx, cb.ID, m.profileName, date.EntryDate)
-	if err != nil || len(entries) == 0 {
-		m.contentReady = true
-		m.contentHeader = date.EntryDate.Format("Monday, January 2, 2006")
-		m.viewport.SetContent(consoleEmptyStyle.Render("No worklog entries for this date.\nRun 'devlog worklog' to generate worklogs."))
+	var md string
+	var header string
+
+	switch item.Type {
+	case "month":
+		// Load monthly summary
+		summary, err := m.dbRepo.GetMonthlySummary(ctx, cb.ID, m.profileName, item.Date)
+		if err != nil || summary == nil {
+			m.contentReady = true
+			m.contentHeader = item.Date.Format("January 2006") + " - Monthly Summary"
+			m.viewport.SetContent(consoleEmptyStyle.Render("No monthly summary available.\nGenerate worklogs to create summaries."))
+			return
+		}
+		md = fmt.Sprintf("# Monthly Summary - %s\n\n%s", item.Date.Format("January 2006"), summary.Content)
+		header = fmt.Sprintf("%s  -  %s", item.Date.Format("January 2006"), cb.Name)
+
+	case "week":
+		// Load weekly summary
+		summary, err := m.dbRepo.GetWeeklySummary(ctx, cb.ID, m.profileName, item.Date)
+		if err != nil || summary == nil {
+			m.contentReady = true
+			m.contentHeader = fmt.Sprintf("Week of %s - Weekly Summary", item.Date.Format("Jan 2"))
+			m.viewport.SetContent(consoleEmptyStyle.Render("No weekly summary available.\nGenerate worklogs spanning >7 days to create weekly summaries."))
+			return
+		}
+		weekEnd := item.Date.AddDate(0, 0, 6)
+		md = fmt.Sprintf("# Weekly Summary\n\n**%s - %s**\n\n%s", item.Date.Format("Jan 2"), weekEnd.Format("Jan 2, 2006"), summary.Content)
+		header = fmt.Sprintf("Week of %s  -  %s", item.Date.Format("Jan 2"), cb.Name)
+
+	case "day":
+		// Load day entries
+		entries, err := m.dbRepo.ListWorklogEntriesByDate(ctx, cb.ID, m.profileName, item.Date)
+		if err != nil || len(entries) == 0 {
+			m.contentReady = true
+			m.contentHeader = item.Date.Format("Monday, January 2, 2006")
+			m.viewport.SetContent(consoleEmptyStyle.Render("No worklog entries for this date.\nRun 'devlog worklog' to generate worklogs."))
+			return
+		}
+		md = renderDayMarkdown(entries, item.Date)
+		header = fmt.Sprintf("%s  -  %s", item.Date.Format("Monday, January 2, 2006"), cb.Name)
+
+	default:
 		return
 	}
 
-	md := renderDayMarkdown(entries, date.EntryDate)
-
+	// Render markdown
 	width := m.viewport.Width - 2
 	if width < 20 {
 		width = 20
@@ -727,7 +996,7 @@ func (m *ConsoleModel) loadContent() {
 	}
 
 	m.contentReady = true
-	m.contentHeader = fmt.Sprintf("%s  -  %s", date.EntryDate.Format("Monday, January 2, 2006"), cb.Name)
+	m.contentHeader = header
 	m.viewport.SetContent(rendered)
 	m.viewport.GotoTop()
 }
@@ -903,7 +1172,7 @@ func (m ConsoleModel) renderReposSection(width int) string {
 func (m ConsoleModel) renderDatesSection(width int) string {
 	var b strings.Builder
 
-	sectionLabel := "Dates"
+	sectionLabel := "Timeline"
 	if m.activePane == paneDates {
 		b.WriteString(consoleSectionTitle.Render(sectionLabel))
 	} else {
@@ -913,8 +1182,13 @@ func (m ConsoleModel) renderDatesSection(width int) string {
 	b.WriteString(consoleDimStyle.Render(" " + strings.Repeat("─", width-2)))
 	b.WriteString("\n")
 
-	dates := m.currentDates()
-	if len(dates) == 0 {
+	// Rebuild date items if needed
+	if len(m.dateItems) == 0 {
+		m.dateItems = m.buildDateHierarchy()
+	}
+
+	items := m.dateItems
+	if len(items) == 0 {
 		if m.selectedRepo >= 0 {
 			b.WriteString(consoleDimStyle.Render(" No cached worklogs"))
 			b.WriteString("\n")
@@ -930,8 +1204,8 @@ func (m ConsoleModel) renderDatesSection(width int) string {
 	maxVis := m.maxVisibleDates()
 	start := m.dateScroll
 	end := start + maxVis
-	if end > len(dates) {
-		end = len(dates)
+	if end > len(items) {
+		end = len(items)
 	}
 
 	if start > 0 {
@@ -940,32 +1214,64 @@ func (m ConsoleModel) renderDatesSection(width int) string {
 	}
 
 	for i := start; i < end; i++ {
-		d := dates[i]
+		item := items[i]
 		isSelected := i == m.selectedDate
 		isCursor := i == m.dateCursor && m.activePane == paneDates
+
+		// Build indentation
+		indent := strings.Repeat("  ", item.Indent)
 
 		cursor := "  "
 		if isCursor {
 			cursor = "> "
 		}
 
-		dateStr := d.EntryDate.Format("Mon, Jan 2")
-		stats := consoleStatStyle.Render(fmt.Sprintf(" +%d/-%d", d.Additions, d.Deletions))
+		// Add expansion indicator for months and weeks
+		expandIcon := ""
+		if item.Type == "month" {
+			monthKey := item.Date.Format("2006-01")
+			if m.expandedMonths[monthKey] {
+				expandIcon = "▼ "
+			} else {
+				expandIcon = "▶ "
+			}
+		} else if item.Type == "week" {
+			// Use consistent week key format
+			weekKey := item.Date.Format("2006-W01-02")
+			if m.expandedWeeks[weekKey] {
+				expandIcon = "▼ "
+			} else {
+				expandIcon = "▶ "
+			}
+		}
+
+		displayText := item.DisplayText
+		stats := consoleStatStyle.Render(fmt.Sprintf(" %s", item.Stats))
 
 		var line string
+		lineContent := cursor + indent + expandIcon + displayText
+
 		if isCursor {
-			line = consoleCursorStyle.Render(cursor + dateStr)
+			line = consoleCursorStyle.Render(lineContent)
 		} else if isSelected {
-			line = consoleItemStyle.Bold(true).Render(cursor + dateStr)
+			line = consoleItemStyle.Bold(true).Render(lineContent)
 		} else {
-			line = consoleItemStyle.Render(cursor + dateStr)
+			// Different colors for different types
+			switch item.Type {
+			case "month":
+				line = lipgloss.NewStyle().Foreground(lipgloss.Color("86")).Bold(true).Render(lineContent)
+			case "week":
+				line = lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render(lineContent)
+			default:
+				line = consoleItemStyle.Render(lineContent)
+			}
 		}
 
 		b.WriteString(line + stats)
 		b.WriteString("\n")
 	}
 
-	if end < len(dates) {
+	if end < len(items) {
 		b.WriteString(consoleDimStyle.Render(" ↓ more"))
 		b.WriteString("\n")
 	}
@@ -1355,7 +1661,7 @@ func (m ConsoleModel) renderLogo(width, height int) string {
 	b.WriteString("\n")
 
 	// Hint
-	hint := "Select a repo and date to view worklogs"
+	hint := "Select a repo, then navigate the timeline to view worklogs"
 	hintPad := (width - len(hint)) / 2
 	if hintPad < 0 {
 		hintPad = 0
@@ -1397,7 +1703,7 @@ func (m ConsoleModel) renderHelpBar() string {
 	case paneDates:
 		items = []string{
 			helpItem("↑↓", "navigate"),
-			helpItem("enter", "view"),
+			helpItem("enter", "expand/view"),
 			helpItem("tab", "repos"),
 			helpItem("→", "content"),
 			helpItem("pgup/dn", "scroll"),

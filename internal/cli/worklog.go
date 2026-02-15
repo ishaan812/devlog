@@ -122,6 +122,7 @@ func runWorklog(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 	titleColor := color.New(color.FgHiCyan, color.Bold)
 	dimColor := color.New(color.FgHiBlack)
+	successColor := color.New(color.FgGreen)
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -193,6 +194,8 @@ func runWorklog(cmd *cobra.Command, args []string) error {
 	}
 
 	var markdown string
+	var dayGroups []dayGroup // For weekly summary generation
+
 	switch worklogGroupBy {
 	case "branch":
 		groups, groupErr := groupByBranch(ctx, dbRepo, commits)
@@ -201,8 +204,18 @@ func runWorklog(cmd *cobra.Command, args []string) error {
 		}
 		markdown, err = generateBranchWorklogMarkdown(groups, client, cfg, loc, projectContext, codebaseContext, cache, style)
 	default:
-		groups := groupByDate(commits, loc)
-		markdown, err = generateWorklogMarkdown(groups, client, cfg, loc, projectContext, codebaseContext, cache, style)
+		dayGroups = groupByDate(commits, loc)
+		markdown, err = generateWorklogMarkdown(dayGroups, client, cfg, loc, projectContext, codebaseContext, cache, style)
+
+		// Generate weekly summaries if the date range spans more than one week
+		if worklogDays > 7 && cache != nil && !worklogNoLLM {
+			successColor.Println("\n  Generating weekly summaries...")
+			if err := generateWeeklySummaries(ctx, cache, dayGroups, client, projectContext, codebaseContext, loc, style); err != nil {
+				fmt.Printf("Warning: failed to generate weekly summaries: %v\n", err)
+			} else {
+				successColor.Println("  ✓ Weekly summaries generated")
+			}
+		}
 	}
 
 	if err != nil {
@@ -987,4 +1000,109 @@ func generateOverallSummary(groups []dayGroup, client llm.Client, projectContext
 		return "", err
 	}
 	return result, nil
+}
+
+// getWeekStart returns the Sunday (start of week) for a given date
+func getWeekStart(t time.Time, loc *time.Location) time.Time {
+	localTime := t.In(loc)
+	// Go's time.Weekday() returns 0 for Sunday, 1 for Monday, etc.
+	daysSinceSunday := int(localTime.Weekday())
+	weekStart := localTime.AddDate(0, 0, -daysSinceSunday)
+	return time.Date(weekStart.Year(), weekStart.Month(), weekStart.Day(), 0, 0, 0, 0, loc)
+}
+
+// generateWeeklySummaries generates and caches weekly summary entries
+func generateWeeklySummaries(ctx context.Context, cache *worklogCacheContext, groups []dayGroup, client llm.Client, projectContext, codebaseContext string, loc *time.Location, style string) error {
+	if cache == nil || cache.dbRepo == nil {
+		return nil
+	}
+
+	// Group days by week
+	weekGroups := make(map[time.Time][]dayGroup)
+	for _, group := range groups {
+		weekStart := getWeekStart(group.Date, loc)
+		weekGroups[weekStart] = append(weekGroups[weekStart], group)
+	}
+
+	// Generate summary for each week
+	for weekStart, weekDays := range weekGroups {
+		// Skip if only one day in the week
+		if len(weekDays) <= 1 {
+			continue
+		}
+
+		// Collect all commits for the week
+		var weekCommits []commitData
+		var dailySummaries []string
+		for _, day := range weekDays {
+			weekCommits = append(weekCommits, day.Commits...)
+			// Get cached daily summaries to include in weekly context
+			entries, err := cache.dbRepo.ListWorklogEntriesByDate(ctx, cache.codebaseID, cache.profileName, day.Date)
+			if err == nil {
+				for _, entry := range entries {
+					if entry.EntryType == "day_updates" {
+						dateStr := day.Date.In(loc).Format("Monday, January 2")
+						dailySummaries = append(dailySummaries, fmt.Sprintf("### %s\n\n%s", dateStr, entry.Content))
+					}
+				}
+			}
+		}
+
+		if len(weekCommits) == 0 {
+			continue
+		}
+
+		// Check if we already have a cached weekly summary
+		existing, err := cache.dbRepo.GetWeeklySummary(ctx, cache.codebaseID, cache.profileName, weekStart)
+		currentHashes := computeCommitHashes(weekCommits)
+		
+		// Skip if cache is valid
+		if err == nil && existing != nil && existing.CommitHashes == currentHashes && !cache.noCache {
+			continue
+		}
+
+		// Generate weekly summary
+		stats := buildAggregateStats(weekCommits)
+		dailySummaryText := strings.Join(dailySummaries, "\n\n")
+
+		var prompt string
+		if style == "technical" {
+			prompt = prompts.BuildWorklogWeekSummaryPrompt(projectContext, codebaseContext, dailySummaryText, stats)
+		} else {
+			prompt = prompts.BuildWorklogWeekSummaryPromptNonTechnical(projectContext, codebaseContext, dailySummaryText, stats)
+		}
+
+		timeoutCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
+		content, err := client.Complete(timeoutCtx, prompt)
+		cancel()
+
+		if err != nil {
+			return fmt.Errorf("failed to generate weekly summary for %s: %w", weekStart.Format("Jan 2"), err)
+		}
+
+		// Store the weekly summary
+		adds, dels := computeCommitStats(weekCommits)
+		weekEntry := &db.WorklogEntry{
+			ID:           fmt.Sprintf("week-%s-%s", cache.codebaseID, weekStart.Format("2006-01-02")),
+			CodebaseID:   cache.codebaseID,
+			ProfileName:  cache.profileName,
+			EntryDate:    weekStart,
+			BranchID:     "",
+			BranchName:   "",
+			EntryType:    "week_summary",
+			GroupBy:      "date",
+			Content:      content,
+			CommitCount:  len(weekCommits),
+			Additions:    adds,
+			Deletions:    dels,
+			CommitHashes: currentHashes,
+			CreatedAt:    time.Now(),
+		}
+
+		if err := cache.dbRepo.UpsertWorklogEntry(ctx, weekEntry); err != nil {
+			return fmt.Errorf("failed to cache weekly summary: %w", err)
+		}
+	}
+
+	return nil
 }

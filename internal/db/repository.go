@@ -85,6 +85,10 @@ type Repository interface {
 	GetWorklogEntry(ctx context.Context, codebaseID, profile string, date time.Time, branchID, entryType, groupBy string) (*WorklogEntry, error)
 	ListWorklogEntriesByDate(ctx context.Context, codebaseID, profile string, date time.Time) ([]WorklogEntry, error)
 	ListWorklogDates(ctx context.Context, codebaseID, profile string) ([]WorklogDateInfo, error)
+	ListWorklogWeeks(ctx context.Context, codebaseID, profile string) ([]WorklogWeekInfo, error)
+	ListWorklogMonths(ctx context.Context, codebaseID, profile string) ([]WorklogMonthInfo, error)
+	GetWeeklySummary(ctx context.Context, codebaseID, profile string, weekStart time.Time) (*WorklogEntry, error)
+	GetMonthlySummary(ctx context.Context, codebaseID, profile string, monthStart time.Time) (*WorklogEntry, error)
 	DeleteWorklogEntriesByCodebase(ctx context.Context, codebaseID string) error
 
 	// Raw query operations
@@ -1077,6 +1081,119 @@ func (r *SQLRepository) ListWorklogDates(ctx context.Context, codebaseID, profil
 		return nil, fmt.Errorf("iterate worklog dates: %w", err)
 	}
 	return dates, nil
+}
+
+// ListWorklogWeeks returns aggregated weekly stats for all weeks with cached entries.
+func (r *SQLRepository) ListWorklogWeeks(ctx context.Context, codebaseID, profile string) ([]WorklogWeekInfo, error) {
+	// Use Sunday as the start of the week
+	rows, err := r.db.QueryContext(ctx, `
+		WITH weekly_data AS (
+			SELECT 
+				DATE_TRUNC('week', entry_date)::DATE as week_start,
+				COUNT(DISTINCT entry_date) as date_count,
+				COUNT(*) as entry_count,
+				COALESCE(SUM(commit_count), 0) as total_commits,
+				COALESCE(SUM(additions), 0) as total_additions,
+				COALESCE(SUM(deletions), 0) as total_deletions
+			FROM worklog_entries
+			WHERE codebase_id = $1 AND profile_name = $2
+			GROUP BY week_start
+		)
+		SELECT 
+			week_start,
+			week_start + INTERVAL '6 days' as week_end,
+			date_count,
+			entry_count,
+			total_commits,
+			total_additions,
+			total_deletions
+		FROM weekly_data
+		ORDER BY week_start DESC`, codebaseID, profile)
+	if err != nil {
+		return nil, fmt.Errorf("query worklog weeks: %w", err)
+	}
+	defer rows.Close()
+	var weeks []WorklogWeekInfo
+	for rows.Next() {
+		w := WorklogWeekInfo{}
+		if err := rows.Scan(&w.WeekStart, &w.WeekEnd, &w.DateCount, &w.EntryCount, &w.CommitCount, &w.Additions, &w.Deletions); err != nil {
+			return nil, fmt.Errorf("scan worklog week: %w", err)
+		}
+		weeks = append(weeks, w)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate worklog weeks: %w", err)
+	}
+	return weeks, nil
+}
+
+// ListWorklogMonths returns aggregated monthly stats for all months with cached entries.
+func (r *SQLRepository) ListWorklogMonths(ctx context.Context, codebaseID, profile string) ([]WorklogMonthInfo, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		WITH monthly_data AS (
+			SELECT 
+				DATE_TRUNC('month', entry_date)::DATE as month_start,
+				COUNT(DISTINCT entry_date) as date_count,
+				COUNT(DISTINCT DATE_TRUNC('week', entry_date)) as week_count,
+				COUNT(*) as entry_count,
+				COALESCE(SUM(commit_count), 0) as total_commits,
+				COALESCE(SUM(additions), 0) as total_additions,
+				COALESCE(SUM(deletions), 0) as total_deletions
+			FROM worklog_entries
+			WHERE codebase_id = $1 AND profile_name = $2
+			GROUP BY month_start
+		)
+		SELECT 
+			month_start,
+			(month_start + INTERVAL '1 month' - INTERVAL '1 day')::DATE as month_end,
+			date_count,
+			week_count,
+			entry_count,
+			total_commits,
+			total_additions,
+			total_deletions
+		FROM monthly_data
+		ORDER BY month_start DESC`, codebaseID, profile)
+	if err != nil {
+		return nil, fmt.Errorf("query worklog months: %w", err)
+	}
+	defer rows.Close()
+	var months []WorklogMonthInfo
+	for rows.Next() {
+		m := WorklogMonthInfo{}
+		if err := rows.Scan(&m.MonthStart, &m.MonthEnd, &m.DateCount, &m.WeekCount, &m.EntryCount, &m.CommitCount, &m.Additions, &m.Deletions); err != nil {
+			return nil, fmt.Errorf("scan worklog month: %w", err)
+		}
+		months = append(months, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate worklog months: %w", err)
+	}
+	return months, nil
+}
+
+// GetWeeklySummary retrieves a weekly summary worklog entry.
+func (r *SQLRepository) GetWeeklySummary(ctx context.Context, codebaseID, profile string, weekStart time.Time) (*WorklogEntry, error) {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT id, codebase_id, profile_name, entry_date, branch_id, branch_name, 
+			entry_type, group_by, content, commit_count, additions, deletions, 
+			commit_hashes, created_at
+		FROM worklog_entries
+		WHERE codebase_id = $1 AND profile_name = $2 AND entry_date = $3 AND entry_type = 'week_summary'`,
+		codebaseID, profile, weekStart)
+	return r.scanWorklogEntry(row)
+}
+
+// GetMonthlySummary retrieves a monthly summary worklog entry.
+func (r *SQLRepository) GetMonthlySummary(ctx context.Context, codebaseID, profile string, monthStart time.Time) (*WorklogEntry, error) {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT id, codebase_id, profile_name, entry_date, branch_id, branch_name, 
+			entry_type, group_by, content, commit_count, additions, deletions, 
+			commit_hashes, created_at
+		FROM worklog_entries
+		WHERE codebase_id = $1 AND profile_name = $2 AND entry_date = $3 AND entry_type = 'month_summary'`,
+		codebaseID, profile, monthStart)
+	return r.scanWorklogEntry(row)
 }
 
 // DeleteWorklogEntriesByCodebase deletes all worklog entries for a codebase.

@@ -140,6 +140,29 @@ type WorklogDateInfo struct {
 	Deletions   int
 }
 
+// WorklogWeekInfo holds aggregated info for a week's cached worklogs
+type WorklogWeekInfo struct {
+	WeekStart   time.Time // Sunday of the week
+	WeekEnd     time.Time // Saturday of the week
+	DateCount   int       // Number of days with entries
+	EntryCount  int
+	CommitCount int
+	Additions   int
+	Deletions   int
+}
+
+// WorklogMonthInfo holds aggregated info for a month's cached worklogs
+type WorklogMonthInfo struct {
+	MonthStart  time.Time // First day of the month
+	MonthEnd    time.Time // Last day of the month
+	DateCount   int       // Number of days with entries
+	WeekCount   int       // Number of weeks with entries
+	EntryCount  int
+	CommitCount int
+	Additions   int
+	Deletions   int
+}
+
 // JSON is a type alias for map[string]any used for JSON columns
 type JSON = map[string]any
 

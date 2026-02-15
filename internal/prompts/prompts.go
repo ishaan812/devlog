@@ -39,6 +39,18 @@ var worklogDayUpdatesNonTechnicalPromptTemplate string
 //go:embed worklog_branch_summary_nontechnical.md
 var worklogBranchSummaryNonTechnicalPromptTemplate string
 
+//go:embed worklog_week_summary.md
+var worklogWeekSummaryPromptTemplate string
+
+//go:embed worklog_week_summary_nontechnical.md
+var worklogWeekSummaryNonTechnicalPromptTemplate string
+
+//go:embed worklog_month_summary.md
+var worklogMonthSummaryPromptTemplate string
+
+//go:embed worklog_month_summary_nontechnical.md
+var worklogMonthSummaryNonTechnicalPromptTemplate string
+
 //go:embed commit_message.md
 var commitMessagePromptTemplate string
 
@@ -88,4 +100,20 @@ func BuildWorklogBranchSummaryPromptNonTechnical(projectContext, branchContext, 
 
 func BuildCommitMessagePrompt(projectContext, diff string) string {
 	return fmt.Sprintf(strings.TrimSpace(commitMessagePromptTemplate), projectContext, diff)
+}
+
+func BuildWorklogWeekSummaryPrompt(projectContext, codebaseContext, dailySummaries, stats string) string {
+	return fmt.Sprintf(strings.TrimSpace(worklogWeekSummaryPromptTemplate), projectContext, codebaseContext, dailySummaries, stats)
+}
+
+func BuildWorklogWeekSummaryPromptNonTechnical(projectContext, codebaseContext, dailySummaries, stats string) string {
+	return fmt.Sprintf(strings.TrimSpace(worklogWeekSummaryNonTechnicalPromptTemplate), projectContext, codebaseContext, dailySummaries, stats)
+}
+
+func BuildWorklogMonthSummaryPrompt(projectContext, codebaseContext, weeklySummaries, stats string) string {
+	return fmt.Sprintf(strings.TrimSpace(worklogMonthSummaryPromptTemplate), projectContext, codebaseContext, weeklySummaries, stats)
+}
+
+func BuildWorklogMonthSummaryPromptNonTechnical(projectContext, codebaseContext, weeklySummaries, stats string) string {
+	return fmt.Sprintf(strings.TrimSpace(worklogMonthSummaryNonTechnicalPromptTemplate), projectContext, codebaseContext, weeklySummaries, stats)
 }

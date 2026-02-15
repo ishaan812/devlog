@@ -14,10 +14,16 @@ import (
 var consoleCmd = &cobra.Command{
 	Use:   "console",
 	Short: "Interactive console to browse worklogs",
-	Long: `Opens a full-screen terminal UI to browse repositories and cached day-by-day worklogs.
+	Long: `Opens a full-screen terminal UI to browse repositories and cached worklogs.
 
-Navigate between repos, dates, and rendered worklog content using keyboard shortcuts.
+Navigate between repos and a hierarchical timeline (months > weeks > days) of your work.
+View daily entries, weekly summaries, and monthly summaries directly in the console.
 Requires at least one prior 'devlog worklog' run to populate the cache.
+
+Timeline Features:
+  - Expandable/collapsible months and weeks (press Enter to toggle)
+  - Weekly summaries generated automatically for worklogs spanning >7 days
+  - Hierarchical navigation shows your work at different time scales
 
 Examples:
   devlog console`,
@@ -55,7 +61,7 @@ func runConsole(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Build console data: for each codebase, get worklog dates
+	// Build console data: for each codebase, get worklog dates, weeks, and months
 	var consoleCodebases []tui.ConsoleCodebase
 	for _, cb := range codebases {
 		dates, err := dbRepo.ListWorklogDates(ctx, cb.ID, profileName)
@@ -74,6 +80,63 @@ func runConsole(cmd *cobra.Command, args []string) error {
 			}
 		}
 
+		// Load weeks
+		weeks, err := dbRepo.ListWorklogWeeks(ctx, cb.ID, profileName)
+		if err != nil {
+			weeks = nil // Non-fatal, just won't show weeks
+		}
+
+		tuiWeeks := make([]tui.ConsoleWeek, len(weeks))
+		for i, w := range weeks {
+			// Find dates that belong to this week
+			var weekDates []tui.ConsoleDate
+			for _, d := range tuiDates {
+				if !d.EntryDate.Before(w.WeekStart) && !d.EntryDate.After(w.WeekEnd) {
+					weekDates = append(weekDates, d)
+				}
+			}
+
+			tuiWeeks[i] = tui.ConsoleWeek{
+				WeekStart:   w.WeekStart,
+				WeekEnd:     w.WeekEnd,
+				DateCount:   w.DateCount,
+				EntryCount:  w.EntryCount,
+				CommitCount: w.CommitCount,
+				Additions:   w.Additions,
+				Deletions:   w.Deletions,
+				Dates:       weekDates,
+			}
+		}
+
+		// Load months
+		months, err := dbRepo.ListWorklogMonths(ctx, cb.ID, profileName)
+		if err != nil {
+			months = nil // Non-fatal, just won't show months
+		}
+
+		tuiMonths := make([]tui.ConsoleMonth, len(months))
+		for i, m := range months {
+			// Find weeks that belong to this month
+			var monthWeeks []tui.ConsoleWeek
+			for _, w := range tuiWeeks {
+				if !w.WeekStart.Before(m.MonthStart) && !w.WeekStart.After(m.MonthEnd) {
+					monthWeeks = append(monthWeeks, w)
+				}
+			}
+
+			tuiMonths[i] = tui.ConsoleMonth{
+				MonthStart:  m.MonthStart,
+				MonthEnd:    m.MonthEnd,
+				DateCount:   m.DateCount,
+				WeekCount:   m.WeekCount,
+				EntryCount:  m.EntryCount,
+				CommitCount: m.CommitCount,
+				Additions:   m.Additions,
+				Deletions:   m.Deletions,
+				Weeks:       monthWeeks,
+			}
+		}
+
 		// Check if repository has been ingested
 		commitCount, err := dbRepo.GetCommitCount(ctx, cb.ID)
 		if err != nil {
@@ -86,6 +149,8 @@ func runConsole(cmd *cobra.Command, args []string) error {
 			Path:        cb.Path,
 			DateCount:   len(dates),
 			Dates:       tuiDates,
+			Weeks:       tuiWeeks,
+			Months:      tuiMonths,
 			CommitCount: int(commitCount),
 			IsIngested:  commitCount > 0,
 		})
