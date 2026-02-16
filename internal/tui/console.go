@@ -482,21 +482,74 @@ func (m ConsoleModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 					switch item.Type {
 					case "month":
-						// Toggle month expansion
+						// Load month content immediately on enter
+						m.selectedDate = m.dateCursor
+						m.loadContent()
+						// Also toggle expansion
 						monthKey := item.Date.Format("2006-01")
 						m.expandedMonths[monthKey] = !m.expandedMonths[monthKey]
 						m.dateItems = m.buildDateHierarchy()
+						m.ensureDateVisible()
 
 					case "week":
-						// Toggle week expansion - use consistent week key format
+						// Load week content immediately on enter
+						m.selectedDate = m.dateCursor
+						m.loadContent()
+						// Also toggle expansion
 						weekKey := item.Date.Format("2006-W01-02")
 						m.expandedWeeks[weekKey] = !m.expandedWeeks[weekKey]
 						m.dateItems = m.buildDateHierarchy()
+						m.ensureDateVisible()
 
 					case "day":
 						// Load day content
 						m.selectedDate = m.dateCursor
 						m.loadContent()
+					}
+				}
+			}
+			return m, nil
+
+		case "esc":
+			switch m.activePane {
+			case paneDates:
+				if m.dateCursor >= 0 && m.dateCursor < len(m.dateItems) {
+					item := m.dateItems[m.dateCursor]
+					if item.Indent > 0 {
+						// Find parent
+						parentIndex := -1
+						for i := m.dateCursor; i >= 0; i-- {
+							if m.dateItems[i].Indent < item.Indent {
+								parentIndex = i
+								break
+							}
+						}
+
+						if parentIndex != -1 {
+							// Collapse the current level if it was expanded
+							if item.Type == "day" {
+								// Find the parent week and collapse it
+								weekKey := ""
+								for i := m.dateCursor; i >= 0; i-- {
+									if m.dateItems[i].Type == "week" {
+										weekKey = m.dateItems[i].Date.Format("2006-W01-02")
+										break
+									}
+								}
+								if weekKey != "" && m.expandedWeeks[weekKey] {
+									m.expandedWeeks[weekKey] = false
+								}
+							} else if item.Type == "week" {
+								monthKey := item.Date.Format("2006-01")
+								if m.expandedMonths[monthKey] {
+									m.expandedMonths[monthKey] = false
+								}
+							}
+
+							m.dateCursor = parentIndex
+							m.dateItems = m.buildDateHierarchy()
+							m.ensureDateVisible()
+						}
 					}
 				}
 			}
@@ -1703,7 +1756,8 @@ func (m ConsoleModel) renderHelpBar() string {
 	case paneDates:
 		items = []string{
 			helpItem("↑↓", "navigate"),
-			helpItem("enter", "expand/view"),
+			helpItem("enter", "view/expand"),
+			helpItem("esc", "up"),
 			helpItem("tab", "repos"),
 			helpItem("→", "content"),
 			helpItem("pgup/dn", "scroll"),

@@ -88,7 +88,9 @@ type Repository interface {
 	ListWorklogWeeks(ctx context.Context, codebaseID, profile string) ([]WorklogWeekInfo, error)
 	ListWorklogMonths(ctx context.Context, codebaseID, profile string) ([]WorklogMonthInfo, error)
 	GetWeeklySummary(ctx context.Context, codebaseID, profile string, weekStart time.Time) (*WorklogEntry, error)
+	GetWeeklySummariesInRange(ctx context.Context, codebaseID, profile string, startDate, endDate time.Time) ([]WorklogEntry, error)
 	GetMonthlySummary(ctx context.Context, codebaseID, profile string, monthStart time.Time) (*WorklogEntry, error)
+	DeleteWorklogEntry(ctx context.Context, entryID string) error
 	DeleteWorklogEntriesByCodebase(ctx context.Context, codebaseID string) error
 
 	// Raw query operations
@@ -553,6 +555,21 @@ func (r *SQLRepository) GetCommitCountByPath(ctx context.Context, repoPath strin
 	}
 	return count, nil
 }
+
+// GetCommitsBetweenDates retrieves all commits for a codebase within a date range.
+func (r *SQLRepository) GetCommitsBetweenDates(ctx context.Context, codebaseID string, startDate, endDate time.Time) ([]Commit, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, hash, codebase_id, branch_id, author_email, message, summary,
+			committed_at, stats, is_user_commit, is_on_default_branch
+		FROM commits WHERE codebase_id = $1 AND committed_at >= $2 AND committed_at <= $3
+		ORDER BY committed_at DESC`, codebaseID, startDate, endDate)
+	if err != nil {
+		return nil, fmt.Errorf("query commits between dates: %w", err)
+	}
+	defer rows.Close()
+	return r.scanCommits(rows)
+}
+
 
 // GetEarliestCommitDate returns the earliest commit date for a codebase.
 func (r *SQLRepository) GetEarliestCommitDate(ctx context.Context, codebaseID string) (time.Time, error) {
@@ -1184,6 +1201,45 @@ func (r *SQLRepository) GetWeeklySummary(ctx context.Context, codebaseID, profil
 	return r.scanWorklogEntry(row)
 }
 
+// GetWeeklySummariesInRange retrieves all weekly summary worklog entries for a given date range.
+func (r *SQLRepository) GetWeeklySummariesInRange(ctx context.Context, codebaseID, profile string, startDate, endDate time.Time) ([]WorklogEntry, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, codebase_id, profile_name, entry_date, branch_id, branch_name,
+			entry_type, group_by, content, commit_count, additions, deletions,
+			commit_hashes, created_at
+		FROM worklog_entries
+		WHERE codebase_id = $1 AND profile_name = $2 AND entry_type = 'week_summary'
+			AND entry_date >= $3 AND entry_date <= $4
+		ORDER BY entry_date`,
+		codebaseID, profile, startDate, endDate)
+	if err != nil {
+		return nil, fmt.Errorf("query weekly summaries in range: %w", err)
+	}
+	defer rows.Close()
+
+	var entries []WorklogEntry
+	for rows.Next() {
+		e := WorklogEntry{}
+		var branchID, branchName sql.NullString
+		var createdAt sql.NullTime
+		if err := rows.Scan(&e.ID, &e.CodebaseID, &e.ProfileName, &e.EntryDate, &branchID, &branchName,
+			&e.EntryType, &e.GroupBy, &e.Content, &e.CommitCount, &e.Additions, &e.Deletions,
+			&e.CommitHashes, &createdAt); err != nil {
+			return nil, fmt.Errorf("scan worklog entry row: %w", err)
+		}
+		e.BranchID = branchID.String
+		e.BranchName = branchName.String
+		if createdAt.Valid {
+			e.CreatedAt = createdAt.Time
+		}
+		entries = append(entries, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate worklog entries: %w", err)
+	}
+	return entries, nil
+}
+
 // GetMonthlySummary retrieves a monthly summary worklog entry.
 func (r *SQLRepository) GetMonthlySummary(ctx context.Context, codebaseID, profile string, monthStart time.Time) (*WorklogEntry, error) {
 	row := r.db.QueryRowContext(ctx, `
@@ -1194,6 +1250,15 @@ func (r *SQLRepository) GetMonthlySummary(ctx context.Context, codebaseID, profi
 		WHERE codebase_id = $1 AND profile_name = $2 AND entry_date = $3 AND entry_type = 'month_summary'`,
 		codebaseID, profile, monthStart)
 	return r.scanWorklogEntry(row)
+}
+
+// DeleteWorklogEntry deletes a specific worklog entry by its ID.
+func (r *SQLRepository) DeleteWorklogEntry(ctx context.Context, entryID string) error {
+	_, err := r.db.ExecContext(ctx, `DELETE FROM worklog_entries WHERE id = $1`, entryID)
+	if err != nil {
+		return fmt.Errorf("delete worklog entry %s: %w", entryID, err)
+	}
+	return nil
 }
 
 // DeleteWorklogEntriesByCodebase deletes all worklog entries for a codebase.

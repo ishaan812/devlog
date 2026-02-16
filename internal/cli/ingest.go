@@ -287,6 +287,7 @@ func generateWorklogAfterIngest(absPath string, cfg *config.Config) error {
 		profileName: cfg.GetActiveProfileName(),
 		loc:         loc,
 		noCache:     false,
+		ChangedDailySummaries: make(map[time.Time]bool),
 	}
 
 	groups := groupByDate(commits, loc)

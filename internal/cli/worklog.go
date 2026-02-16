@@ -185,11 +185,12 @@ func runWorklog(cmd *cobra.Command, args []string) error {
 	var cache *worklogCacheContext
 	if codebase != nil {
 		cache = &worklogCacheContext{
-			dbRepo:      dbRepo,
-			codebaseID:  codebase.ID,
-			profileName: cfg.GetActiveProfileName(),
-			loc:         loc,
-			noCache:     worklogNoCache,
+			dbRepo:                dbRepo,
+			codebaseID:            codebase.ID,
+			profileName:           cfg.GetActiveProfileName(),
+			loc:                   loc,
+			noCache:               worklogNoCache,
+			ChangedDailySummaries: make(map[time.Time]bool),
 		}
 	}
 
@@ -214,6 +215,16 @@ func runWorklog(cmd *cobra.Command, args []string) error {
 				fmt.Printf("Warning: failed to generate weekly summaries: %v\n", err)
 			} else {
 				successColor.Println("  ✓ Weekly summaries generated")
+			}
+		}
+
+		// Generate monthly summaries if the date range is long enough
+		if worklogDays > 28 && cache != nil && !worklogNoLLM {
+			successColor.Println("\n  Generating monthly summaries...")
+			if err := generateMonthlySummaries(ctx, cache, client, projectContext, codebaseContext, loc, style, startDate, endDate); err != nil {
+				fmt.Printf("Warning: failed to generate monthly summaries: %v\n", err)
+			} else {
+				successColor.Println("  ✓ Monthly summaries generated")
 			}
 		}
 	}
@@ -396,11 +407,12 @@ func buildAggregateStats(commits []commitData) string {
 }
 
 type worklogCacheContext struct {
-	dbRepo      *db.SQLRepository
-	codebaseID  string
-	profileName string
-	loc         *time.Location
-	noCache     bool
+	dbRepo                *db.SQLRepository
+	codebaseID            string
+	profileName           string
+	loc                   *time.Location
+	noCache               bool
+	ChangedDailySummaries map[time.Time]bool
 }
 
 func computeCommitHashes(commits []commitData) string {
@@ -644,18 +656,23 @@ func generateWorklogMarkdown(groups []dayGroup, client llm.Client, cfg *config.C
 				}
 				storeCacheEntry(ctx, cache, group.Date, branchID, bName, "day_updates", "date", commits, content)
 			} else {
-				content, cached, err = getCachedOrGenerate(
-					ctx, cache, group.Date, branchID, bName,
-					"day_updates", "date", commits,
-					func() (string, error) {
-						return buildDayBranchSection(commits, client, projectContext, branchCtx, loc, style)
-					},
-				)
-				if err != nil {
-					return "", fmt.Errorf("failed to generate day/branch updates: %w", err)
-				}
+									content, cached, err = getCachedOrGenerate(
+										ctx, cache, group.Date, branchID, bName,
+										"day_updates", "date", commits,
+										func() (string, error) {
+											return buildDayBranchSection(commits, client, projectContext, branchCtx, loc, style)
+										},
+									)
+									if err != nil {
+										return "", fmt.Errorf("failed to generate day/branch updates: %w", err)
+									}
+									if !cached && cache != nil {
+										if cache.ChangedDailySummaries == nil {
+											cache.ChangedDailySummaries = make(map[time.Time]bool)
+										}
+										cache.ChangedDailySummaries[group.Date.In(loc).Truncate(24*time.Hour)] = true
+									}
 			}
-
 			if cached {
 				cacheColor.Printf("  %s [%s]: cached\n", group.Date.In(loc).Format("Jan 2"), bName)
 			} else {
@@ -1052,13 +1069,31 @@ func generateWeeklySummaries(ctx context.Context, cache *worklogCacheContext, gr
 			continue
 		}
 
+		// Check if any daily summaries within this week have changed
+		dailySummariesChanged := false
+		if cache.ChangedDailySummaries != nil {
+			for _, dayGroup := range weekDays {
+				if cache.ChangedDailySummaries[dayGroup.Date.In(loc).Truncate(24*time.Hour)] {
+					dailySummariesChanged = true
+					break
+				}
+			}
+		}
+
 		// Check if we already have a cached weekly summary
 		existing, err := cache.dbRepo.GetWeeklySummary(ctx, cache.codebaseID, cache.profileName, weekStart)
 		currentHashes := computeCommitHashes(weekCommits)
-		
-		// Skip if cache is valid
-		if err == nil && existing != nil && existing.CommitHashes == currentHashes && !cache.noCache {
+
+		// Skip if cache is valid and no daily summaries changed
+		if err == nil && existing != nil && existing.CommitHashes == currentHashes && !cache.noCache && !dailySummariesChanged {
 			continue
+		}
+
+		// If the cache is being busted, clear the old entry first
+		if existing != nil && (cache.noCache || dailySummariesChanged) {
+			if err := cache.dbRepo.DeleteWorklogEntry(ctx, existing.ID); err != nil {
+				VerboseLog("Warning: failed to delete old weekly summary: %v", err)
+			}
 		}
 
 		// Generate weekly summary
@@ -1102,6 +1137,161 @@ func generateWeeklySummaries(ctx context.Context, cache *worklogCacheContext, gr
 		if err := cache.dbRepo.UpsertWorklogEntry(ctx, weekEntry); err != nil {
 			return fmt.Errorf("failed to cache weekly summary: %w", err)
 		}
+	}
+
+	return nil
+}
+
+// getMonthStart returns the first day of the month for a given date
+func getMonthStart(t time.Time, loc *time.Location) time.Time {
+	localTime := t.In(loc)
+	return time.Date(localTime.Year(), localTime.Month(), 1, 0, 0, 0, 0, loc)
+}
+
+// generateMonthlySummaries generates and caches monthly summary entries
+func generateMonthlySummaries(ctx context.Context, cache *worklogCacheContext, client llm.Client, projectContext, codebaseContext string, loc *time.Location, style string, startDate, endDate time.Time) error {
+	if cache == nil || cache.dbRepo == nil {
+		return nil
+	}
+
+	currentMonth := getMonthStart(startDate, loc)
+	endMonth := getMonthStart(endDate, loc)
+
+	for !currentMonth.After(endMonth) {
+		monthStart := currentMonth
+		monthEnd := monthStart.AddDate(0, 1, -1)
+
+		weeklySummaries, err := cache.dbRepo.GetWeeklySummariesInRange(ctx, cache.codebaseID, cache.profileName, monthStart, monthEnd)
+		if err != nil {
+			return fmt.Errorf("failed to get weekly summaries for monthly generation: %w", err)
+		}
+		if len(weeklySummaries) == 0 {
+			currentMonth = currentMonth.AddDate(0, 1, 0)
+			continue
+		}
+
+		// Check if any daily summaries within this month have changed.
+		dailySummariesChanged := false
+		if cache.ChangedDailySummaries != nil {
+			for date := monthStart; !date.After(monthEnd); date = date.AddDate(0, 0, 1) {
+				if cache.ChangedDailySummaries[date.In(loc).Truncate(24*time.Hour)] {
+					dailySummariesChanged = true
+					break
+				}
+			}
+		}
+
+		// Check if we already have a cached monthly summary.
+		existing, err := cache.dbRepo.GetMonthlySummary(ctx, cache.codebaseID, cache.profileName, monthStart)
+
+		// For monthly summaries, recompute the overall commit hashes from weekly summaries.
+		var allWeeklyCommitHashes []string
+		for _, ws := range weeklySummaries {
+			allWeeklyCommitHashes = append(allWeeklyCommitHashes, strings.Split(ws.CommitHashes, ",")...)
+		}
+		sort.Strings(allWeeklyCommitHashes)
+		currentHashes := strings.Join(allWeeklyCommitHashes, ",")
+
+		// Skip if cache is valid and no daily summaries changed.
+		if err == nil && existing != nil && existing.CommitHashes == currentHashes && !cache.noCache && !dailySummariesChanged {
+			currentMonth = currentMonth.AddDate(0, 1, 0)
+			continue
+		}
+
+		// If the cache is being busted, clear the old entry first.
+		if existing != nil && (cache.noCache || dailySummariesChanged) {
+			if err := cache.dbRepo.DeleteWorklogEntry(ctx, existing.ID); err != nil {
+				VerboseLog("Warning: failed to delete old monthly summary: %v", err)
+			}
+		}
+
+		var summaryTexts []string
+		// Re-fetch weekly summaries to ensure we have the most up-to-date content.
+		// This is crucial because generateWeeklySummaries might have just updated them.
+		updatedWeeklySummaries, err := cache.dbRepo.GetWeeklySummariesInRange(ctx, cache.codebaseID, cache.profileName, monthStart, monthEnd)
+		if err != nil {
+			return fmt.Errorf("failed to re-fetch weekly summaries for monthly generation: %w", err)
+		}
+		for _, summary := range updatedWeeklySummaries {
+			summaryTexts = append(summaryTexts, summary.Content)
+		}
+
+		// Aggregate all commits for accurate stats calculation for the month.
+		monthCommits, err := cache.dbRepo.GetCommitsBetweenDates(ctx, cache.codebaseID, monthStart, monthEnd)
+		if err != nil {
+			return fmt.Errorf("failed to get commits for monthly summary stats: %w", err)
+		}
+		monthCommitData := make([]commitData, 0, len(monthCommits))
+		for _, c := range monthCommits {
+			cd := commitData{
+				Hash:        c.Hash,
+				Message:     c.Message,
+				Summary:     c.Summary,
+				AuthorEmail: c.AuthorEmail,
+				CommittedAt: c.CommittedAt,
+			}
+			switch v := c.Stats["additions"].(type) {
+			case int:
+				cd.Additions = v
+			case int32:
+				cd.Additions = int(v)
+			case int64:
+				cd.Additions = int(v)
+			case float64:
+				cd.Additions = int(v)
+			}
+			switch v := c.Stats["deletions"].(type) {
+			case int:
+				cd.Deletions = v
+			case int32:
+				cd.Deletions = int(v)
+			case int64:
+				cd.Deletions = int(v)
+			case float64:
+				cd.Deletions = int(v)
+			}
+			monthCommitData = append(monthCommitData, cd)
+		}
+		monthStats := buildAggregateStats(monthCommitData)
+
+		// Generate monthly summary.
+		var prompt string
+		if style == "technical" {
+			prompt = prompts.BuildWorklogMonthSummaryPrompt(projectContext, codebaseContext, strings.Join(summaryTexts, "\n\n"), monthStats)
+		} else {
+			prompt = prompts.BuildWorklogMonthSummaryPromptNonTechnical(projectContext, codebaseContext, strings.Join(summaryTexts, "\n\n"), monthStats)
+		}
+
+		timeoutCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
+		content, err := client.Complete(timeoutCtx, prompt)
+		cancel()
+
+		if err != nil {
+			return fmt.Errorf("failed to generate monthly summary for %s: %w", monthStart.Format("January 2006"), err)
+		}
+
+		// Store the monthly summary.
+		adds, dels := computeCommitStats(monthCommitData)
+		monthEntry := &db.WorklogEntry{
+			ID:           fmt.Sprintf("month-%s-%s", cache.codebaseID, monthStart.Format("2006-01")),
+			CodebaseID:   cache.codebaseID,
+			ProfileName:  cache.profileName,
+			EntryDate:    monthStart,
+			EntryType:    "month_summary",
+			GroupBy:      "date",
+			Content:      content,
+			CommitCount:  len(monthCommits),
+			Additions:    adds,
+			Deletions:    dels,
+			CommitHashes: currentHashes,
+			CreatedAt:    time.Now(),
+		}
+
+		if err := cache.dbRepo.UpsertWorklogEntry(ctx, monthEntry); err != nil {
+			return fmt.Errorf("failed to cache monthly summary: %w", err)
+		}
+
+		currentMonth = currentMonth.AddDate(0, 1, 0)
 	}
 
 	return nil
