@@ -1,8 +1,10 @@
 package git
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -27,6 +29,17 @@ type BranchInfo struct {
 	IsDefault bool
 	IsRemote  bool
 }
+
+type commitState struct {
+	visiting bool
+	hasUser  bool
+	done     bool
+}
+
+var (
+	errStopTraversal     = errors.New("stop traversal")
+	githubNoReplyEmailRE = regexp.MustCompile(`^(?:\d+\+)?([^@]+)@users\.noreply\.github\.com$`)
+)
 
 func OpenRepo(path string) (*Repository, error) {
 	absPath, err := filepath.Abs(path)
@@ -366,4 +379,109 @@ func ParseBranchName(name string) string {
 	name = strings.TrimPrefix(name, "refs/heads/")
 	name = strings.TrimPrefix(name, "refs/remotes/origin/")
 	return name
+}
+
+// FindBranchesWithUserCommits returns local branches that contain at least one
+// commit authored by the provided user identity.
+//
+// This uses a memoized commit-graph traversal so shared history across branches
+// is analyzed once, even when many branches exist.
+func (r *Repository) FindBranchesWithUserCommits(userEmail, githubUsername string) ([]string, error) {
+	if strings.TrimSpace(userEmail) == "" && strings.TrimSpace(githubUsername) == "" {
+		return nil, nil
+	}
+
+	branches, err := r.ListBranches()
+	if err != nil {
+		return nil, err
+	}
+	if len(branches) == 0 {
+		return nil, nil
+	}
+
+	commitMemo := make(map[string]*commitState)
+	matching := make([]string, 0, len(branches))
+
+	for _, branch := range branches {
+		contains, err := r.branchContainsUserCommit(branch.Name, userEmail, githubUsername, commitMemo)
+		if err != nil {
+			return nil, err
+		}
+		if contains {
+			matching = append(matching, branch.Name)
+		}
+	}
+
+	return matching, nil
+}
+
+func (r *Repository) branchContainsUserCommit(branchName, userEmail, githubUsername string, memo map[string]*commitState) (bool, error) {
+	hash, err := r.GetBranchHash(branchName)
+	if err != nil {
+		return false, err
+	}
+	return r.commitContainsUserCommit(plumbing.NewHash(hash), userEmail, githubUsername, memo)
+}
+
+func (r *Repository) commitContainsUserCommit(hash plumbing.Hash, userEmail, githubUsername string, memo map[string]*commitState) (bool, error) {
+	key := hash.String()
+	if state, ok := memo[key]; ok {
+		if state.done {
+			return state.hasUser, nil
+		}
+		if state.visiting {
+			// Cycle guard (should not happen in git DAG, but safe).
+			return false, nil
+		}
+	}
+
+	state := memo[key]
+	if state == nil {
+		state = &commitState{}
+		memo[key] = state
+	}
+	state.visiting = true
+
+	commit, err := r.repo.CommitObject(hash)
+	if err != nil {
+		return false, err
+	}
+
+	if isUserCommit(commit.Author.Email, userEmail, githubUsername) {
+		state.hasUser = true
+		state.done = true
+		state.visiting = false
+		return true, nil
+	}
+
+	parentIter := commit.Parents()
+	err = parentIter.ForEach(func(parent *object.Commit) error {
+		parentHasUser, err := r.commitContainsUserCommit(parent.Hash, userEmail, githubUsername, memo)
+		if err != nil {
+			return err
+		}
+		if parentHasUser {
+			state.hasUser = true
+			return errStopTraversal
+		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, errStopTraversal) {
+		return false, err
+	}
+
+	state.done = true
+	state.visiting = false
+	return state.hasUser, nil
+}
+
+func isUserCommit(authorEmail, userEmail, githubUsername string) bool {
+	if userEmail != "" && strings.EqualFold(authorEmail, userEmail) {
+		return true
+	}
+	if githubUsername == "" {
+		return false
+	}
+	matches := githubNoReplyEmailRE.FindStringSubmatch(strings.ToLower(authorEmail))
+	return len(matches) >= 2 && strings.EqualFold(matches[1], githubUsername)
 }

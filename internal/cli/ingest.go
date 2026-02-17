@@ -198,6 +198,13 @@ type BranchSelection struct {
 	SelectedBranches []string
 }
 
+type branchSelectionMode string
+
+const (
+	branchSelectionModeAutomatic branchSelectionMode = "automatic"
+	branchSelectionModeManual    branchSelectionMode = "manual"
+)
+
 func generateWorklogAfterIngest(absPath string, cfg *config.Config) error {
 	ctx := context.Background()
 	titleColor := color.New(color.FgHiCyan, color.Bold)
@@ -282,11 +289,11 @@ func generateWorklogAfterIngest(absPath string, cfg *config.Config) error {
 	}
 
 	cache := &worklogCacheContext{
-		dbRepo:      dbRepo,
-		codebaseID:  codebase.ID,
-		profileName: cfg.GetActiveProfileName(),
-		loc:         loc,
-		noCache:     false,
+		dbRepo:                dbRepo,
+		codebaseID:            codebase.ID,
+		profileName:           cfg.GetActiveProfileName(),
+		loc:                   loc,
+		noCache:               false,
 		ChangedDailySummaries: make(map[time.Time]bool),
 	}
 
@@ -390,7 +397,7 @@ func ingestGitHistory(absPath string, cfg *config.Config) error {
 		return nil
 	}
 
-	selection, err := selectBranches(allBranches, codebase.DefaultBranch, cfg, absPath)
+	selection, err := selectBranches(allBranches, codebase.DefaultBranch, cfg, absPath, repo, userEmail, githubUsername)
 	if err != nil {
 		return fmt.Errorf("branch selection failed: %w", err)
 	}
@@ -505,7 +512,7 @@ func ingestGitHistory(absPath string, cfg *config.Config) error {
 	return nil
 }
 
-func selectBranches(branches []git.BranchInfo, detectedDefault string, cfg *config.Config, repoPath string) (*BranchSelection, error) {
+func selectBranches(branches []git.BranchInfo, detectedDefault string, cfg *config.Config, repoPath string, repo *git.Repository, userEmail, githubUsername string) (*BranchSelection, error) {
 	dimColor := color.New(color.FgHiBlack)
 	infoColor := color.New(color.FgCyan)
 	promptColor := color.New(color.FgYellow)
@@ -556,7 +563,7 @@ func selectBranches(branches []git.BranchInfo, detectedDefault string, cfg *conf
 			dimColor.Printf("    Branches: %s\n", strings.Join(validBranches, ", "))
 			fmt.Println()
 
-			promptColor.Printf("  [Enter] Use current selection  [m] Modify  [r] Reselect all: ")
+			promptColor.Printf("  [Enter] Use current selection  [a] Auto  [m] Manual modify  [r] Reselect manual: ")
 
 			var input string
 			fmt.Scanln(&input)
@@ -570,6 +577,14 @@ func selectBranches(branches []git.BranchInfo, detectedDefault string, cfg *conf
 					SelectedBranches: validBranches,
 				}, nil
 
+			case "a", "auto", "automatic":
+				fmt.Println()
+				autoSelection, err := runAutomaticBranchSelection(branches, detectedDefault, repo, userEmail, githubUsername, infoColor, dimColor)
+				if err != nil {
+					return nil, err
+				}
+				return saveBranchSelectionRaw(cfg, profileName, repoPath, autoSelection.MainBranch, autoSelection.SelectedBranches, dimColor), nil
+
 			case "m", "modify":
 				fmt.Println()
 				selection, err := tui.RunBranchSelectionWithPreselected(branches, saved.MainBranch, validBranches)
@@ -581,12 +596,17 @@ func selectBranches(branches []git.BranchInfo, detectedDefault string, cfg *conf
 			case "r", "reselect":
 			default:
 				fmt.Println()
-				return &BranchSelection{
-					MainBranch:       saved.MainBranch,
-					SelectedBranches: validBranches,
-				}, nil
 			}
 		}
+	}
+
+	mode := askBranchSelectionMode(promptColor)
+	if mode == branchSelectionModeAutomatic {
+		autoSelection, err := runAutomaticBranchSelection(branches, detectedDefault, repo, userEmail, githubUsername, infoColor, dimColor)
+		if err != nil {
+			return nil, err
+		}
+		return saveBranchSelectionRaw(cfg, profileName, repoPath, autoSelection.MainBranch, autoSelection.SelectedBranches, dimColor), nil
 	}
 
 	fmt.Println()
@@ -596,6 +616,91 @@ func selectBranches(branches []git.BranchInfo, detectedDefault string, cfg *conf
 	}
 
 	return saveBranchSelection(cfg, profileName, repoPath, selection, dimColor)
+}
+
+func askBranchSelectionMode(promptColor *color.Color) branchSelectionMode {
+	fmt.Println()
+	promptColor.Printf("  Branch selection mode: [a] Automatic (commits by you)  [m] Manual selection [default: a]: ")
+
+	var input string
+	fmt.Scanln(&input)
+	input = strings.ToLower(strings.TrimSpace(input))
+
+	switch input {
+	case "m", "manual":
+		return branchSelectionModeManual
+	default:
+		return branchSelectionModeAutomatic
+	}
+}
+
+func runAutomaticBranchSelection(branches []git.BranchInfo, detectedDefault string, repo *git.Repository, userEmail, githubUsername string, infoColor, dimColor *color.Color) (*BranchSelection, error) {
+	mainBranch := detectedDefault
+	for _, b := range branches {
+		if b.IsDefault {
+			mainBranch = b.Name
+			break
+		}
+	}
+
+	if strings.TrimSpace(userEmail) == "" && strings.TrimSpace(githubUsername) == "" {
+		dimColor.Println("  Automatic branch selection requires user email or GitHub username; falling back to main branch only.")
+		return &BranchSelection{
+			MainBranch:       mainBranch,
+			SelectedBranches: []string{mainBranch},
+		}, nil
+	}
+
+	autoBranches, err := repo.FindBranchesWithUserCommits(userEmail, githubUsername)
+	if err != nil {
+		return nil, fmt.Errorf("failed to detect branches with user commits: %w", err)
+	}
+
+	selectedSet := make(map[string]bool, len(autoBranches)+1)
+	for _, name := range autoBranches {
+		selectedSet[name] = true
+	}
+	selectedSet[mainBranch] = true
+
+	selectedBranches := make([]string, 0, len(branches))
+	for _, b := range branches {
+		if selectedSet[b.Name] {
+			selectedBranches = append(selectedBranches, b.Name)
+		}
+	}
+
+	if len(selectedBranches) == 0 {
+		selectedBranches = []string{mainBranch}
+	}
+
+	infoColor.Printf("  Automatic branch selection found %d branch(es) with commits by you.\n", len(autoBranches))
+	dimColor.Printf("  Selected: %s\n", strings.Join(selectedBranches, ", "))
+
+	return &BranchSelection{
+		MainBranch:       mainBranch,
+		SelectedBranches: selectedBranches,
+	}, nil
+}
+
+func saveBranchSelectionRaw(cfg *config.Config, profileName, repoPath, mainBranch string, selectedBranches []string, dimColor *color.Color) *BranchSelection {
+	fmt.Println()
+	dimColor.Printf("  Selected %d branch(es): %s\n", len(selectedBranches), strings.Join(selectedBranches, ", "))
+
+	if err := cfg.SaveBranchSelection(profileName, repoPath, mainBranch, selectedBranches); err != nil {
+		VerboseLog("Warning: failed to save branch selection: %v", err)
+	} else {
+		if err := cfg.Save(); err != nil {
+			VerboseLog("Warning: failed to save config: %v", err)
+		} else {
+			dimColor.Printf("  (branch selection saved)\n")
+		}
+	}
+	fmt.Println()
+
+	return &BranchSelection{
+		MainBranch:       mainBranch,
+		SelectedBranches: selectedBranches,
+	}
 }
 
 func saveBranchSelection(cfg *config.Config, profileName, repoPath string, selection *tui.BranchSelection, dimColor *color.Color) (*BranchSelection, error) {
