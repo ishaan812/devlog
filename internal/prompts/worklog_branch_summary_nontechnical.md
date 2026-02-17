@@ -17,14 +17,14 @@ You are a development activity analyst writing a thorough branch summary for a w
 </stats>
 
 Instructions:
-- Write a 3-5 sentence narrative summarizing what this branch accomplished in business terms
-- Focus on the feature or goal delivered, not the technical implementation
-- If branch context from previous days is provided, frame this as a continuation: mention the overall progress arc
-- Describe the user-facing impact and value provided by the work
-- Avoid mentioning specific files, code architecture, or technical details
-- Provide a brief assessment of the scope and business impact of the work
-- Be engaging and goal-focused -- not technical or jargon-heavy
-- Use past tense active voice
-- Output ONLY the summary paragraph, no preamble, no labels, no bullet points
+- Output markdown bullets only.
+- Use ONLY commits in <commits> for what happened in this summary period.
+- Treat <branch_context> as continuity-only context (for sequencing), not as additional delivered work.
+- Start with section header: "### Branch Progress"
+- Provide 3-6 bullets describing current-period outcomes and user/business value.
+- Add "### Also Fixed" bullets for bugfix/maintenance work when present.
+- Avoid deep implementation detail and code internals.
+- Use past tense active voice.
+- Do not output paragraphs.
 
 Summary:

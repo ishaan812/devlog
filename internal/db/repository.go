@@ -7,6 +7,12 @@ import (
 	"time"
 )
 
+func normalizeDateOnly(t time.Time) time.Time {
+	// Persist date-only values using UTC with the same calendar components
+	// to avoid timezone-driven day shifts when writing/reading DATE columns.
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+}
+
 // Repository defines the interface for all database operations,
 // grouped by functionality for clarity.
 type Repository interface {
@@ -982,6 +988,7 @@ func (r *SQLRepository) GetCodebaseStats(ctx context.Context, codebaseID string)
 
 // UpsertWorklogEntry creates or updates a worklog entry.
 func (r *SQLRepository) UpsertWorklogEntry(ctx context.Context, entry *WorklogEntry) error {
+	entryDate := normalizeDateOnly(entry.EntryDate)
 	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO worklog_entries (id, codebase_id, profile_name, entry_date, branch_id, branch_name,
 			entry_type, group_by, content, commit_count, additions, deletions, commit_hashes, created_at)
@@ -994,7 +1001,7 @@ func (r *SQLRepository) UpsertWorklogEntry(ctx context.Context, entry *WorklogEn
 			deletions = EXCLUDED.deletions,
 			commit_hashes = EXCLUDED.commit_hashes,
 			created_at = EXCLUDED.created_at`,
-		entry.ID, entry.CodebaseID, entry.ProfileName, entry.EntryDate, NullString(entry.BranchID),
+		entry.ID, entry.CodebaseID, entry.ProfileName, entryDate, NullString(entry.BranchID),
 		NullString(entry.BranchName), entry.EntryType, entry.GroupBy, entry.Content,
 		entry.CommitCount, entry.Additions, entry.Deletions, entry.CommitHashes, entry.CreatedAt)
 	if err != nil {
@@ -1005,6 +1012,7 @@ func (r *SQLRepository) UpsertWorklogEntry(ctx context.Context, entry *WorklogEn
 
 // GetWorklogEntry retrieves a single worklog entry for cache lookup.
 func (r *SQLRepository) GetWorklogEntry(ctx context.Context, codebaseID, profile string, date time.Time, branchID, entryType, groupBy string) (*WorklogEntry, error) {
+	date = normalizeDateOnly(date)
 	row := r.db.QueryRowContext(ctx, `
 		SELECT id, codebase_id, profile_name, entry_date, branch_id, branch_name,
 			entry_type, group_by, content, commit_count, additions, deletions, commit_hashes, created_at
@@ -1038,6 +1046,7 @@ func (r *SQLRepository) scanWorklogEntry(row *sql.Row) (*WorklogEntry, error) {
 
 // ListWorklogEntriesByDate retrieves all worklog entries for a specific date.
 func (r *SQLRepository) ListWorklogEntriesByDate(ctx context.Context, codebaseID, profile string, date time.Time) ([]WorklogEntry, error) {
+	date = normalizeDateOnly(date)
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, codebase_id, profile_name, entry_date, branch_id, branch_name,
 			entry_type, group_by, content, commit_count, additions, deletions, commit_hashes, created_at
@@ -1102,11 +1111,12 @@ func (r *SQLRepository) ListWorklogDates(ctx context.Context, codebaseID, profil
 
 // ListWorklogWeeks returns aggregated weekly stats for all weeks with cached entries.
 func (r *SQLRepository) ListWorklogWeeks(ctx context.Context, codebaseID, profile string) ([]WorklogWeekInfo, error) {
-	// Use Sunday as the start of the week
+	// Use Sunday as the start of the week to match worklog cache keys.
+	// DuckDB DATE_TRUNC('week', ...) is Monday-based, so shift by +1/-1 day.
 	rows, err := r.db.QueryContext(ctx, `
 		WITH weekly_data AS (
 			SELECT 
-				DATE_TRUNC('week', entry_date)::DATE as week_start,
+				(DATE_TRUNC('week', entry_date + INTERVAL '1 day') - INTERVAL '1 day')::DATE as week_start,
 				COUNT(DISTINCT entry_date) as date_count,
 				COUNT(*) as entry_count,
 				COALESCE(SUM(commit_count), 0) as total_commits,
@@ -1151,7 +1161,7 @@ func (r *SQLRepository) ListWorklogMonths(ctx context.Context, codebaseID, profi
 			SELECT 
 				DATE_TRUNC('month', entry_date)::DATE as month_start,
 				COUNT(DISTINCT entry_date) as date_count,
-				COUNT(DISTINCT DATE_TRUNC('week', entry_date)) as week_count,
+				COUNT(DISTINCT (DATE_TRUNC('week', entry_date + INTERVAL '1 day') - INTERVAL '1 day')::DATE) as week_count,
 				COUNT(*) as entry_count,
 				COALESCE(SUM(commit_count), 0) as total_commits,
 				COALESCE(SUM(additions), 0) as total_additions,
@@ -1191,6 +1201,7 @@ func (r *SQLRepository) ListWorklogMonths(ctx context.Context, codebaseID, profi
 
 // GetWeeklySummary retrieves a weekly summary worklog entry.
 func (r *SQLRepository) GetWeeklySummary(ctx context.Context, codebaseID, profile string, weekStart time.Time) (*WorklogEntry, error) {
+	weekStart = normalizeDateOnly(weekStart)
 	row := r.db.QueryRowContext(ctx, `
 		SELECT id, codebase_id, profile_name, entry_date, branch_id, branch_name, 
 			entry_type, group_by, content, commit_count, additions, deletions, 
@@ -1198,11 +1209,36 @@ func (r *SQLRepository) GetWeeklySummary(ctx context.Context, codebaseID, profil
 		FROM worklog_entries
 		WHERE codebase_id = $1 AND profile_name = $2 AND entry_date = $3 AND entry_type = 'week_summary'`,
 		codebaseID, profile, weekStart)
-	return r.scanWorklogEntry(row)
+	entry, err := r.scanWorklogEntry(row)
+	if err != nil || entry != nil {
+		return entry, err
+	}
+
+	// Backward-compat fallback for prior week-start mismatches (Sunday vs Monday).
+	for _, altStart := range []time.Time{weekStart.AddDate(0, 0, -1), weekStart.AddDate(0, 0, 1)} {
+		altRow := r.db.QueryRowContext(ctx, `
+			SELECT id, codebase_id, profile_name, entry_date, branch_id, branch_name,
+				entry_type, group_by, content, commit_count, additions, deletions,
+				commit_hashes, created_at
+			FROM worklog_entries
+			WHERE codebase_id = $1 AND profile_name = $2 AND entry_date = $3 AND entry_type = 'week_summary'`,
+			codebaseID, profile, altStart)
+		altEntry, altErr := r.scanWorklogEntry(altRow)
+		if altErr != nil {
+			return nil, altErr
+		}
+		if altEntry != nil {
+			return altEntry, nil
+		}
+	}
+
+	return nil, nil
 }
 
 // GetWeeklySummariesInRange retrieves all weekly summary worklog entries for a given date range.
 func (r *SQLRepository) GetWeeklySummariesInRange(ctx context.Context, codebaseID, profile string, startDate, endDate time.Time) ([]WorklogEntry, error) {
+	startDate = normalizeDateOnly(startDate)
+	endDate = normalizeDateOnly(endDate)
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, codebase_id, profile_name, entry_date, branch_id, branch_name,
 			entry_type, group_by, content, commit_count, additions, deletions,
@@ -1240,8 +1276,14 @@ func (r *SQLRepository) GetWeeklySummariesInRange(ctx context.Context, codebaseI
 	return entries, nil
 }
 
+// sameCalendarMonth returns true if a and b are in the same year and month.
+func sameCalendarMonth(a, b time.Time) bool {
+	return a.Year() == b.Year() && a.Month() == b.Month()
+}
+
 // GetMonthlySummary retrieves a monthly summary worklog entry.
 func (r *SQLRepository) GetMonthlySummary(ctx context.Context, codebaseID, profile string, monthStart time.Time) (*WorklogEntry, error) {
+	monthStart = normalizeDateOnly(monthStart)
 	row := r.db.QueryRowContext(ctx, `
 		SELECT id, codebase_id, profile_name, entry_date, branch_id, branch_name, 
 			entry_type, group_by, content, commit_count, additions, deletions, 
@@ -1249,7 +1291,36 @@ func (r *SQLRepository) GetMonthlySummary(ctx context.Context, codebaseID, profi
 		FROM worklog_entries
 		WHERE codebase_id = $1 AND profile_name = $2 AND entry_date = $3 AND entry_type = 'month_summary'`,
 		codebaseID, profile, monthStart)
-	return r.scanWorklogEntry(row)
+	entry, err := r.scanWorklogEntry(row)
+	if err != nil {
+		return nil, err
+	}
+	if entry != nil {
+		return entry, nil
+	}
+
+	// Fallback: resolve by month bucket for legacy day-shifted rows. NEVER return a row
+	// from a different calendar month (e.g. -1 day fallback for Feb 1 must not return Jan 31's row).
+	fallbackRow := r.db.QueryRowContext(ctx, `
+		SELECT id, codebase_id, profile_name, entry_date, branch_id, branch_name,
+			entry_type, group_by, content, commit_count, additions, deletions,
+			commit_hashes, created_at
+		FROM worklog_entries
+		WHERE codebase_id = $1 AND profile_name = $2 AND entry_type = 'month_summary'
+			AND EXTRACT(YEAR FROM entry_date) = EXTRACT(YEAR FROM $3::DATE)
+			AND EXTRACT(MONTH FROM entry_date) = EXTRACT(MONTH FROM $3::DATE)
+		ORDER BY created_at DESC
+		LIMIT 1`,
+		codebaseID, profile, monthStart)
+	fallbackEntry, fallbackErr := r.scanWorklogEntry(fallbackRow)
+	if fallbackErr != nil || fallbackEntry == nil {
+		return fallbackEntry, fallbackErr
+	}
+	// Sanity check: ensure returned row is same calendar month.
+	if sameCalendarMonth(fallbackEntry.EntryDate, monthStart) {
+		return fallbackEntry, nil
+	}
+	return nil, nil
 }
 
 // DeleteWorklogEntry deletes a specific worklog entry by its ID.

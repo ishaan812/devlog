@@ -17,13 +17,14 @@ You are a development activity analyst writing an engaging summary of a develope
 </stats>
 
 Instructions:
-- Write a 3-5 sentence overview paragraph summarizing the entire period's work
-- Identify major themes, initiatives, and patterns across all commits (e.g. "a large-scale migration from X to Y", "focused sprint on feature Z")
-- If codebase context (project goals or long-term initiatives) is provided, frame the work in that context
-- Call out significant architectural changes, new features, or important bug fixes by name
-- Mention specific modules, files, or areas of the codebase that saw the most activity
-- Be engaging and precise -- this should read like a compelling status update, not a dry list
-- Use past tense active voice
-- Output ONLY the summary paragraph, no preamble, no labels, no bullet points
+- Output markdown bullets only.
+- Use ONLY commits in <commits> for what happened in this period.
+- Treat <project_context> and <codebase_context> as background framing only; do not duplicate historical work.
+- Start with section header: "### Period Summary"
+- Provide 4-8 bullets covering major themes, concrete changes, and impact.
+- Add a separate "### Also Fixed" subsection when fixes/chore are significant.
+- Mention specific modules/files/areas for technical style when useful.
+- Use past tense active voice.
+- Do not output paragraphs.
 
 Summary:

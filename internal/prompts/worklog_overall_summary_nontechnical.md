@@ -17,15 +17,14 @@ You are a development activity analyst writing an engaging, high-level summary o
 </stats>
 
 Instructions:
-- Write a 3-5 sentence overview paragraph summarizing the entire period's work in non-technical terms
-- Focus on business goals, features delivered, and user-facing improvements rather than implementation details
-- If codebase context (project goals or long-term initiatives) is provided, frame the work in that context
-- Describe WHAT was accomplished and WHY, not HOW it was done technically
-- Separately note any bug fixes or maintenance work briefly (e.g., "Also resolved several bugs including...")
-- Avoid mentioning specific files, code paths, function names, or technical architecture details
-- Use language that a project manager, product owner, or stakeholder would understand
-- Be engaging and outcome-focused -- emphasize impact and value delivered
-- Use past tense active voice
-- Output ONLY the summary paragraph, no preamble, no labels, no bullet points
+- Output markdown bullets only.
+- Use ONLY commits in <commits> for what happened in this period.
+- Treat <project_context> and <codebase_context> as continuity/background only; do not duplicate older work as current-period output.
+- Start with section header: "### Period Summary"
+- Provide 4-8 bullets focused on delivered outcomes and user/business impact.
+- Add "### Also Fixed" bullets when relevant.
+- Avoid technical internals and low-level code details.
+- Use past tense active voice.
+- Do not output paragraphs.
 
 Summary:

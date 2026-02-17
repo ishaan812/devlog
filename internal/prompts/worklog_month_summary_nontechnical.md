@@ -8,6 +8,10 @@ You are a development activity analyst writing a high-level monthly summary of a
 %s
 </codebase_context>
 
+<period_context>
+%s
+</period_context>
+
 <weekly_summaries>
 %s
 </weekly_summaries>
@@ -17,17 +21,20 @@ You are a development activity analyst writing a high-level monthly summary of a
 </stats>
 
 Instructions:
-- Write a comprehensive monthly summary that synthesizes weekly progress into a strategic overview
-- Focus on business value delivered, features shipped, and user-facing improvements
-- Organize by major themes, initiatives, or project areas completed during the month
-- Highlight significant achievements and business impact
-- Show the evolution of work over the month - how did priorities shift toward business goals?
-- Quantify impact where possible (e.g., "delivered 3 new user features", "improved system reliability")
-- Avoid mentioning specific files, code paths, function names, or technical architecture details
-- Use language that executives, stakeholders, or non-technical team members would understand
-- Use markdown with clear section headers (e.g., "### Major Achievements", "### Business Impact")
-- Keep it high-level and outcome-focused - emphasize value and impact delivered
-- Output 3-5 paragraphs with markdown formatting
-- Use past tense active voice
+- Use ONLY this month's content from <weekly_summaries> for current-period changes.
+- Treat <project_context> and <codebase_context> as continuity/background only; do not duplicate old work.
+- Use <period_context> as authoritative for branch coverage and week mapping.
+- Output markdown bullets only, no paragraphs.
+- Start with:
+  - "### Monthly Highlights"
+  - "### Branches Active This Month"
+- In "Branches Active This Month", list every branch from <period_context> as bullets.
+- In "Monthly Highlights", provide 5-10 bullets focused on outcomes/business value.
+- For each highlight bullet, append week scope tags using the format "(Weeks: X, Y)" where X, Y are week labels.
+- Use ONLY the week labels listed in <period_context> under "VALID week labels for this month" - never use weeks from other months.
+- Ensure week tags reflect when updates for that feature happened.
+- Add "### Also Fixed" for bugfix/maintenance bullets when relevant.
+- Avoid low-level technical internals.
+- Use past tense active voice.
 
 Monthly Summary:

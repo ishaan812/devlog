@@ -102,18 +102,18 @@ func BuildCommitMessagePrompt(projectContext, diff string) string {
 	return fmt.Sprintf(strings.TrimSpace(commitMessagePromptTemplate), projectContext, diff)
 }
 
-func BuildWorklogWeekSummaryPrompt(projectContext, codebaseContext, dailySummaries, stats string) string {
-	return fmt.Sprintf(strings.TrimSpace(worklogWeekSummaryPromptTemplate), projectContext, codebaseContext, dailySummaries, stats)
+func BuildWorklogWeekSummaryPrompt(projectContext, codebaseContext, periodContext, dailySummaries, stats string) string {
+	return fmt.Sprintf(strings.TrimSpace(worklogWeekSummaryPromptTemplate), projectContext, codebaseContext, periodContext, dailySummaries, stats)
 }
 
-func BuildWorklogWeekSummaryPromptNonTechnical(projectContext, codebaseContext, dailySummaries, stats string) string {
-	return fmt.Sprintf(strings.TrimSpace(worklogWeekSummaryNonTechnicalPromptTemplate), projectContext, codebaseContext, dailySummaries, stats)
+func BuildWorklogWeekSummaryPromptNonTechnical(projectContext, codebaseContext, periodContext, dailySummaries, stats string) string {
+	return fmt.Sprintf(strings.TrimSpace(worklogWeekSummaryNonTechnicalPromptTemplate), projectContext, codebaseContext, periodContext, dailySummaries, stats)
 }
 
-func BuildWorklogMonthSummaryPrompt(projectContext, codebaseContext, weeklySummaries, stats string) string {
-	return fmt.Sprintf(strings.TrimSpace(worklogMonthSummaryPromptTemplate), projectContext, codebaseContext, weeklySummaries, stats)
+func BuildWorklogMonthSummaryPrompt(projectContext, codebaseContext, periodContext, weeklySummaries, stats string) string {
+	return fmt.Sprintf(strings.TrimSpace(worklogMonthSummaryPromptTemplate), projectContext, codebaseContext, periodContext, weeklySummaries, stats)
 }
 
-func BuildWorklogMonthSummaryPromptNonTechnical(projectContext, codebaseContext, weeklySummaries, stats string) string {
-	return fmt.Sprintf(strings.TrimSpace(worklogMonthSummaryNonTechnicalPromptTemplate), projectContext, codebaseContext, weeklySummaries, stats)
+func BuildWorklogMonthSummaryPromptNonTechnical(projectContext, codebaseContext, periodContext, weeklySummaries, stats string) string {
+	return fmt.Sprintf(strings.TrimSpace(worklogMonthSummaryNonTechnicalPromptTemplate), projectContext, codebaseContext, periodContext, weeklySummaries, stats)
 }

@@ -8,6 +8,10 @@ You are a development activity analyst writing a high-level weekly summary of a 
 %s
 </codebase_context>
 
+<period_context>
+%s
+</period_context>
+
 <daily_summaries>
 %s
 </daily_summaries>
@@ -17,15 +21,17 @@ You are a development activity analyst writing a high-level weekly summary of a 
 </stats>
 
 Instructions:
-- Write a comprehensive weekly summary that synthesizes the daily progress into a cohesive narrative
-- Organize the summary into key themes or areas of focus for the week
-- Highlight major milestones, completed features, or significant progress made during the week
-- Identify patterns in the work (e.g., "focused on authentication this week", "migrated from X to Y")
-- Note any blockers, challenges overcome, or pivots in direction
-- Include a brief forward-looking statement about what this week's work enables
-- Use markdown with clear section headers (e.g., "### Key Accomplishments", "### Focus Areas")
-- Keep it high-level and strategic - this is for tracking weekly progress, not daily minutiae
-- Output 2-4 paragraphs with markdown formatting
-- Use past tense active voice
+- Use ONLY this week's content from <daily_summaries> for current-period changes.
+- Treat <project_context> and <codebase_context> as continuity/background only; do not re-report old work.
+- Use <period_context> to include all branches active this week.
+- Output markdown bullets only, no paragraphs.
+- Start with:
+  - "### Weekly Highlights"
+  - "### Branches Active This Week"
+- In "Weekly Highlights", provide 4-8 bullets of concrete changes.
+- In "Branches Active This Week", list each active branch as a bullet.
+- For each highlight bullet, append a day-scope tag like "(Days: Mon, Tue)" based on available evidence.
+- Add "### Also Fixed" for bugfix/maintenance bullets when relevant.
+- Use past tense active voice.
 
 Weekly Summary:

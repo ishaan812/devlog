@@ -6,7 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/briandowns/spinner"
@@ -108,6 +110,40 @@ func init() {
 	ingestCmd.Flags().BoolVar(&ingestSkipWorklog, "skip-worklog", false, "Skip worklog generation prompt after ingestion")
 }
 
+// acquireIngestLock prevents concurrent ingest runs (which would conflict on DuckDB's exclusive lock).
+// Returns a release function to call when done, or an error if another ingest is running.
+func acquireIngestLock() (release func(), err error) {
+	lockPath := filepath.Join(config.GetDevlogDir(), "ingest.lock")
+	release = func() {
+		_ = os.Remove(lockPath)
+	}
+
+	data, err := os.ReadFile(lockPath)
+	if err == nil {
+		if pid, parseErr := strconv.Atoi(strings.TrimSpace(string(data))); parseErr == nil && processExists(pid) {
+			return nil, fmt.Errorf("another 'devlog ingest' is already running (PID %d).\n"+
+				"Kill it with: kill -9 %d\n"+
+				"If it won't die (stuck), run: pkill -9 -f 'devlog ingest'\n"+
+				"If still stuck, reboot your Mac to clear zombie processes",
+				pid, pid)
+		}
+		// Stale lock (process no longer exists)
+		_ = os.Remove(lockPath)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0755); err != nil {
+		return release, fmt.Errorf("create devlog dir: %w", err)
+	}
+	if err := os.WriteFile(lockPath, []byte(strconv.Itoa(os.Getpid())), 0644); err != nil {
+		return release, fmt.Errorf("acquire ingest lock: %w", err)
+	}
+	return release, nil
+}
+
+func processExists(pid int) bool {
+	return syscall.Kill(pid, 0) == nil
+}
+
 func runIngest(cmd *cobra.Command, args []string) error {
 	path := "."
 	if len(args) > 0 {
@@ -118,6 +154,12 @@ func runIngest(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("invalid path: %w", err)
 	}
+
+	release, err := acquireIngestLock()
+	if err != nil {
+		return err
+	}
+	defer release()
 
 	titleColor := color.New(color.FgHiCyan, color.Bold)
 	successColor := color.New(color.FgHiGreen)
@@ -301,6 +343,26 @@ func generateWorklogAfterIngest(absPath string, cfg *config.Config) error {
 	markdown, err := generateWorklogMarkdown(groups, client, cfg, loc, projectContext, codebaseContext, cache, style)
 	if err != nil {
 		return fmt.Errorf("failed to generate markdown: %w", err)
+	}
+
+	// Keep ingest-generated worklogs in parity with `devlog worklog` by
+	// persisting weekly/monthly summary cache entries when the date range spans
+	// enough time and LLM generation is enabled.
+	if client != nil {
+		if days > 7 {
+			dimColor.Println("  Generating weekly summaries...")
+			if err := generateWeeklySummaries(ctx, cache, groups, client, projectContext, codebaseContext, loc, style); err != nil {
+				dimColor.Printf("  Warning: weekly summary generation failed: %v\n", err)
+				VerboseLog("Warning: failed to generate weekly summaries after ingest: %v", err)
+			}
+		}
+		if days > 28 {
+			dimColor.Println("  Generating monthly summaries...")
+			if err := generateMonthlySummaries(ctx, cache, client, projectContext, codebaseContext, loc, style, startDate, endDate); err != nil {
+				dimColor.Printf("  Warning: monthly summary generation failed: %v\n", err)
+				VerboseLog("Warning: failed to generate monthly summaries after ingest: %v", err)
+			}
+		}
 	}
 
 	outputPath := fmt.Sprintf("worklog_%s_%s.md", startDate.Format("2006-01-02"), endDate.Format("2006-01-02"))

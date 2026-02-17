@@ -1100,11 +1100,12 @@ func generateWeeklySummaries(ctx context.Context, cache *worklogCacheContext, gr
 		stats := buildAggregateStats(weekCommits)
 		dailySummaryText := strings.Join(dailySummaries, "\n\n")
 
+		periodContext := buildWeeklyPeriodContext(weekCommits, weekDays, loc)
 		var prompt string
 		if style == "technical" {
-			prompt = prompts.BuildWorklogWeekSummaryPrompt(projectContext, codebaseContext, dailySummaryText, stats)
+			prompt = prompts.BuildWorklogWeekSummaryPrompt(projectContext, codebaseContext, periodContext, dailySummaryText, stats)
 		} else {
-			prompt = prompts.BuildWorklogWeekSummaryPromptNonTechnical(projectContext, codebaseContext, dailySummaryText, stats)
+			prompt = prompts.BuildWorklogWeekSummaryPromptNonTechnical(projectContext, codebaseContext, periodContext, dailySummaryText, stats)
 		}
 
 		timeoutCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
@@ -1112,7 +1113,8 @@ func generateWeeklySummaries(ctx context.Context, cache *worklogCacheContext, gr
 		cancel()
 
 		if err != nil {
-			return fmt.Errorf("failed to generate weekly summary for %s: %w", weekStart.Format("Jan 2"), err)
+			VerboseLog("Warning: LLM weekly summary failed for %s, using fallback: %v", weekStart.Format("Jan 2"), err)
+			content = buildFallbackWeeklySummary(weekStart, weekDays, weekCommits, loc)
 		}
 
 		// Store the weekly summary
@@ -1148,6 +1150,131 @@ func getMonthStart(t time.Time, loc *time.Location) time.Time {
 	return time.Date(localTime.Year(), localTime.Month(), 1, 0, 0, 0, 0, loc)
 }
 
+func weekLabelFromDate(t time.Time, loc *time.Location) string {
+	return getWeekStart(t, loc).Format("Jan 2")
+}
+
+func buildWeeklyPeriodContext(weekCommits []commitData, weekDays []dayGroup, loc *time.Location) string {
+	branchSet := make(map[string]bool)
+	dayToBranches := make(map[string]map[string]bool)
+	for _, c := range weekCommits {
+		branch := strings.TrimSpace(c.BranchName)
+		if branch == "" {
+			branch = "unknown"
+		}
+		branchSet[branch] = true
+
+		dayKey := c.CommittedAt.In(loc).Format("2006-01-02")
+		if dayToBranches[dayKey] == nil {
+			dayToBranches[dayKey] = make(map[string]bool)
+		}
+		dayToBranches[dayKey][branch] = true
+	}
+
+	branches := make([]string, 0, len(branchSet))
+	for b := range branchSet {
+		branches = append(branches, b)
+	}
+	sort.Strings(branches)
+
+	var sb strings.Builder
+	sb.WriteString("Active branches this week:\n")
+	for _, b := range branches {
+		sb.WriteString(fmt.Sprintf("- %s\n", b))
+	}
+
+	if len(weekDays) > 0 {
+		sb.WriteString("\nDay-to-branch activity map:\n")
+		for _, d := range weekDays {
+			dayKey := d.Date.In(loc).Format("2006-01-02")
+			branchMap := dayToBranches[dayKey]
+			dayBranches := make([]string, 0, len(branchMap))
+			for b := range branchMap {
+				dayBranches = append(dayBranches, b)
+			}
+			sort.Strings(dayBranches)
+			sb.WriteString(fmt.Sprintf("- %s: %s\n", d.Date.In(loc).Format("Mon Jan 2"), strings.Join(dayBranches, ", ")))
+		}
+	}
+
+	return sb.String()
+}
+
+func buildMonthlyPeriodContext(ctx context.Context, cache *worklogCacheContext, monthStart, monthEnd time.Time, loc *time.Location) string {
+	var sb strings.Builder
+
+	// Explicit week labels for THIS month only - LLM must use these for (Weeks: ...) citations.
+	weekSet := make(map[string]time.Time)
+	for d := monthStart; !d.After(monthEnd); d = d.AddDate(0, 0, 1) {
+		ws := getWeekStart(d, loc)
+		label := ws.In(loc).Format("Jan 2")
+		weekSet[label] = ws
+	}
+	validWeeks := make([]string, 0, len(weekSet))
+	for w := range weekSet {
+		validWeeks = append(validWeeks, w)
+	}
+	sort.Slice(validWeeks, func(i, j int) bool {
+		return weekSet[validWeeks[i]].Before(weekSet[validWeeks[j]])
+	})
+	sb.WriteString(fmt.Sprintf("VALID week labels for this month (use ONLY these in (Weeks: ...) - never use weeks from other months): %s\n\n",
+		strings.Join(validWeeks, ", ")))
+
+	if cache == nil || cache.dbRepo == nil {
+		return sb.String()
+	}
+
+	rows, err := cache.dbRepo.ExecuteQueryWithArgs(ctx, `
+		SELECT entry_date, branch_name
+		FROM worklog_entries
+		WHERE codebase_id = $1 AND profile_name = $2 AND entry_type = 'day_updates'
+			AND entry_date >= $3 AND entry_date <= $4
+			AND branch_name IS NOT NULL AND branch_name != ''
+		ORDER BY entry_date ASC, branch_name ASC`,
+		cache.codebaseID, cache.profileName, monthStart, monthEnd)
+	if err != nil {
+		VerboseLog("Warning: failed to load monthly branch activity context: %v", err)
+		return sb.String()
+	}
+
+	branchWeeks := make(map[string]map[string]bool)
+	for _, row := range rows {
+		branch, ok := row["branch_name"].(string)
+		if !ok || strings.TrimSpace(branch) == "" {
+			continue
+		}
+
+		entryDate, ok := row["entry_date"].(time.Time)
+		if !ok {
+			continue
+		}
+
+		week := weekLabelFromDate(entryDate, loc)
+		if branchWeeks[branch] == nil {
+			branchWeeks[branch] = make(map[string]bool)
+		}
+		branchWeeks[branch][week] = true
+	}
+
+	branches := make([]string, 0, len(branchWeeks))
+	for b := range branchWeeks {
+		branches = append(branches, b)
+	}
+	sort.Strings(branches)
+
+	sb.WriteString("Active branches this month (with weeks they had updates):\n")
+	for _, b := range branches {
+		weeks := make([]string, 0, len(branchWeeks[b]))
+		for w := range branchWeeks[b] {
+			weeks = append(weeks, w)
+		}
+		sort.Strings(weeks)
+		sb.WriteString(fmt.Sprintf("- %s: %s\n", b, strings.Join(weeks, ", ")))
+	}
+
+	return sb.String()
+}
+
 // generateMonthlySummaries generates and caches monthly summary entries
 func generateMonthlySummaries(ctx context.Context, cache *worklogCacheContext, client llm.Client, projectContext, codebaseContext string, loc *time.Location, style string, startDate, endDate time.Time) error {
 	if cache == nil || cache.dbRepo == nil {
@@ -1165,10 +1292,8 @@ func generateMonthlySummaries(ctx context.Context, cache *worklogCacheContext, c
 		if err != nil {
 			return fmt.Errorf("failed to get weekly summaries for monthly generation: %w", err)
 		}
-		if len(weeklySummaries) == 0 {
-			currentMonth = currentMonth.AddDate(0, 1, 0)
-			continue
-		}
+		// Monthly summaries should still be generated even when weekly summaries
+		// are missing, using month commits as fallback context.
 
 		// Check if any daily summaries within this month have changed.
 		dailySummariesChanged := false
@@ -1255,11 +1380,12 @@ func generateMonthlySummaries(ctx context.Context, cache *worklogCacheContext, c
 		monthStats := buildAggregateStats(monthCommitData)
 
 		// Generate monthly summary.
+		periodContext := buildMonthlyPeriodContext(ctx, cache, monthStart, monthEnd, loc)
 		var prompt string
 		if style == "technical" {
-			prompt = prompts.BuildWorklogMonthSummaryPrompt(projectContext, codebaseContext, strings.Join(summaryTexts, "\n\n"), monthStats)
+			prompt = prompts.BuildWorklogMonthSummaryPrompt(projectContext, codebaseContext, periodContext, strings.Join(summaryTexts, "\n\n"), monthStats)
 		} else {
-			prompt = prompts.BuildWorklogMonthSummaryPromptNonTechnical(projectContext, codebaseContext, strings.Join(summaryTexts, "\n\n"), monthStats)
+			prompt = prompts.BuildWorklogMonthSummaryPromptNonTechnical(projectContext, codebaseContext, periodContext, strings.Join(summaryTexts, "\n\n"), monthStats)
 		}
 
 		timeoutCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
@@ -1267,7 +1393,8 @@ func generateMonthlySummaries(ctx context.Context, cache *worklogCacheContext, c
 		cancel()
 
 		if err != nil {
-			return fmt.Errorf("failed to generate monthly summary for %s: %w", monthStart.Format("January 2006"), err)
+			VerboseLog("Warning: LLM monthly summary failed for %s, using fallback: %v", monthStart.Format("January 2006"), err)
+			content = buildFallbackMonthlySummary(monthStart, monthEnd, monthCommitData, loc)
 		}
 
 		// Store the monthly summary.
@@ -1295,4 +1422,71 @@ func generateMonthlySummaries(ctx context.Context, cache *worklogCacheContext, c
 	}
 
 	return nil
+}
+
+func buildFallbackWeeklySummary(weekStart time.Time, weekDays []dayGroup, weekCommits []commitData, loc *time.Location) string {
+	weekEnd := weekStart.AddDate(0, 0, 6)
+	adds, dels := computeCommitStats(weekCommits)
+	fileSet := make(map[string]bool)
+	branchSet := make(map[string]bool)
+	for _, c := range weekCommits {
+		for _, f := range c.Files {
+			fileSet[f] = true
+		}
+		if c.BranchName != "" {
+			branchSet[c.BranchName] = true
+		}
+	}
+
+	dayCount := len(weekDays)
+	branchCount := len(branchSet)
+	fileCount := len(fileSet)
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("## %s - %s\n\n", weekStart.In(loc).Format("Jan 2"), weekEnd.In(loc).Format("Jan 2, 2006")))
+	sb.WriteString("- Weekly summary fallback (LLM unavailable for this run)\n")
+	sb.WriteString(fmt.Sprintf("- %d active day(s), %d commit(s), %d branch(es)\n", dayCount, len(weekCommits), branchCount))
+	sb.WriteString(fmt.Sprintf("- +%d/-%d lines changed across %d file(s)\n", adds, dels, fileCount))
+	sb.WriteString("\n### Notable commits\n\n")
+
+	limit := 8
+	if len(weekCommits) < limit {
+		limit = len(weekCommits)
+	}
+	for i := 0; i < limit; i++ {
+		c := weekCommits[i]
+		msg := strings.Split(strings.TrimSpace(c.Message), "\n")[0]
+		if len(msg) > 100 {
+			msg = msg[:97] + "..."
+		}
+		branch := c.BranchName
+		if branch == "" {
+			branch = "unknown"
+		}
+		sb.WriteString(fmt.Sprintf("- `%s` (%s) %s\n", c.Hash[:7], branch, msg))
+	}
+
+	return sb.String()
+}
+
+func buildFallbackMonthlySummary(monthStart, monthEnd time.Time, monthCommits []commitData, loc *time.Location) string {
+	adds, dels := computeCommitStats(monthCommits)
+	fileSet := make(map[string]bool)
+	branchSet := make(map[string]bool)
+	for _, c := range monthCommits {
+		for _, f := range c.Files {
+			fileSet[f] = true
+		}
+		if c.BranchName != "" {
+			branchSet[c.BranchName] = true
+		}
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("## %s\n\n", monthStart.In(loc).Format("January 2006")))
+	sb.WriteString("- Monthly summary fallback (LLM unavailable for this run)\n")
+	sb.WriteString(fmt.Sprintf("- %d commit(s) across %d branch(es)\n", len(monthCommits), len(branchSet)))
+	sb.WriteString(fmt.Sprintf("- +%d/-%d lines changed across %d file(s)\n", adds, dels, len(fileSet)))
+	sb.WriteString(fmt.Sprintf("- Period: %s - %s\n", monthStart.In(loc).Format("Jan 2"), monthEnd.In(loc).Format("Jan 2, 2006")))
+	return sb.String()
 }

@@ -8,11 +8,15 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	_ "github.com/marcboeker/go-duckdb" // DuckDB driver
 
 	"github.com/ishaan812/devlog/internal/config"
 )
+
+// dbOpenTimeout is how long we wait for a locked database before failing.
+const dbOpenTimeout = 3 * time.Second
 
 // Manager handles database connections and repositories.
 type Manager struct {
@@ -84,10 +88,9 @@ func (m *Manager) GetDBForProfile(profile string) (*sql.DB, error) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, fmt.Errorf("create database directory: %w", err)
 	}
-	connStr := fmt.Sprintf("%s?access_mode=read_write", dbPath)
-	db, err := sql.Open("duckdb", connStr)
+	db, err := openDBWithTimeout(dbPath)
 	if err != nil {
-		return nil, fmt.Errorf("open database: %w", err)
+		return nil, err
 	}
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
@@ -98,6 +101,38 @@ func (m *Manager) GetDBForProfile(profile string) (*sql.DB, error) {
 	}
 	m.connections[profile] = db
 	return db, nil
+}
+
+// openDBWithTimeout opens the database, failing with a clear error if another process holds the lock.
+func openDBWithTimeout(dbPath string) (*sql.DB, error) {
+	type result struct {
+		db  *sql.DB
+		err error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		connStr := fmt.Sprintf("%s?access_mode=read_write", dbPath)
+		db, err := sql.Open("duckdb", connStr)
+		if err != nil {
+			ch <- result{nil, err}
+			return
+		}
+		// Ping triggers actual connection and file lock acquisition
+		if err := db.Ping(); err != nil {
+			db.Close()
+			ch <- result{nil, err}
+			return
+		}
+		ch <- result{db, nil}
+	}()
+
+	select {
+	case r := <-ch:
+		return r.db, r.err
+	case <-time.After(dbOpenTimeout):
+		return nil, fmt.Errorf("database is locked (another devlog process is running or stuck). "+
+			"Run: pkill -9 -f 'devlog ingest'. If processes won't die, reboot your Mac to clear them")
+	}
 }
 
 // GetRepositoryForProfile returns the repository for a specific profile.

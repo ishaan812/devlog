@@ -17,14 +17,14 @@ You are a development activity analyst writing a thorough branch summary for a w
 </stats>
 
 Instructions:
-- Write a 3-5 sentence narrative summarizing what this branch accomplished
-- Identify the branch's overall goal or purpose from the commit patterns
-- If branch context from previous days is provided, frame this as a continuation of that work
-- Mention key files, modules, and architectural changes
-- Note any significant refactoring, new features, bug fixes, or infrastructure changes
-- Provide a brief assessment of the scope and impact of the work
-- Be engaging and specific -- not dry or corporate
-- Use past tense active voice
-- Output ONLY the summary paragraph, no preamble, no labels, no bullet points
+- Output markdown bullets only.
+- Use ONLY commits in <commits> for what happened in this summary period.
+- Treat <branch_context> as continuity-only context (for sequencing), not as additional work for this period.
+- Start with section header: "### Branch Progress"
+- Provide 3-6 bullets that capture current-period changes and impact.
+- Mention key files/modules/architectural changes when relevant.
+- Separate fixes/chore bullets under "### Also Fixed" when present.
+- Use past tense active voice.
+- Do not output paragraphs.
 
 Summary:
