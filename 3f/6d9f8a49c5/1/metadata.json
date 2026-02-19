@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "3f6d9f8a49c5",
+  "session_id": "unknown",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-19T22:45:26.75121Z",
+  "branch": "master",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "internal/cli/export.go",
+    "internal/tui/folder_select.go",
+    "internal/tui/path_prompt.go"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "0fa7d80795fb",
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-19T22:45:26.739847Z",
+    "agent_lines": 426,
+    "human_added": 1387,
+    "human_modified": 250,
+    "human_removed": 0,
+    "total_committed": 2015,
+    "agent_percentage": 21.141439205955333
+  },
+  "transcript_path": ".cursor/projects/Users-ishaan812-Code-projects-devlog/agent-transcripts/7bc02420-d03d-4e4f-9378-11fc130604da.txt"
+}
