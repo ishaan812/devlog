@@ -43,21 +43,48 @@ func isUserCommitByGitHub(authorEmail string, githubUsername string) bool {
 	return strings.EqualFold(extractedUsername, githubUsername)
 }
 
+func isMergeSyncCommit(commit *git.Commit, baseBranch string, isDefault bool, baseBranchHashes map[string]bool) bool {
+	if isDefault || baseBranch == "" || commit.NumParents() < 2 || len(baseBranchHashes) == 0 {
+		return false
+	}
+	hasBaseParent := false
+	_ = commit.Parents().ForEach(func(parent *git.Commit) error {
+		if baseBranchHashes[parent.Hash.String()] {
+			hasBaseParent = true
+		}
+		return nil
+	})
+	if !hasBaseParent {
+		return false
+	}
+	// A non-default branch merge commit that pulls in the base branch history is
+	// treated as branch-sync work (possibly with conflict resolution), not feature work.
+	return true
+}
+
+const (
+	indexSoftLimit = 500
+	indexHardLimit = 1000
+)
+
 var (
-	ingestDays           int
-	ingestAll            bool
-	ingestSince          string
-	ingestBranches       []string
-	ingestAllBranches    bool
-	ingestReselectBranch bool
-	ingestSkipSummaries  bool
-	ingestMaxFiles       int
-	ingestGitOnly        bool
-	ingestIndexOnly      bool
-	ingestSkipCommitSums bool
-	ingestFillSummaries  bool
-	ingestForceReindex   bool
-	ingestSkipWorklog    bool
+	ingestDays              int
+	ingestAll               bool
+	ingestSince             string
+	ingestBranches          []string
+	ingestAllBranches       bool
+	ingestReselectBranch    bool
+	ingestSkipSummaries     bool
+	ingestMaxFiles          int
+	ingestAllFiles          bool
+	ingestGitOnly           bool
+	ingestIndexOnly         bool
+	ingestSkipCommitSums    bool
+	ingestFillSummaries     bool
+	ingestForceReindex      bool
+	ingestSkipWorklog       bool
+	ingestReselectFolders   bool
+	ingestPreparedSelection *BranchSelection
 )
 
 var ingestCmd = &cobra.Command{
@@ -86,7 +113,9 @@ Examples:
   devlog ingest --days 90             # Last 90 days of git history
   devlog ingest --all                 # Full git history
   devlog ingest --git-only            # Only git history, skip indexing
-  devlog ingest --index-only          # Only indexing, skip git history`,
+  devlog ingest --index-only          # Only indexing, skip git history
+  devlog ingest --all-files           # Index all files (bypass 500/1000 limits)
+  devlog ingest --reselect-folders    # Re-prompt for which folders to index`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: runIngest,
 }
@@ -101,13 +130,15 @@ func init() {
 	ingestCmd.Flags().BoolVar(&ingestAllBranches, "all-branches", false, "Ingest all branches without prompting")
 	ingestCmd.Flags().BoolVar(&ingestReselectBranch, "reselect-branches", false, "Re-select branches (ignore saved selection)")
 	ingestCmd.Flags().BoolVar(&ingestSkipSummaries, "skip-summaries", false, "Skip LLM-generated summaries")
-	ingestCmd.Flags().IntVar(&ingestMaxFiles, "max-files", 500, "Maximum files to index")
+	ingestCmd.Flags().IntVar(&ingestMaxFiles, "max-files", 0, "Maximum files to index (overrides limits, 0 = use defaults)")
+	ingestCmd.Flags().BoolVar(&ingestAllFiles, "all-files", false, "Index all files (bypass soft/hard limits)")
 	ingestCmd.Flags().BoolVar(&ingestGitOnly, "git-only", false, "Only ingest git history")
 	ingestCmd.Flags().BoolVar(&ingestIndexOnly, "index-only", false, "Only index codebase")
 	ingestCmd.Flags().BoolVar(&ingestSkipCommitSums, "skip-commit-summaries", false, "Skip LLM-generated commit summaries")
 	ingestCmd.Flags().BoolVar(&ingestFillSummaries, "fill-summaries", false, "Generate summaries for existing commits that are missing them")
 	ingestCmd.Flags().BoolVar(&ingestForceReindex, "force-reindex", false, "Force re-indexing all files, ignoring content hashes")
 	ingestCmd.Flags().BoolVar(&ingestSkipWorklog, "skip-worklog", false, "Skip worklog generation prompt after ingestion")
+	ingestCmd.Flags().BoolVar(&ingestReselectFolders, "reselect-folders", false, "Re-prompt for index folder selection")
 }
 
 // acquireIngestLock prevents concurrent ingest runs (which would conflict on DuckDB's exclusive lock).
@@ -192,18 +223,30 @@ func runIngest(cmd *cobra.Command, args []string) error {
 	dimColor.Printf("  Profile: %s\n\n", profileName)
 
 	gitHistoryIngested := false
-	if !ingestIndexOnly {
-		if err := ingestGitHistory(absPath, cfg); err != nil {
-			VerboseLog("Git ingest warning: %v", err)
-			dimColor.Printf("  Note: Git ingestion skipped (%v)\n\n", err)
+	canIngestGit := !ingestIndexOnly
+	if canIngestGit {
+		selection, err := prepareBranchSelection(absPath, cfg)
+		if err != nil {
+			VerboseLog("Git branch selection warning: %v", err)
+			dimColor.Printf("  Note: Git branch selection skipped (%v)\n\n", err)
+			canIngestGit = false
 		} else {
-			gitHistoryIngested = true
+			ingestPreparedSelection = selection
 		}
 	}
 
 	if !ingestGitOnly {
 		if err := indexCodebase(absPath, cfg); err != nil {
 			return fmt.Errorf("indexing failed: %w", err)
+		}
+	}
+
+	if canIngestGit {
+		if err := ingestGitHistory(absPath, cfg); err != nil {
+			VerboseLog("Git ingest warning: %v", err)
+			dimColor.Printf("  Note: Git ingestion skipped (%v)\n\n", err)
+		} else {
+			gitHistoryIngested = true
 		}
 	}
 
@@ -459,9 +502,13 @@ func ingestGitHistory(absPath string, cfg *config.Config) error {
 		return nil
 	}
 
-	selection, err := selectBranches(allBranches, codebase.DefaultBranch, cfg, absPath, repo, userEmail, githubUsername)
-	if err != nil {
-		return fmt.Errorf("branch selection failed: %w", err)
+	selection := ingestPreparedSelection
+	ingestPreparedSelection = nil
+	if selection == nil {
+		selection, err = selectBranches(allBranches, codebase.DefaultBranch, cfg, absPath, repo, userEmail, githubUsername)
+		if err != nil {
+			return fmt.Errorf("branch selection failed: %w", err)
+		}
 	}
 
 	if selection.MainBranch != codebase.DefaultBranch {
@@ -516,10 +563,13 @@ func ingestGitHistory(absPath string, cfg *config.Config) error {
 		if branchInfo.Name != selection.MainBranch {
 			continue
 		}
+		dimColor.Printf("    Processing %s (main)...\n", branchInfo.Name)
 		branchInfo.IsDefault = true
 		commits, files, err := ingestBranch(ctx, dbRepo, repo, codebase, branchInfo, "", sinceDate, userEmail, githubUsername, llmClient, existingHashes)
 		if err != nil {
-			return fmt.Errorf("failed to ingest branch %s: %w", branchInfo.Name, err)
+			warnColor := color.New(color.FgHiYellow)
+			warnColor.Printf("    Skipping %s: %v\n", branchInfo.Name, err)
+			continue
 		}
 		totalCommits += commits
 		totalFiles += files
@@ -534,9 +584,12 @@ func ingestGitHistory(absPath string, cfg *config.Config) error {
 		if branchInfo.Name == selection.MainBranch || !selectedMap[branchInfo.Name] {
 			continue
 		}
+		dimColor.Printf("    Processing %s...\n", branchInfo.Name)
 		commits, files, err := ingestBranch(ctx, dbRepo, repo, codebase, branchInfo, selection.MainBranch, sinceDate, userEmail, githubUsername, llmClient, existingHashes)
 		if err != nil {
-			return fmt.Errorf("failed to ingest branch %s: %w", branchInfo.Name, err)
+			warnColor := color.New(color.FgHiYellow)
+			warnColor.Printf("    Skipping %s: %v\n", branchInfo.Name, err)
+			continue
 		}
 		totalCommits += commits
 		totalFiles += files
@@ -572,6 +625,64 @@ func ingestGitHistory(absPath string, cfg *config.Config) error {
 	infoColor.Printf("  Total: %d commits, %d file changes\n\n", commitCount, fileCount)
 
 	return nil
+}
+
+func prepareBranchSelection(absPath string, cfg *config.Config) (*BranchSelection, error) {
+	ctx := context.Background()
+	repo, err := git.OpenRepo(absPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open repository: %w", err)
+	}
+	dbRepo, err := db.GetRepository()
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize database: %w", err)
+	}
+	codebase, err := dbRepo.GetCodebaseByPath(ctx, absPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get codebase: %w", err)
+	}
+	if codebase == nil {
+		defaultBranch, err := repo.GetDefaultBranch()
+		if err != nil {
+			return nil, fmt.Errorf("failed to detect default branch: %w", err)
+		}
+		codebase = &db.Codebase{
+			ID:            uuid.New().String(),
+			Path:          absPath,
+			Name:          filepath.Base(absPath),
+			DefaultBranch: defaultBranch,
+			IndexedAt:     time.Now(),
+		}
+		if err := dbRepo.UpsertCodebase(ctx, codebase); err != nil {
+			return nil, fmt.Errorf("failed to create codebase: %w", err)
+		}
+	}
+
+	userEmail := cfg.GetEffectiveUserEmail()
+	if userEmail == "" {
+		if detectedEmail, gitErr := repo.GetUserEmail(); gitErr == nil {
+			userEmail = detectedEmail
+		}
+	}
+	githubUsername := cfg.GetEffectiveGitHubUsername()
+
+	allBranches, err := repo.ListBranches()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list branches: %w", err)
+	}
+	if len(allBranches) == 0 {
+		return nil, fmt.Errorf("no branches found in repository")
+	}
+
+	selection, err := selectBranches(allBranches, codebase.DefaultBranch, cfg, absPath, repo, userEmail, githubUsername)
+	if err != nil {
+		return nil, err
+	}
+	if selection.MainBranch != codebase.DefaultBranch {
+		codebase.DefaultBranch = selection.MainBranch
+		_ = dbRepo.UpsertCodebase(ctx, codebase)
+	}
+	return selection, nil
 }
 
 func selectBranches(branches []git.BranchInfo, detectedDefault string, cfg *config.Config, repoPath string, repo *git.Repository, userEmail, githubUsername string) (*BranchSelection, error) {
@@ -817,9 +928,9 @@ func ingestBranch(ctx context.Context, dbRepo *db.SQLRepository, repo *git.Repos
 
 	var commitHashes []string
 	if isDefault || baseBranch == "" {
-		commitHashes, err = repo.GetCommitsOnBranch(branchInfo.Name, "")
+		commitHashes, err = repo.GetCommitsOnBranchSince(branchInfo.Name, "", sinceDate)
 	} else {
-		commitHashes, err = repo.GetCommitsOnBranch(branchInfo.Name, baseBranch)
+		commitHashes, err = repo.GetCommitsOnBranchSince(branchInfo.Name, baseBranch, sinceDate)
 	}
 	if err != nil {
 		VerboseLog("Error getting commits for branch %s: %v", branchInfo.Name, err)
@@ -842,6 +953,14 @@ func ingestBranch(ctx context.Context, dbRepo *db.SQLRepository, repo *git.Repos
 
 	var commitCount, fileCount int
 	var firstHash, latestHash string
+	baseBranchHashes := map[string]bool{}
+	if !isDefault && baseBranch != "" {
+		if hashes, hashErr := repo.GetCommitHashSet(baseBranch); hashErr == nil {
+			baseBranchHashes = hashes
+		} else {
+			VerboseLog("Warning: failed to load base branch hash set for %s: %v", baseBranch, hashErr)
+		}
+	}
 
 	for _, hash := range newCommitHashes {
 		gitCommit, err := repo.GetCommit(hash)
@@ -866,6 +985,8 @@ func ingestBranch(ctx context.Context, dbRepo *db.SQLRepository, repo *git.Repos
 		}
 
 		isUserCommit := (userEmail != "" && strings.EqualFold(author.Email, userEmail)) || isUserCommitByGitHub(author.Email, githubUsername)
+		parentCount := gitCommit.NumParents()
+		isMergeSync := isMergeSyncCommit(gitCommit, baseBranch, isDefault, baseBranchHashes)
 
 		stats, fileChanges, err := getCommitStats(repo, gitCommit)
 		if err != nil {
@@ -873,7 +994,7 @@ func ingestBranch(ctx context.Context, dbRepo *db.SQLRepository, repo *git.Repos
 		}
 
 		var commitSummary string
-		if isUserCommit && llmClient != nil && len(fileChanges) > 0 {
+		if isUserCommit && !isMergeSync && llmClient != nil && len(fileChanges) > 0 {
 			projectCtx := ""
 			if codebase != nil {
 				projectCtx = codebase.Summary
@@ -897,6 +1018,8 @@ func ingestBranch(ctx context.Context, dbRepo *db.SQLRepository, repo *git.Repos
 			Stats:             stats,
 			IsUserCommit:      isUserCommit,
 			IsOnDefaultBranch: isDefault,
+			ParentCount:       parentCount,
+			IsMergeSync:       isMergeSync,
 		}
 
 		if err := dbRepo.UpsertCommit(ctx, commit); err != nil {
@@ -1033,6 +1156,7 @@ func indexCodebase(absPath string, cfg *config.Config) error {
 	infoColor := color.New(color.FgHiWhite)
 	dimColor := color.New(color.FgHiBlack)
 	warnColor := color.New(color.FgHiYellow)
+	promptColor := color.New(color.FgHiYellow)
 
 	titleColor.Printf("  Codebase Indexing\n")
 
@@ -1041,24 +1165,83 @@ func indexCodebase(absPath string, cfg *config.Config) error {
 		return fmt.Errorf("failed to initialize database: %w", err)
 	}
 
+	profileName := cfg.GetActiveProfileName()
+	savedFolders := cfg.GetIndexFolders(profileName, absPath)
+	if ingestReselectFolders {
+		savedFolders = nil // Force fresh folder selection
+	}
+
 	s := spinner.New(spinner.CharSets[14], 100*time.Millisecond)
 	s.Suffix = " Scanning files..."
 	s.Color("cyan")
 	s.Start()
 
-	scanResult, err := indexer.ScanCodebase(absPath, 500*1024)
+	scanResult, err := indexer.ScanCodebase(absPath, 500*1024, savedFolders)
 	if err != nil {
 		s.Stop()
 		return fmt.Errorf("failed to scan codebase: %w", err)
 	}
 	s.Stop()
 
-	if ingestMaxFiles > 0 && len(scanResult.Files) > ingestMaxFiles {
-		scanResult.Files = scanResult.Files[:ingestMaxFiles]
-		warnColor.Printf("  Limited to %d files\n", ingestMaxFiles)
+	countFolderStats := func(sr *indexer.ScanResult) (totalFolders int, internalFolders int) {
+		for folderPath := range sr.Folders {
+			if folderPath == "." {
+				continue
+			}
+			totalFolders++
+			if folderPath == "internal" || strings.HasPrefix(folderPath, "internal/") {
+				internalFolders++
+			}
+		}
+		return totalFolders, internalFolders
+	}
+	totalFolders, internalFolders := countFolderStats(scanResult)
+	dimColor.Printf("  Scan stats: %d files, %d folders total, %d internal folders\n", len(scanResult.Files), totalFolders, internalFolders)
+
+	// Soft limit: if > 500 files, no saved config (or --reselect-folders), and not --all-files, prompt for folder selection
+	needsFolderPrompt := len(scanResult.Files) > indexSoftLimit && !ingestAllFiles && ingestMaxFiles == 0 && len(savedFolders) == 0
+	if needsFolderPrompt {
+		allFolders := indexer.AllFoldersWithCounts(scanResult)
+		if len(allFolders) > 0 {
+			promptColor.Printf("  Found %d files (limit %d). Select folders from full tree to index:\n", len(scanResult.Files), indexSoftLimit)
+			tuiFolders := make([]tui.FolderInfo, 0, len(allFolders))
+			for _, f := range allFolders {
+				tuiFolders = append(tuiFolders, tui.FolderInfo{Path: f.Path, FileCount: f.FileCount})
+			}
+			selection, err := tui.RunFolderSelection(tuiFolders)
+			if err != nil {
+				return err
+			}
+			if len(selection.SelectedFolders) == 0 {
+				return fmt.Errorf("no folders selected")
+			}
+			if err := cfg.SaveIndexFolders(profileName, absPath, selection.SelectedFolders); err != nil {
+				return fmt.Errorf("failed to save folder selection: %w", err)
+			}
+			dimColor.Printf("  Saved folder selection. Re-scanning...\n")
+			s.Start()
+			scanResult, err = indexer.ScanCodebase(absPath, 500*1024, selection.SelectedFolders)
+			s.Stop()
+			if err != nil {
+				return fmt.Errorf("failed to re-scan codebase: %w", err)
+			}
+			totalFolders, internalFolders = countFolderStats(scanResult)
+			dimColor.Printf("  Re-scan stats: %d files, %d folders total, %d internal folders\n", len(scanResult.Files), totalFolders, internalFolders)
+		}
 	}
 
-	successColor.Printf("  Found %d files in %d folders\n", len(scanResult.Files), len(scanResult.Folders))
+	// Hard limit: cap at 1000 unless --all-files or --max-files
+	if ingestMaxFiles > 0 {
+		if len(scanResult.Files) > ingestMaxFiles {
+			scanResult.Files = scanResult.Files[:ingestMaxFiles]
+			warnColor.Printf("  Limited to %d files (--max-files)\n", ingestMaxFiles)
+		}
+	} else if !ingestAllFiles && len(scanResult.Files) > indexHardLimit {
+		scanResult.Files = scanResult.Files[:indexHardLimit]
+		warnColor.Printf("  Limited to %d files (use --all-files to index all)\n", indexHardLimit)
+	}
+
+	successColor.Printf("  Found %d files in %d folders (%d internal folders)\n", len(scanResult.Files), totalFolders, internalFolders)
 
 	techStack := indexer.DetectTechStack(scanResult.Files)
 	if len(techStack) > 0 {

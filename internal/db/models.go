@@ -58,6 +58,8 @@ type Commit struct {
 	Stats             map[string]any
 	IsUserCommit      bool
 	IsOnDefaultBranch bool
+	ParentCount       int
+	IsMergeSync       bool
 }
 
 // FileChange represents a file change within a commit
@@ -161,6 +163,19 @@ type WorklogMonthInfo struct {
 	CommitCount int
 	Additions   int
 	Deletions   int
+}
+
+// WorklogExportState tracks the last exported signature for an exported entry.
+type WorklogExportState struct {
+	ID          string
+	CodebaseID  string
+	ProfileName string
+	EntryType   string
+	EntryDate   time.Time
+	BranchID    string
+	Signature   string
+	FilePath    string
+	ExportedAt  time.Time
 }
 
 // JSON is a type alias for map[string]any used for JSON columns

@@ -10,3 +10,7 @@ docs/
 node_modules/
 release/
 *.tgz
+
+# video
+video/out/
+video/

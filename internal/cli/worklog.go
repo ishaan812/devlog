@@ -93,6 +93,8 @@ type commitData struct {
 	Files       []string
 	BranchID    string
 	BranchName  string
+	ParentCount int
+	IsMergeSync bool
 }
 
 type dayGroup struct {
@@ -253,7 +255,7 @@ func runWorklog(cmd *cobra.Command, args []string) error {
 func queryCommitsForWorklog(ctx context.Context, dbRepo *db.SQLRepository, codebase *db.Codebase, startDate, endDate time.Time, cfg *config.Config) ([]commitData, error) {
 	queryStr := `
 		SELECT c.id, c.hash, c.codebase_id, c.branch_id, c.author_email, c.message, c.summary, c.committed_at,
-			b.name as branch_name
+			b.name as branch_name, c.parent_count, c.is_merge_sync
 		FROM commits c
 		LEFT JOIN branches b ON c.branch_id = b.id
 		WHERE c.committed_at >= $1 AND c.committed_at <= $2
@@ -296,6 +298,8 @@ func queryCommitsForWorklog(ctx context.Context, dbRepo *db.SQLRepository, codeb
 			AuthorEmail: getString(row, "author_email"),
 			BranchID:    getString(row, "branch_id"),
 			BranchName:  getString(row, "branch_name"),
+			ParentCount: getInt(row, "parent_count"),
+			IsMergeSync: getBool(row, "is_merge_sync"),
 		}
 		if t, ok := row["committed_at"].(time.Time); ok {
 			cd.CommittedAt = t
@@ -326,6 +330,35 @@ func getString(m map[string]any, key string) string {
 		}
 	}
 	return ""
+}
+
+func getInt(m map[string]any, key string) int {
+	v, ok := m[key]
+	if !ok || v == nil {
+		return 0
+	}
+	switch n := v.(type) {
+	case int:
+		return n
+	case int32:
+		return int(n)
+	case int64:
+		return int(n)
+	case float64:
+		return int(n)
+	}
+	return 0
+}
+
+func getBool(m map[string]any, key string) bool {
+	v, ok := m[key]
+	if !ok || v == nil {
+		return false
+	}
+	if b, ok := v.(bool); ok {
+		return b
+	}
+	return false
 }
 
 func getProjectContext(codebase *db.Codebase) string {
@@ -376,9 +409,39 @@ func extractContextLine(section string) string {
 	return result
 }
 
+func splitAttributionCommits(commits []commitData) (attribution []commitData, mergeSync []commitData) {
+	for _, c := range commits {
+		if c.IsMergeSync {
+			mergeSync = append(mergeSync, c)
+			continue
+		}
+		attribution = append(attribution, c)
+	}
+	return attribution, mergeSync
+}
+
+func hasAttributionCommits(commits []commitData) bool {
+	for _, c := range commits {
+		if !c.IsMergeSync {
+			return true
+		}
+	}
+	return false
+}
+
+func mergeSyncUpdateLine(count int) string {
+	if count <= 1 {
+		return "- User resolved merge conflicts between the current branch and its parent branch."
+	}
+	return fmt.Sprintf("- User resolved merge conflicts while syncing the current branch with its parent branch (%d merge-sync commits).", count)
+}
+
 func buildCommitContext(c commitData, style string) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Commit %s: %s\n", c.Hash[:7], strings.TrimSpace(c.Message)))
+	if c.IsMergeSync {
+		sb.WriteString("Classification: merge-sync (branch synchronization/conflict resolution)\n")
+	}
 	if c.Summary != "" {
 		sb.WriteString(fmt.Sprintf("Summary: %s\n", c.Summary))
 	}
@@ -656,22 +719,22 @@ func generateWorklogMarkdown(groups []dayGroup, client llm.Client, cfg *config.C
 				}
 				storeCacheEntry(ctx, cache, group.Date, branchID, bName, "day_updates", "date", commits, content)
 			} else {
-									content, cached, err = getCachedOrGenerate(
-										ctx, cache, group.Date, branchID, bName,
-										"day_updates", "date", commits,
-										func() (string, error) {
-											return buildDayBranchSection(commits, client, projectContext, branchCtx, loc, style)
-										},
-									)
-									if err != nil {
-										return "", fmt.Errorf("failed to generate day/branch updates: %w", err)
-									}
-									if !cached && cache != nil {
-										if cache.ChangedDailySummaries == nil {
-											cache.ChangedDailySummaries = make(map[time.Time]bool)
-										}
-										cache.ChangedDailySummaries[group.Date.In(loc).Truncate(24*time.Hour)] = true
-									}
+				content, cached, err = getCachedOrGenerate(
+					ctx, cache, group.Date, branchID, bName,
+					"day_updates", "date", commits,
+					func() (string, error) {
+						return buildDayBranchSection(commits, client, projectContext, branchCtx, loc, style)
+					},
+				)
+				if err != nil {
+					return "", fmt.Errorf("failed to generate day/branch updates: %w", err)
+				}
+				if !cached && cache != nil {
+					if cache.ChangedDailySummaries == nil {
+						cache.ChangedDailySummaries = make(map[time.Time]bool)
+					}
+					cache.ChangedDailySummaries[group.Date.In(loc).Truncate(24*time.Hour)] = true
+				}
 			}
 			if cached {
 				cacheColor.Printf("  %s [%s]: cached\n", group.Date.In(loc).Format("Jan 2"), bName)
@@ -686,7 +749,7 @@ func generateWorklogMarkdown(groups []dayGroup, client llm.Client, cfg *config.C
 			}
 
 			contextLine := extractContextLine(content)
-			if contextLine != "" {
+			if contextLine != "" && hasAttributionCommits(commits) {
 				dateStr := group.Date.In(loc).Format("Jan 2")
 				entry := fmt.Sprintf("- %s: %s", dateStr, contextLine)
 				if prev := branchContextMap[branchID]; prev != "" {
@@ -878,6 +941,9 @@ func generateBranchWorklogMarkdown(groups []branchGroup, client llm.Client, cfg 
 				if c.Additions > 0 || c.Deletions > 0 {
 					sb.WriteString(fmt.Sprintf(" (+%d/-%d)", c.Additions, c.Deletions))
 				}
+				if c.IsMergeSync {
+					sb.WriteString(" [merge-sync]")
+				}
 				sb.WriteString("\n")
 
 				if c.Summary != "" {
@@ -896,9 +962,10 @@ func generateBranchWorklogMarkdown(groups []branchGroup, client llm.Client, cfg 
 
 func buildDayBranchSection(commits []commitData, client llm.Client, projectContext string, branchContext string, loc *time.Location, style string) (string, error) {
 	var section strings.Builder
+	attributionCommits, mergeSyncCommits := splitAttributionCommits(commits)
 
-	if client != nil {
-		updatesSummary, err := generateDayBranchUpdates(commits, client, projectContext, branchContext, style)
+	if client != nil && len(attributionCommits) > 0 {
+		updatesSummary, err := generateDayBranchUpdates(attributionCommits, client, projectContext, branchContext, style)
 		if err != nil {
 			return "", err
 		}
@@ -908,6 +975,10 @@ func buildDayBranchSection(commits []commitData, client llm.Client, projectConte
 		}
 	} else {
 		section.WriteString("### Updates\n\n")
+	}
+	if len(mergeSyncCommits) > 0 {
+		section.WriteString(mergeSyncUpdateLine(len(mergeSyncCommits)))
+		section.WriteString("\n")
 	}
 	section.WriteString("\n")
 
@@ -926,6 +997,9 @@ func buildDayBranchSection(commits []commitData, client llm.Client, projectConte
 		if c.Additions > 0 || c.Deletions > 0 {
 			section.WriteString(fmt.Sprintf(" (+%d/-%d)", c.Additions, c.Deletions))
 		}
+		if c.IsMergeSync {
+			section.WriteString(" [merge-sync]")
+		}
 		section.WriteString("\n")
 	}
 
@@ -933,8 +1007,16 @@ func buildDayBranchSection(commits []commitData, client llm.Client, projectConte
 }
 
 func generateBranchSummary(group branchGroup, client llm.Client, projectContext string, branchContext string, style string) (string, error) {
+	attributionCommits, mergeSyncCommits := splitAttributionCommits(group.Commits)
+	if len(attributionCommits) == 0 {
+		if len(mergeSyncCommits) > 0 {
+			return "### Updates\n\n" + mergeSyncUpdateLine(len(mergeSyncCommits)), nil
+		}
+		return "", nil
+	}
+
 	var commitBlocks []string
-	for _, c := range group.Commits {
+	for _, c := range attributionCommits {
 		commitBlocks = append(commitBlocks, buildCommitContext(c, style))
 	}
 
@@ -942,7 +1024,7 @@ func generateBranchSummary(group branchGroup, client llm.Client, projectContext 
 		return "", nil
 	}
 
-	stats := buildAggregateStats(group.Commits)
+	stats := buildAggregateStats(attributionCommits)
 
 	var prompt string
 	if style == "technical" {
@@ -991,6 +1073,9 @@ func generateOverallSummary(groups []dayGroup, client llm.Client, projectContext
 	var commitBlocks []string
 	for _, g := range groups {
 		for _, c := range g.Commits {
+			if c.IsMergeSync {
+				continue
+			}
 			allCommits = append(allCommits, c)
 			commitBlocks = append(commitBlocks, buildCommitContext(c, style))
 		}
@@ -1097,7 +1182,8 @@ func generateWeeklySummaries(ctx context.Context, cache *worklogCacheContext, gr
 		}
 
 		// Generate weekly summary
-		stats := buildAggregateStats(weekCommits)
+		attributionWeekCommits, _ := splitAttributionCommits(weekCommits)
+		stats := buildAggregateStats(attributionWeekCommits)
 		dailySummaryText := strings.Join(dailySummaries, "\n\n")
 
 		periodContext := buildWeeklyPeriodContext(weekCommits, weekDays, loc)
@@ -1354,6 +1440,8 @@ func generateMonthlySummaries(ctx context.Context, cache *worklogCacheContext, c
 				Summary:     c.Summary,
 				AuthorEmail: c.AuthorEmail,
 				CommittedAt: c.CommittedAt,
+				ParentCount: c.ParentCount,
+				IsMergeSync: c.IsMergeSync,
 			}
 			switch v := c.Stats["additions"].(type) {
 			case int:
@@ -1377,7 +1465,8 @@ func generateMonthlySummaries(ctx context.Context, cache *worklogCacheContext, c
 			}
 			monthCommitData = append(monthCommitData, cd)
 		}
-		monthStats := buildAggregateStats(monthCommitData)
+		attributionMonthCommits, _ := splitAttributionCommits(monthCommitData)
+		monthStats := buildAggregateStats(attributionMonthCommits)
 
 		// Generate monthly summary.
 		periodContext := buildMonthlyPeriodContext(ctx, cache, monthStart, monthEnd, loc)

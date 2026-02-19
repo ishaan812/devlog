@@ -16,6 +16,16 @@ type RepoBranchSelection struct {
 	SelectedBranches []string `json:"selected_branches"`
 }
 
+// IndexFoldersConfig stores which folders to index for a repo (for repos with many files).
+type IndexFoldersConfig struct {
+	Folders []string `json:"folders"`
+}
+
+type ObsidianVaultConfig struct {
+	VaultPath  string `json:"vault_path"`
+	RootFolder string `json:"root_folder,omitempty"`
+}
+
 type Profile struct {
 	Name             string                          `json:"name"`
 	Description      string                          `json:"description,omitempty"`
@@ -24,6 +34,8 @@ type Profile struct {
 	WorklogStyle     string                          `json:"worklog_style,omitempty"`
 	Repos            []string                        `json:"repos"`
 	BranchSelections map[string]*RepoBranchSelection `json:"branch_selections"`
+	IndexFolders     map[string]*IndexFoldersConfig  `json:"index_folders,omitempty"`
+	ObsidianVaults   map[string]*ObsidianVaultConfig `json:"obsidian_vaults,omitempty"`
 
 	DefaultProvider string `json:"default_provider,omitempty"`
 	DefaultModel    string `json:"default_model,omitempty"`
@@ -425,6 +437,91 @@ func (c *Config) ClearBranchSelection(profileName, repoPath string) error {
 	}
 
 	delete(profile.BranchSelections, absPath)
+	return nil
+}
+
+// GetIndexFolders returns the saved index folder selection for a repo, or nil if not found.
+func (c *Config) GetIndexFolders(profileName, repoPath string) []string {
+	if c.Profiles == nil {
+		return nil
+	}
+	profile, exists := c.Profiles[profileName]
+	if !exists || profile.IndexFolders == nil {
+		return nil
+	}
+	absPath, err := filepath.Abs(repoPath)
+	if err != nil {
+		absPath = repoPath
+	}
+	cfg := profile.IndexFolders[absPath]
+	if cfg == nil || len(cfg.Folders) == 0 {
+		return nil
+	}
+	return cfg.Folders
+}
+
+// SaveIndexFolders saves the index folder selection for a repo.
+func (c *Config) SaveIndexFolders(profileName, repoPath string, folders []string) error {
+	if c.Profiles == nil {
+		return fmt.Errorf("no profiles found")
+	}
+	profile, exists := c.Profiles[profileName]
+	if !exists {
+		return fmt.Errorf("profile '%s' not found", profileName)
+	}
+	if profile.IndexFolders == nil {
+		profile.IndexFolders = make(map[string]*IndexFoldersConfig)
+	}
+	absPath, err := filepath.Abs(repoPath)
+	if err != nil {
+		absPath = repoPath
+	}
+	profile.IndexFolders[absPath] = &IndexFoldersConfig{Folders: folders}
+	return nil
+}
+
+// GetObsidianVault returns the saved Obsidian vault config for a repo, or nil.
+func (c *Config) GetObsidianVault(profileName, repoPath string) *ObsidianVaultConfig {
+	if c.Profiles == nil {
+		return nil
+	}
+	profile, exists := c.Profiles[profileName]
+	if !exists || profile.ObsidianVaults == nil {
+		return nil
+	}
+	absPath, err := filepath.Abs(repoPath)
+	if err != nil {
+		absPath = repoPath
+	}
+	return profile.ObsidianVaults[absPath]
+}
+
+// SaveObsidianVault saves the Obsidian vault config for a repo.
+func (c *Config) SaveObsidianVault(profileName, repoPath, vaultPath, rootFolder string) error {
+	if c.Profiles == nil {
+		return fmt.Errorf("no profiles found")
+	}
+	profile, exists := c.Profiles[profileName]
+	if !exists {
+		return fmt.Errorf("profile '%s' not found", profileName)
+	}
+	if profile.ObsidianVaults == nil {
+		profile.ObsidianVaults = make(map[string]*ObsidianVaultConfig)
+	}
+
+	absRepoPath, err := filepath.Abs(repoPath)
+	if err != nil {
+		absRepoPath = repoPath
+	}
+	absVaultPath, err := filepath.Abs(vaultPath)
+	if err != nil {
+		absVaultPath = vaultPath
+	}
+
+	profile.ObsidianVaults[absRepoPath] = &ObsidianVaultConfig{
+		VaultPath:  absVaultPath,
+		RootFolder: strings.TrimSpace(rootFolder),
+	}
 	return nil
 }
 

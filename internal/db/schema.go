@@ -6,6 +6,8 @@ var Migrations = []string{
 	`ALTER TABLE branches ADD COLUMN context_summary VARCHAR DEFAULT ''`,
 	`ALTER TABLE codebases ADD COLUMN project_context VARCHAR DEFAULT ''`,
 	`ALTER TABLE codebases ADD COLUMN longterm_context VARCHAR DEFAULT ''`,
+	`ALTER TABLE commits ADD COLUMN parent_count INTEGER DEFAULT 1`,
+	`ALTER TABLE commits ADD COLUMN is_merge_sync BOOLEAN DEFAULT FALSE`,
 }
 
 // Schema defines the DuckDB table schema
@@ -63,6 +65,8 @@ CREATE TABLE IF NOT EXISTS commits (
     stats JSON,
     is_user_commit BOOLEAN DEFAULT FALSE,
     is_on_default_branch BOOLEAN DEFAULT FALSE,
+    parent_count INTEGER DEFAULT 1,
+    is_merge_sync BOOLEAN DEFAULT FALSE,
     UNIQUE(codebase_id, hash)
 );
 
@@ -141,6 +145,20 @@ CREATE TABLE IF NOT EXISTS worklog_entries (
     UNIQUE(codebase_id, profile_name, entry_date, branch_id, entry_type, group_by)
 );
 
+-- Worklog export state table (tracks last exported signatures)
+CREATE TABLE IF NOT EXISTS worklog_export_state (
+    id VARCHAR PRIMARY KEY,
+    codebase_id VARCHAR NOT NULL,
+    profile_name VARCHAR NOT NULL,
+    entry_type VARCHAR NOT NULL,
+    entry_date DATE NOT NULL,
+    branch_id VARCHAR,
+    signature VARCHAR NOT NULL,
+    file_path VARCHAR NOT NULL,
+    exported_at TIMESTAMP NOT NULL,
+    UNIQUE(codebase_id, profile_name, entry_type, entry_date, branch_id)
+);
+
 -- Create indexes for better query performance
 CREATE INDEX IF NOT EXISTS idx_commits_codebase ON commits(codebase_id);
 CREATE INDEX IF NOT EXISTS idx_commits_branch ON commits(branch_id);
@@ -153,4 +171,5 @@ CREATE INDEX IF NOT EXISTS idx_branches_codebase ON branches(codebase_id);
 CREATE INDEX IF NOT EXISTS idx_folders_codebase ON folders(codebase_id);
 CREATE INDEX IF NOT EXISTS idx_file_indexes_codebase ON file_indexes(codebase_id);
 CREATE INDEX IF NOT EXISTS idx_worklog_entries_lookup ON worklog_entries(codebase_id, profile_name, entry_date, group_by);
+CREATE INDEX IF NOT EXISTS idx_worklog_export_state_lookup ON worklog_export_state(codebase_id, profile_name, entry_type, entry_date);
 `

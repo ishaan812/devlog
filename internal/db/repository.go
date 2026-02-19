@@ -93,9 +93,12 @@ type Repository interface {
 	ListWorklogDates(ctx context.Context, codebaseID, profile string) ([]WorklogDateInfo, error)
 	ListWorklogWeeks(ctx context.Context, codebaseID, profile string) ([]WorklogWeekInfo, error)
 	ListWorklogMonths(ctx context.Context, codebaseID, profile string) ([]WorklogMonthInfo, error)
+	ListWorklogEntriesForExport(ctx context.Context, codebaseID, profile string) ([]WorklogEntry, error)
 	GetWeeklySummary(ctx context.Context, codebaseID, profile string, weekStart time.Time) (*WorklogEntry, error)
 	GetWeeklySummariesInRange(ctx context.Context, codebaseID, profile string, startDate, endDate time.Time) ([]WorklogEntry, error)
 	GetMonthlySummary(ctx context.Context, codebaseID, profile string, monthStart time.Time) (*WorklogEntry, error)
+	UpsertWorklogExportState(ctx context.Context, state *WorklogExportState) error
+	GetWorklogExportState(ctx context.Context, codebaseID, profile, entryType string, entryDate time.Time, branchID string) (*WorklogExportState, error)
 	DeleteWorklogEntry(ctx context.Context, entryID string) error
 	DeleteWorklogEntriesByCodebase(ctx context.Context, codebaseID string) error
 
@@ -376,7 +379,7 @@ func (r *SQLRepository) GetBranchesByCodebase(ctx context.Context, codebaseID st
 func (r *SQLRepository) GetBranchCommits(ctx context.Context, branchID string, limit int) ([]Commit, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, hash, codebase_id, branch_id, author_email, message, summary,
-			committed_at, stats, is_user_commit, is_on_default_branch
+			committed_at, stats, is_user_commit, is_on_default_branch, parent_count, is_merge_sync
 		FROM commits WHERE branch_id = $1 ORDER BY committed_at DESC LIMIT $2`, branchID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("query branch commits: %w", err)
@@ -419,11 +422,11 @@ func (r *SQLRepository) UpsertCommit(ctx context.Context, commit *Commit) error 
 	}
 	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO commits (id, hash, codebase_id, branch_id, author_email, message, summary,
-			committed_at, stats, is_user_commit, is_on_default_branch)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+			committed_at, stats, is_user_commit, is_on_default_branch, parent_count, is_merge_sync)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
 		commit.ID, commit.Hash, commit.CodebaseID, NullString(commit.BranchID), commit.AuthorEmail,
 		commit.Message, NullString(commit.Summary), commit.CommittedAt, ToJSON(commit.Stats),
-		commit.IsUserCommit, commit.IsOnDefaultBranch)
+		commit.IsUserCommit, commit.IsOnDefaultBranch, commit.ParentCount, commit.IsMergeSync)
 	if err != nil {
 		return fmt.Errorf("insert commit: %w", err)
 	}
@@ -465,7 +468,7 @@ func (r *SQLRepository) GetExistingCommitHashes(ctx context.Context, codebaseID 
 func (r *SQLRepository) GetUserCommitsMissingSummaries(ctx context.Context, codebaseID string) ([]Commit, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, hash, codebase_id, branch_id, author_email, message, summary,
-			committed_at, stats, is_user_commit, is_on_default_branch
+			committed_at, stats, is_user_commit, is_on_default_branch, parent_count, is_merge_sync
 		FROM commits WHERE codebase_id = $1 AND is_user_commit = TRUE AND (summary IS NULL OR summary = '')
 		ORDER BY committed_at DESC`, codebaseID)
 	if err != nil {
@@ -487,13 +490,13 @@ func (r *SQLRepository) UpdateCommitSummary(ctx context.Context, commitID, summa
 func (r *SQLRepository) GetCommitByHash(ctx context.Context, codebaseID, hash string) (*Commit, error) {
 	row := r.db.QueryRowContext(ctx, `
 		SELECT id, hash, codebase_id, branch_id, author_email, message, summary,
-			committed_at, stats, is_user_commit, is_on_default_branch
+			committed_at, stats, is_user_commit, is_on_default_branch, parent_count, is_merge_sync
 		FROM commits WHERE codebase_id = $1 AND hash = $2`, codebaseID, hash)
 	c := &Commit{}
 	var branchID, summary sql.NullString
 	var stats any
 	err := row.Scan(&c.ID, &c.Hash, &c.CodebaseID, &branchID, &c.AuthorEmail, &c.Message, &summary,
-		&c.CommittedAt, &stats, &c.IsUserCommit, &c.IsOnDefaultBranch)
+		&c.CommittedAt, &stats, &c.IsUserCommit, &c.IsOnDefaultBranch, &c.ParentCount, &c.IsMergeSync)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -513,7 +516,7 @@ func (r *SQLRepository) scanCommits(rows *sql.Rows) ([]Commit, error) {
 		var branchID, summary sql.NullString
 		var stats any
 		if err := rows.Scan(&c.ID, &c.Hash, &c.CodebaseID, &branchID, &c.AuthorEmail, &c.Message, &summary,
-			&c.CommittedAt, &stats, &c.IsUserCommit, &c.IsOnDefaultBranch); err != nil {
+			&c.CommittedAt, &stats, &c.IsUserCommit, &c.IsOnDefaultBranch, &c.ParentCount, &c.IsMergeSync); err != nil {
 			return nil, fmt.Errorf("scan commit row: %w", err)
 		}
 		c.BranchID = branchID.String
@@ -531,7 +534,7 @@ func (r *SQLRepository) scanCommits(rows *sql.Rows) ([]Commit, error) {
 func (r *SQLRepository) GetUserCommits(ctx context.Context, codebaseID string, since time.Time) ([]Commit, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, hash, codebase_id, branch_id, author_email, message, summary,
-			committed_at, stats, is_user_commit, is_on_default_branch
+			committed_at, stats, is_user_commit, is_on_default_branch, parent_count, is_merge_sync
 		FROM commits WHERE codebase_id = $1 AND is_user_commit = TRUE AND committed_at >= $2
 		ORDER BY committed_at DESC`, codebaseID, since)
 	if err != nil {
@@ -566,7 +569,7 @@ func (r *SQLRepository) GetCommitCountByPath(ctx context.Context, repoPath strin
 func (r *SQLRepository) GetCommitsBetweenDates(ctx context.Context, codebaseID string, startDate, endDate time.Time) ([]Commit, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, hash, codebase_id, branch_id, author_email, message, summary,
-			committed_at, stats, is_user_commit, is_on_default_branch
+			committed_at, stats, is_user_commit, is_on_default_branch, parent_count, is_merge_sync
 		FROM commits WHERE codebase_id = $1 AND committed_at >= $2 AND committed_at <= $3
 		ORDER BY committed_at DESC`, codebaseID, startDate, endDate)
 	if err != nil {
@@ -575,7 +578,6 @@ func (r *SQLRepository) GetCommitsBetweenDates(ctx context.Context, codebaseID s
 	defer rows.Close()
 	return r.scanCommits(rows)
 }
-
 
 // GetEarliestCommitDate returns the earliest commit date for a codebase.
 func (r *SQLRepository) GetEarliestCommitDate(ctx context.Context, codebaseID string) (time.Time, error) {
@@ -1199,6 +1201,44 @@ func (r *SQLRepository) ListWorklogMonths(ctx context.Context, codebaseID, profi
 	return months, nil
 }
 
+// ListWorklogEntriesForExport retrieves cached entries for daily, weekly, and monthly exports.
+func (r *SQLRepository) ListWorklogEntriesForExport(ctx context.Context, codebaseID, profile string) ([]WorklogEntry, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, codebase_id, profile_name, entry_date, branch_id, branch_name,
+			entry_type, group_by, content, commit_count, additions, deletions,
+			commit_hashes, created_at
+		FROM worklog_entries
+		WHERE codebase_id = $1 AND profile_name = $2
+			AND entry_type IN ('day_updates', 'week_summary', 'month_summary')
+		ORDER BY entry_date ASC, entry_type ASC, branch_name ASC`, codebaseID, profile)
+	if err != nil {
+		return nil, fmt.Errorf("query worklog export entries: %w", err)
+	}
+	defer rows.Close()
+
+	var entries []WorklogEntry
+	for rows.Next() {
+		e := WorklogEntry{}
+		var branchID, branchName sql.NullString
+		var createdAt sql.NullTime
+		if err := rows.Scan(&e.ID, &e.CodebaseID, &e.ProfileName, &e.EntryDate, &branchID, &branchName,
+			&e.EntryType, &e.GroupBy, &e.Content, &e.CommitCount, &e.Additions, &e.Deletions,
+			&e.CommitHashes, &createdAt); err != nil {
+			return nil, fmt.Errorf("scan worklog export entry: %w", err)
+		}
+		e.BranchID = branchID.String
+		e.BranchName = branchName.String
+		if createdAt.Valid {
+			e.CreatedAt = createdAt.Time
+		}
+		entries = append(entries, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate worklog export entries: %w", err)
+	}
+	return entries, nil
+}
+
 // GetWeeklySummary retrieves a weekly summary worklog entry.
 func (r *SQLRepository) GetWeeklySummary(ctx context.Context, codebaseID, profile string, weekStart time.Time) (*WorklogEntry, error) {
 	weekStart = normalizeDateOnly(weekStart)
@@ -1233,6 +1273,55 @@ func (r *SQLRepository) GetWeeklySummary(ctx context.Context, codebaseID, profil
 	}
 
 	return nil, nil
+}
+
+// UpsertWorklogExportState upserts exported signature tracking for an entry.
+func (r *SQLRepository) UpsertWorklogExportState(ctx context.Context, state *WorklogExportState) error {
+	entryDate := normalizeDateOnly(state.EntryDate)
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO worklog_export_state (
+			id, codebase_id, profile_name, entry_type, entry_date, branch_id,
+			signature, file_path, exported_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		ON CONFLICT (codebase_id, profile_name, entry_type, entry_date, branch_id) DO UPDATE SET
+			signature = EXCLUDED.signature,
+			file_path = EXCLUDED.file_path,
+			exported_at = EXCLUDED.exported_at`,
+		state.ID, state.CodebaseID, state.ProfileName, state.EntryType, entryDate,
+		NullString(state.BranchID), state.Signature, state.FilePath, state.ExportedAt)
+	if err != nil {
+		return fmt.Errorf("upsert worklog export state: %w", err)
+	}
+	return nil
+}
+
+// GetWorklogExportState retrieves an existing exported signature record for an entry.
+func (r *SQLRepository) GetWorklogExportState(ctx context.Context, codebaseID, profile, entryType string, entryDate time.Time, branchID string) (*WorklogExportState, error) {
+	entryDate = normalizeDateOnly(entryDate)
+	row := r.db.QueryRowContext(ctx, `
+		SELECT id, codebase_id, profile_name, entry_type, entry_date, branch_id,
+			signature, file_path, exported_at
+		FROM worklog_export_state
+		WHERE codebase_id = $1 AND profile_name = $2 AND entry_type = $3
+			AND entry_date = $4 AND branch_id IS NOT DISTINCT FROM $5`,
+		codebaseID, profile, entryType, entryDate, NullString(branchID))
+	state := &WorklogExportState{}
+	var exportedAt sql.NullTime
+	var stateBranchID sql.NullString
+	err := row.Scan(&state.ID, &state.CodebaseID, &state.ProfileName, &state.EntryType, &state.EntryDate,
+		&stateBranchID, &state.Signature, &state.FilePath, &exportedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("scan worklog export state: %w", err)
+	}
+	state.BranchID = stateBranchID.String
+	if exportedAt.Valid {
+		state.ExportedAt = exportedAt.Time
+	}
+	return state, nil
 }
 
 // GetWeeklySummariesInRange retrieves all weekly summary worklog entries for a given date range.

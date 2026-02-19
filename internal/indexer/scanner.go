@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -60,12 +61,17 @@ var ignoredDirs = map[string]bool{
 }
 
 var ignoredExtensions = map[string]bool{
+	// Binary/media
 	".png": true, ".jpg": true, ".jpeg": true, ".gif": true, ".ico": true,
 	".svg": true, ".webp": true, ".mp3": true, ".mp4": true, ".wav": true,
 	".pdf": true, ".zip": true, ".tar": true, ".gz": true, ".rar": true,
 	".exe": true, ".dll": true, ".so": true, ".dylib": true,
 	".woff": true, ".woff2": true, ".ttf": true, ".eot": true,
+	// Lock files
 	".lock": true, ".sum": true,
+	// Documentation / prose (non-code)
+	".md": true, ".rst": true, ".txt": true, ".adoc": true, ".asciidoc": true,
+	".tex": true, ".mdc": true,
 }
 
 var languageMap = map[string]string{
@@ -115,8 +121,10 @@ var languageMap = map[string]string{
 	".svelte":  "Svelte",
 }
 
-// ScanCodebase scans a directory and returns information about all files and folders
-func ScanCodebase(rootPath string, maxFileSize int64) (*ScanResult, error) {
+// ScanCodebase scans a directory and returns information about all files and folders.
+// If includeFolders is non-nil, only scans those selected folders (supports nested paths).
+// Use "." or empty string in includeFolders to include root-level files. Nil = scan everything.
+func ScanCodebase(rootPath string, maxFileSize int64, includeFolders []string) (*ScanResult, error) {
 	absPath, err := filepath.Abs(rootPath)
 	if err != nil {
 		return nil, err
@@ -136,6 +144,62 @@ func ScanCodebase(rootPath string, maxFileSize int64) (*ScanResult, error) {
 		Depth: 0,
 	}
 
+	selectedFolders := make(map[string]bool)
+	for _, f := range includeFolders {
+		n := strings.Trim(strings.TrimSpace(filepath.Clean(f)), string(os.PathSeparator))
+		if n == "" || n == "." {
+			selectedFolders["."] = true
+			continue
+		}
+		selectedFolders[n] = true
+	}
+	hasFolderFilter := len(selectedFolders) > 0
+
+	pathIncluded := func(relPath string) bool {
+		if !hasFolderFilter {
+			return true
+		}
+		rel := strings.Trim(strings.TrimSpace(filepath.Clean(relPath)), string(os.PathSeparator))
+		if rel == "" || rel == "." {
+			return selectedFolders["."]
+		}
+		// Root-level files are included only if "." is selected.
+		if !strings.Contains(rel, string(os.PathSeparator)) {
+			return selectedFolders["."]
+		}
+		for selected := range selectedFolders {
+			if selected == "." {
+				continue
+			}
+			if rel == selected || strings.HasPrefix(rel, selected+string(os.PathSeparator)) {
+				return true
+			}
+		}
+		return false
+	}
+
+	dirShouldVisit := func(relPath string) bool {
+		if !hasFolderFilter {
+			return true
+		}
+		rel := strings.Trim(strings.TrimSpace(filepath.Clean(relPath)), string(os.PathSeparator))
+		if rel == "" || rel == "." {
+			return true
+		}
+		for selected := range selectedFolders {
+			if selected == "." {
+				continue
+			}
+			// Visit selected dirs, their descendants, and ancestors needed to reach them.
+			if rel == selected ||
+				strings.HasPrefix(rel, selected+string(os.PathSeparator)) ||
+				strings.HasPrefix(selected, rel+string(os.PathSeparator)) {
+				return true
+			}
+		}
+		return false
+	}
+
 	err = filepath.WalkDir(absPath, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return fmt.Errorf("walk error at %s: %w", path, err)
@@ -151,6 +215,9 @@ func ScanCodebase(rootPath string, maxFileSize int64) (*ScanResult, error) {
 
 		// Check if directory should be ignored
 		if d.IsDir() {
+			if !dirShouldVisit(relPath) {
+				return filepath.SkipDir
+			}
 			if ignoredDirs[d.Name()] {
 				return filepath.SkipDir
 			}
@@ -183,9 +250,15 @@ func ScanCodebase(rootPath string, maxFileSize int64) (*ScanResult, error) {
 		}
 
 		// Process file
-		ext := strings.ToLower(filepath.Ext(d.Name()))
-		if ignoredExtensions[ext] {
+		if hasFolderFilter && !pathIncluded(relPath) {
 			return nil
+		}
+		ext := strings.ToLower(filepath.Ext(d.Name()))
+		nameLower := strings.ToLower(d.Name())
+		if ignoredExtensions[ext] {
+			if nameLower != "readme.md" && nameLower != "readme" {
+				return nil
+			}
 		}
 
 		// Skip hidden files
@@ -237,6 +310,56 @@ func ScanCodebase(rootPath string, maxFileSize int64) (*ScanResult, error) {
 	})
 
 	return result, err
+}
+
+// FolderWithCount holds a folder path and its file count
+type FolderWithCount struct {
+	Path      string
+	FileCount int
+}
+
+// AllFoldersWithCounts returns all folders in the scanned tree with recursive file counts.
+// Includes "." for root-level files. Sorted by path with "." first.
+func AllFoldersWithCounts(sr *ScanResult) []FolderWithCount {
+	counts := make(map[string]int)
+	for path := range sr.Folders {
+		counts[path] = 0
+	}
+	for _, f := range sr.Files {
+		dir := filepath.Dir(f.Path)
+		if dir == "." {
+			counts["."]++
+			continue
+		}
+		// Increment selected folder and all ancestors for recursive counts.
+		for {
+			counts[dir]++
+			parent := filepath.Dir(dir)
+			if parent == "." || parent == "" {
+				counts["."]++
+				break
+			}
+			dir = parent
+		}
+	}
+	var paths []string
+	for p := range counts {
+		paths = append(paths, p)
+	}
+	sort.Slice(paths, func(i, j int) bool {
+		if paths[i] == "." {
+			return true
+		}
+		if paths[j] == "." {
+			return false
+		}
+		return paths[i] < paths[j]
+	})
+	result := make([]FolderWithCount, 0, len(paths))
+	for _, p := range paths {
+		result = append(result, FolderWithCount{Path: p, FileCount: counts[p]})
+	}
+	return result
 }
 
 // CountLines counts the number of lines in content

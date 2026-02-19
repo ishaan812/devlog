@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
@@ -247,6 +248,12 @@ func (r *Repository) GetMergeBase(branch1, branch2 string) (string, error) {
 
 // GetCommitsOnBranch returns commits unique to a branch (not on base branch)
 func (r *Repository) GetCommitsOnBranch(branchName, baseBranch string) ([]string, error) {
+	return r.GetCommitsOnBranchSince(branchName, baseBranch, time.Time{})
+}
+
+// GetCommitsOnBranchSince returns commits unique to a branch (not on base branch),
+// optionally stopping once commit dates are older than sinceDate.
+func (r *Repository) GetCommitsOnBranchSince(branchName, baseBranch string, sinceDate time.Time) ([]string, error) {
 	branchHash, err := r.GetBranchHash(branchName)
 	if err != nil {
 		return nil, err
@@ -254,7 +261,7 @@ func (r *Repository) GetCommitsOnBranch(branchName, baseBranch string) ([]string
 
 	// If no base branch specified, return all commits on this branch
 	if baseBranch == "" {
-		return r.getAllCommitHashes(branchHash, "")
+		return r.getAllCommitHashes(branchHash, "", sinceDate)
 	}
 
 	// If same as base branch, return empty
@@ -269,11 +276,29 @@ func (r *Repository) GetCommitsOnBranch(branchName, baseBranch string) ([]string
 	}
 
 	// Get commits from branch head to merge base
-	return r.getAllCommitHashes(branchHash, mergeBase)
+	return r.getAllCommitHashes(branchHash, mergeBase, sinceDate)
 }
 
-// getAllCommitHashes returns all commit hashes from start to stop (exclusive)
-func (r *Repository) getAllCommitHashes(startHash, stopHash string) ([]string, error) {
+// GetCommitHashSet returns all commit hashes reachable from a branch head.
+func (r *Repository) GetCommitHashSet(branchName string) (map[string]bool, error) {
+	branchHash, err := r.GetBranchHash(branchName)
+	if err != nil {
+		return nil, err
+	}
+	hashes, err := r.getAllCommitHashes(branchHash, "", time.Time{})
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[string]bool, len(hashes))
+	for _, h := range hashes {
+		result[h] = true
+	}
+	return result, nil
+}
+
+// getAllCommitHashes returns all commit hashes from start to stop (exclusive),
+// optionally stopping when commit dates are older than sinceDate.
+func (r *Repository) getAllCommitHashes(startHash, stopHash string, sinceDate time.Time) ([]string, error) {
 	iter, err := r.repo.Log(&git.LogOptions{
 		From: plumbing.NewHash(startHash),
 	})
@@ -285,6 +310,9 @@ func (r *Repository) getAllCommitHashes(startHash, stopHash string) ([]string, e
 	err = iter.ForEach(func(c *object.Commit) error {
 		hash := c.Hash.String()
 		if stopHash != "" && hash == stopHash {
+			return fmt.Errorf("stop")
+		}
+		if !sinceDate.IsZero() && c.Author.When.Before(sinceDate) {
 			return fmt.Errorf("stop")
 		}
 		hashes = append(hashes, hash)
