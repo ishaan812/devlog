@@ -1,14 +1,12 @@
 <div align="center">
 
-```
-     _            _
-  __| | _____   _| | ___   __ _
- / _` |/ _ \ \ / / |/ _ \ / _` |
-| (_| |  __/\ V /| | (_) | (_| |
- \__,_|\___| \_/ |_|\___/ \__, |
-                           |___/
-```
-
+██████╗ ███████╗██╗   ██╗██╗      ██████╗  ██████╗ 
+██╔══██╗██╔════╝██║   ██║██║     ██╔═══██╗██╔════╝ 
+██║  ██║█████╗  ██║   ██║██║     ██║   ██║██║  ███╗
+██║  ██║██╔══╝  ╚██╗ ██╔╝██║     ██║   ██║██║   ██║
+██████╔╝███████╗ ╚████╔╝ ███████╗╚██████╔╝╚██████╔╝
+╚═════╝ ╚══════╝  ╚═══╝  ╚══════╝ ╚═════╝  ╚═════╝ 
+                                                                                          
 ### Stop forgetting what you shipped.
 
 Open-source, local-first AI work logging for developers who juggle<br>too many repos, too many branches, and too many standups.
@@ -36,6 +34,7 @@ devlog onboard              # Set up (works with free local Ollama)
 devlog ingest               # Point it at your repos
 devlog commit               # Generate smart commit messages
 devlog worklog --days 7     # Get your week's work, organized by branch
+devlog export obsidian      # Sync daily/weekly/monthly logs to Obsidian
 devlog console              # Browse worklogs in an interactive TUI
 ```
 
@@ -66,6 +65,7 @@ DevLog is **local-first**. Run it with [Ollama](https://ollama.ai) and your data
 | **Smart Work Logs** | Auto-generated markdown summaries organized by branch, date, and repo — ready for standups, PRs, or performance reviews |
 | **AI Commit Messages** | Generate contextual commit messages from your changes with interactive staging and commit workflow |
 | **Interactive Console** | Full-screen terminal UI to browse repos and navigate through your cached worklogs day-by-day |
+| **Obsidian Export** | Export daily logs, weekly summaries, and monthly summaries to `Devlog/{profile}/{repo}/...` with incremental diff-only sync |
 | **Multi-Repo Ingestion** | Ingest as many repos as you want into a single profile. See your full picture. |
 | **Multi-Branch Tracking** | Branch-aware ingestion remembers your selections per repo. Track `main`, `develop`, and every feature branch. |
 | **Local-First AI** | Works completely offline with Ollama. Your code and history stay on your machine. |
@@ -229,6 +229,32 @@ devlog worklog --no-llm            # Skip AI summaries
 devlog worklog --group-by date     # Group by date instead of branch
 ```
 
+### `devlog export obsidian`
+
+Export cached worklogs to Obsidian-ready markdown files.
+
+```bash
+devlog export obsidian
+devlog export obsidian --vault ~/Obsidian/my-vault
+devlog export obsidian --dry-run
+devlog export obsidian --force
+devlog export obsidian status
+```
+
+Export layout:
+
+```text
+Devlog/{profile_name}/{repo_name}/
+├── daily/YYYY/MM/YYYY-MM-DD.md
+├── weekly/YYYY/YYYY-MM-DD_to_YYYY-MM-DD.md
+└── monthly/YYYY/YYYY-MM.md
+```
+
+Notes:
+- Exports cached entries only (`day_updates`, `week_summary`, `month_summary`)
+- If `--vault` is not configured, DevLog prompts for vault path in TUI
+- Incremental export writes only changed/new entries by default
+
 ### `devlog commit`
 
 Generate AI-powered commit messages from your changes.
@@ -312,6 +338,7 @@ DevLog doesn't lock you into an expensive API. Start free and local, upgrade if 
 | **OpenRouter** | 🟡 Cloud | ~$0.001/query | Cheap access to dozens of models |
 | **Anthropic** | 🟡 Cloud | Paid | Best quality summaries |
 | **OpenAI** | 🟡 Cloud | Paid | Wide model selection |
+| **ChatGPT** | 🟡 Cloud | Paid | Use your existing ChatGPT subscription |
 | **Bedrock** | 🟡 Cloud | Paid | AWS-integrated workflows |
 
 ### Setting Up Ollama (Recommended — Free & Private)
@@ -399,7 +426,7 @@ devlog ingest --skip-summaries --skip-commit-summaries
 
 Fill in missing summaries after fast ingestion:
 ```bash
-devlog ingest --fill-summaries
+devlog ingest
 ```
 
 ### Multiple Repos, One Timeline
@@ -410,6 +437,16 @@ devlog ingest ~/projects/frontend
 devlog ingest ~/projects/backend
 devlog ingest ~/projects/shared-lib
 devlog worklog --days 7  # See everything in one report
+```
+
+### Obsidian Sync Workflow
+
+Keep your notes vault up to date with your generated logs:
+
+```bash
+devlog worklog --days 30
+devlog export obsidian --vault ~/Obsidian/my-vault
+devlog export obsidian status
 ```
 
 ### Work vs Personal — Completely Isolated

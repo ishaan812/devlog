@@ -22,9 +22,9 @@ const FEATURES = [
     desc: 'Ingest as many repos as you want into a single profile. Frontend, backend, shared libraries — DevLog tracks them all into one unified timeline. See your full picture.',
   },
   {
-    num: '04 // Privacy',
-    title: 'Local-First AI',
-    desc: 'Works completely offline with Ollama. Your code and history stay on your machine. No subscriptions, no telemetry, no cloud dependency. Optionally use cloud providers for pennies per query.',
+    num: '04 // Export',
+    title: 'Obsidian Vault Sync',
+    desc: 'Export daily logs, weekly summaries, and monthly summaries to Obsidian-ready markdown files.',
   },
 ]
 
@@ -122,7 +122,9 @@ function Hero() {
         <br />
         <span className="text-green mr-1" aria-hidden="true">&gt;</span> Multi-repo, multi-branch tracking. One unified timeline.
         <br />
-        <span className="text-green mr-1" aria-hidden="true">&gt;</span> Professional markdown work logs from your git history.
+        <span className="text-green mr-1" aria-hidden="true">&gt;</span> Professional markdown work logs from just your git history.
+        <br />
+        <span className="text-green mr-1" aria-hidden="true">&gt;</span> One-command Obsidian export for daily, weekly, and monthly notes.
       </p>
       <div className="flex flex-col items-center gap-4">
         {/* Install method switcher */}
@@ -306,6 +308,18 @@ function TerminalDemo() {
             <span className="text-[#58a6ff]">→</span>
             <span className="text-text-dim"> Launching interactive TUI...</span>
           </span>
+
+          <div className="h-3" />
+
+          <span className="block mb-0.5">
+            <span className="text-green">$ </span>
+            <span className="text-text-primary font-medium">devlog export obsidian --vault ~/Obsidian/work</span>
+          </span>
+          <span className="block mb-0.5">
+            <span className="text-green">✓</span>
+            <span className="text-text-dim"> Exported daily/weekly/monthly notes to </span>
+            <span className="text-[#58a6ff]">Devlog/default/frontend</span>
+          </span>
         </div>
       </figure>
     </section>
@@ -391,7 +405,7 @@ function CTA() {
       </h2>
       <p className="text-sm text-text-secondary mb-10 max-w-[480px] mx-auto">
         Professional markdown work logs, generated from your actual commits.<br />
-        Multi-repo, multi-branch, zero effort.
+        Multi-repo, multi-branch, Obsidian-ready export.
       </p>
       
       <div className="flex flex-col items-center gap-4">
