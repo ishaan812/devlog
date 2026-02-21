@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Download, Github, Star, Copy, Check, GitPullRequest, Play } from 'lucide-react'
+import DocsPage from './DocsPage'
 
 const ENVIRONMENTS = [
   'ZSH', 'FISH', 'POWERSHELL', 'DOCKER', 'LINUX', 'MACOS', 'WINDOWS WSL', 'BASH',
@@ -60,9 +61,7 @@ function Navbar() {
           /Features
         </a>
         <a
-          href="https://github.com/ishaan812/devlog#quick-start"
-          target="_blank"
-          rel="noopener noreferrer"
+          href="/docs"
           className="hidden md:inline font-mono text-xs text-text-secondary no-underline tracking-[1px] uppercase transition-colors duration-200 hover:text-green"
           aria-label="Quick Start Guide"
         >
@@ -474,7 +473,7 @@ function Footer() {
       </div>
       <nav className="flex gap-6" aria-label="Footer navigation">
         <a href="https://www.npmjs.com/package/@ishaan812/devlog" target="_blank" rel="noopener noreferrer" className="text-text-dim no-underline uppercase tracking-[1px] text-[11px] transition-colors duration-200 hover:text-green">NPM</a>
-        <a href="https://github.com/ishaan812/devlog#quick-start" target="_blank" rel="noopener noreferrer" className="text-text-dim no-underline uppercase tracking-[1px] text-[11px] transition-colors duration-200 hover:text-green">Docs</a>
+        <a href="/docs" className="text-text-dim no-underline uppercase tracking-[1px] text-[11px] transition-colors duration-200 hover:text-green">Docs</a>
         <a href="https://github.com/ishaan812/devlog" target="_blank" rel="noopener noreferrer" className="text-text-dim no-underline uppercase tracking-[1px] text-[11px] transition-colors duration-200 hover:text-green">GitHub</a>
         <a href="https://github.com/ishaan812/devlog/blob/master/LICENSE" target="_blank" rel="noopener noreferrer" className="text-text-dim no-underline uppercase tracking-[1px] text-[11px] transition-colors duration-200 hover:text-green">MIT License</a>
       </nav>
@@ -483,6 +482,10 @@ function Footer() {
 }
 
 function App() {
+  if (window.location.pathname.startsWith('/docs')) {
+    return <DocsPage />
+  }
+
   return (
     <>
       <SkipToContent />
