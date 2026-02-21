@@ -20,7 +20,7 @@ Open-source, local-first AI work logging for developers who juggle<br>too many r
 
 </div>
 
-You ship code across 5 repos, 12 branches, and 3 teams. Monday morning standup hits and you're scrolling through `git log` trying to remember what you did last Thursday.
+You ship code across 5 repos, 12 branches, and 3 teams. Monday morning standup hits and you're scrolling through `git log`, linear and slack trying to remember what you did last Thursday.
 
 **DevLog fixes that.** It ingests your git history across every repo and branch you work on, and turns it into smart, structured work logs — automatically. No more "I think I worked on the auth thing?" Get your work summary in seconds.
 
@@ -90,6 +90,9 @@ devlog ingest ~/projects/shared-lib
 
 # 4. See what you actually shipped
 devlog worklog --days 7
+
+# 5. Export logs to Obsidian
+devlog export obsidian
 ```
 
 ## Installation
