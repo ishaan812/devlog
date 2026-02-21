@@ -301,7 +301,6 @@ function TerminalDemo() {
           <span className="block mb-0.5">
             <span className="text-green">$ </span>
             <span className="text-text-primary font-medium">devlog console </span>
-            <span className="inline-block w-2 h-4 bg-green animate-blink align-text-bottom" aria-hidden="true" />
           </span>
           <span className="block mb-0.5">
             <span className="text-[#58a6ff]">→</span>
@@ -317,7 +316,8 @@ function TerminalDemo() {
           <span className="block mb-0.5">
             <span className="text-green">✓</span>
             <span className="text-text-dim"> Exported daily/weekly/monthly notes to </span>
-            <span className="text-[#58a6ff]">Devlog/default/frontend</span>
+            <span className="text-[#58a6ff]">Devlog/default/frontend </span>
+            <span className="inline-block w-2 h-4 bg-green animate-blink align-text-bottom" aria-hidden="true" />
           </span>
         </div>
       </figure>
