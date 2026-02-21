@@ -175,6 +175,7 @@ func runWorklog(cmd *cobra.Command, args []string) error {
 
 	projectContext := getProjectContext(codebase)
 	codebaseContext := getCodebaseContext(codebase)
+	nameOfUser := getWorklogUserName(cfg)
 
 	style := worklogStyle
 	if style == "" {
@@ -205,15 +206,15 @@ func runWorklog(cmd *cobra.Command, args []string) error {
 		if groupErr != nil {
 			return groupErr
 		}
-		markdown, err = generateBranchWorklogMarkdown(groups, client, cfg, loc, projectContext, codebaseContext, cache, style)
+		markdown, err = generateBranchWorklogMarkdown(groups, client, cfg, loc, projectContext, codebaseContext, cache, style, nameOfUser)
 	default:
 		dayGroups = groupByDate(commits, loc)
-		markdown, err = generateWorklogMarkdown(dayGroups, client, cfg, loc, projectContext, codebaseContext, cache, style)
+		markdown, err = generateWorklogMarkdown(dayGroups, client, cfg, loc, projectContext, codebaseContext, cache, style, nameOfUser)
 
 		// Generate weekly summaries if the date range spans more than one week
 		if worklogDays > 7 && cache != nil && !worklogNoLLM {
 			successColor.Println("\n  Generating weekly summaries...")
-			if err := generateWeeklySummaries(ctx, cache, dayGroups, client, projectContext, codebaseContext, loc, style); err != nil {
+			if err := generateWeeklySummaries(ctx, cache, dayGroups, client, projectContext, codebaseContext, loc, style, nameOfUser); err != nil {
 				fmt.Printf("Warning: failed to generate weekly summaries: %v\n", err)
 			} else {
 				successColor.Println("  ✓ Weekly summaries generated")
@@ -223,7 +224,7 @@ func runWorklog(cmd *cobra.Command, args []string) error {
 		// Generate monthly summaries if the date range is long enough
 		if worklogDays > 28 && cache != nil && !worklogNoLLM {
 			successColor.Println("\n  Generating monthly summaries...")
-			if err := generateMonthlySummaries(ctx, cache, client, projectContext, codebaseContext, loc, style, startDate, endDate); err != nil {
+			if err := generateMonthlySummaries(ctx, cache, client, projectContext, codebaseContext, loc, style, startDate, endDate, nameOfUser); err != nil {
 				fmt.Printf("Warning: failed to generate monthly summaries: %v\n", err)
 			} else {
 				successColor.Println("  ✓ Monthly summaries generated")
@@ -383,6 +384,17 @@ func getCodebaseContext(codebase *db.Codebase) string {
 		return "(No codebase context available)"
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+func getWorklogUserName(cfg *config.Config) string {
+	userName := cfg.GetEffectiveUserName()
+	if userName == "" {
+		userName = cfg.GetEffectiveGitHubUsername()
+	}
+	if userName == "" {
+		userName = "User"
+	}
+	return userName
 }
 
 func extractContextLine(section string) string {
@@ -665,7 +677,7 @@ type branchOutputSection struct {
 	content    string
 }
 
-func generateWorklogMarkdown(groups []dayGroup, client llm.Client, cfg *config.Config, loc *time.Location, projectContext string, codebaseContext string, cache *worklogCacheContext, style string) (string, error) {
+func generateWorklogMarkdown(groups []dayGroup, client llm.Client, cfg *config.Config, loc *time.Location, projectContext string, codebaseContext string, cache *worklogCacheContext, style string, nameOfUser string) (string, error) {
 	ctx := context.Background()
 	dimColor := color.New(color.FgHiBlack)
 	cacheColor := color.New(color.FgHiGreen)
@@ -713,7 +725,7 @@ func generateWorklogMarkdown(groups []dayGroup, client llm.Client, cfg *config.C
 			var err error
 
 			if forceRegen {
-				content, err = buildDayBranchSection(commits, client, projectContext, branchCtx, loc, style)
+				content, err = buildDayBranchSection(commits, client, projectContext, branchCtx, loc, style, nameOfUser)
 				if err != nil {
 					return "", fmt.Errorf("failed to generate day/branch updates: %w", err)
 				}
@@ -723,7 +735,7 @@ func generateWorklogMarkdown(groups []dayGroup, client llm.Client, cfg *config.C
 					ctx, cache, group.Date, branchID, bName,
 					"day_updates", "date", commits,
 					func() (string, error) {
-						return buildDayBranchSection(commits, client, projectContext, branchCtx, loc, style)
+						return buildDayBranchSection(commits, client, projectContext, branchCtx, loc, style, nameOfUser)
 					},
 				)
 				if err != nil {
@@ -804,7 +816,7 @@ func generateWorklogMarkdown(groups []dayGroup, client llm.Client, cfg *config.C
 	sb.WriteString("---\n\n")
 
 	if client != nil {
-		summary, err := generateOverallSummary(groups, client, projectContext, codebaseContext, style)
+		summary, err := generateOverallSummary(groups, client, projectContext, codebaseContext, style, nameOfUser)
 		if err != nil {
 			return "", fmt.Errorf("failed to generate overall summary: %w", err)
 		}
@@ -831,7 +843,7 @@ func generateWorklogMarkdown(groups []dayGroup, client llm.Client, cfg *config.C
 	return sb.String(), nil
 }
 
-func generateBranchWorklogMarkdown(groups []branchGroup, client llm.Client, cfg *config.Config, loc *time.Location, projectContext string, codebaseContext string, cache *worklogCacheContext, style string) (string, error) {
+func generateBranchWorklogMarkdown(groups []branchGroup, client llm.Client, cfg *config.Config, loc *time.Location, projectContext string, codebaseContext string, cache *worklogCacheContext, style string, nameOfUser string) (string, error) {
 	ctx := context.Background()
 	dimColor := color.New(color.FgHiBlack)
 	cacheColor := color.New(color.FgHiGreen)
@@ -891,7 +903,7 @@ func generateBranchWorklogMarkdown(groups []branchGroup, client llm.Client, cfg 
 				ctx, cache, entryDate, branchID, branchName,
 				"branch_summary", "branch", group.Commits,
 				func() (string, error) {
-					return generateBranchSummary(group, client, projectContext, branchCtx, style)
+					return generateBranchSummary(group, client, projectContext, branchCtx, style, nameOfUser)
 				},
 			)
 			if err != nil {
@@ -960,12 +972,12 @@ func generateBranchWorklogMarkdown(groups []branchGroup, client llm.Client, cfg 
 	return sb.String(), nil
 }
 
-func buildDayBranchSection(commits []commitData, client llm.Client, projectContext string, branchContext string, loc *time.Location, style string) (string, error) {
+func buildDayBranchSection(commits []commitData, client llm.Client, projectContext string, branchContext string, loc *time.Location, style string, nameOfUser string) (string, error) {
 	var section strings.Builder
 	attributionCommits, mergeSyncCommits := splitAttributionCommits(commits)
 
 	if client != nil && len(attributionCommits) > 0 {
-		updatesSummary, err := generateDayBranchUpdates(attributionCommits, client, projectContext, branchContext, style)
+		updatesSummary, err := generateDayBranchUpdates(attributionCommits, client, projectContext, branchContext, style, nameOfUser)
 		if err != nil {
 			return "", err
 		}
@@ -1006,7 +1018,7 @@ func buildDayBranchSection(commits []commitData, client llm.Client, projectConte
 	return section.String(), nil
 }
 
-func generateBranchSummary(group branchGroup, client llm.Client, projectContext string, branchContext string, style string) (string, error) {
+func generateBranchSummary(group branchGroup, client llm.Client, projectContext string, branchContext string, style string, nameOfUser string) (string, error) {
 	attributionCommits, mergeSyncCommits := splitAttributionCommits(group.Commits)
 	if len(attributionCommits) == 0 {
 		if len(mergeSyncCommits) > 0 {
@@ -1028,9 +1040,9 @@ func generateBranchSummary(group branchGroup, client llm.Client, projectContext 
 
 	var prompt string
 	if style == "technical" {
-		prompt = prompts.BuildWorklogBranchSummaryPrompt(projectContext, branchContext, strings.Join(commitBlocks, "\n---\n"), stats)
+		prompt = prompts.BuildWorklogBranchSummaryPrompt(nameOfUser, projectContext, branchContext, strings.Join(commitBlocks, "\n---\n"), stats)
 	} else {
-		prompt = prompts.BuildWorklogBranchSummaryPromptNonTechnical(projectContext, branchContext, strings.Join(commitBlocks, "\n---\n"), stats)
+		prompt = prompts.BuildWorklogBranchSummaryPromptNonTechnical(nameOfUser, projectContext, branchContext, strings.Join(commitBlocks, "\n---\n"), stats)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
@@ -1042,7 +1054,7 @@ func generateBranchSummary(group branchGroup, client llm.Client, projectContext 
 	return result, nil
 }
 
-func generateDayBranchUpdates(commits []commitData, client llm.Client, projectContext string, branchContext string, style string) (string, error) {
+func generateDayBranchUpdates(commits []commitData, client llm.Client, projectContext string, branchContext string, style string, nameOfUser string) (string, error) {
 	var commitBlocks []string
 	for _, c := range commits {
 		commitBlocks = append(commitBlocks, buildCommitContext(c, style))
@@ -1054,9 +1066,9 @@ func generateDayBranchUpdates(commits []commitData, client llm.Client, projectCo
 
 	var prompt string
 	if style == "technical" {
-		prompt = prompts.BuildWorklogDayUpdatesPrompt(projectContext, branchContext, strings.Join(commitBlocks, "\n---\n"))
+		prompt = prompts.BuildWorklogDayUpdatesPrompt(nameOfUser, projectContext, branchContext, strings.Join(commitBlocks, "\n---\n"))
 	} else {
-		prompt = prompts.BuildWorklogDayUpdatesPromptNonTechnical(projectContext, branchContext, strings.Join(commitBlocks, "\n---\n"))
+		prompt = prompts.BuildWorklogDayUpdatesPromptNonTechnical(nameOfUser, projectContext, branchContext, strings.Join(commitBlocks, "\n---\n"))
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
@@ -1068,7 +1080,7 @@ func generateDayBranchUpdates(commits []commitData, client llm.Client, projectCo
 	return result, nil
 }
 
-func generateOverallSummary(groups []dayGroup, client llm.Client, projectContext string, codebaseContext string, style string) (string, error) {
+func generateOverallSummary(groups []dayGroup, client llm.Client, projectContext string, codebaseContext string, style string, nameOfUser string) (string, error) {
 	var allCommits []commitData
 	var commitBlocks []string
 	for _, g := range groups {
@@ -1089,9 +1101,9 @@ func generateOverallSummary(groups []dayGroup, client llm.Client, projectContext
 
 	var prompt string
 	if style == "technical" {
-		prompt = prompts.BuildWorklogOverallSummaryPrompt(projectContext, codebaseContext, strings.Join(commitBlocks, "\n---\n"), stats)
+		prompt = prompts.BuildWorklogOverallSummaryPrompt(nameOfUser, projectContext, codebaseContext, strings.Join(commitBlocks, "\n---\n"), stats)
 	} else {
-		prompt = prompts.BuildWorklogOverallSummaryPromptNonTechnical(projectContext, codebaseContext, strings.Join(commitBlocks, "\n---\n"), stats)
+		prompt = prompts.BuildWorklogOverallSummaryPromptNonTechnical(nameOfUser, projectContext, codebaseContext, strings.Join(commitBlocks, "\n---\n"), stats)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
@@ -1114,7 +1126,7 @@ func getWeekStart(t time.Time, loc *time.Location) time.Time {
 }
 
 // generateWeeklySummaries generates and caches weekly summary entries
-func generateWeeklySummaries(ctx context.Context, cache *worklogCacheContext, groups []dayGroup, client llm.Client, projectContext, codebaseContext string, loc *time.Location, style string) error {
+func generateWeeklySummaries(ctx context.Context, cache *worklogCacheContext, groups []dayGroup, client llm.Client, projectContext, codebaseContext string, loc *time.Location, style string, nameOfUser string) error {
 	if cache == nil || cache.dbRepo == nil {
 		return nil
 	}
@@ -1189,9 +1201,9 @@ func generateWeeklySummaries(ctx context.Context, cache *worklogCacheContext, gr
 		periodContext := buildWeeklyPeriodContext(weekCommits, weekDays, loc)
 		var prompt string
 		if style == "technical" {
-			prompt = prompts.BuildWorklogWeekSummaryPrompt(projectContext, codebaseContext, periodContext, dailySummaryText, stats)
+			prompt = prompts.BuildWorklogWeekSummaryPrompt(nameOfUser, projectContext, codebaseContext, periodContext, dailySummaryText, stats)
 		} else {
-			prompt = prompts.BuildWorklogWeekSummaryPromptNonTechnical(projectContext, codebaseContext, periodContext, dailySummaryText, stats)
+			prompt = prompts.BuildWorklogWeekSummaryPromptNonTechnical(nameOfUser, projectContext, codebaseContext, periodContext, dailySummaryText, stats)
 		}
 
 		timeoutCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
@@ -1362,7 +1374,7 @@ func buildMonthlyPeriodContext(ctx context.Context, cache *worklogCacheContext, 
 }
 
 // generateMonthlySummaries generates and caches monthly summary entries
-func generateMonthlySummaries(ctx context.Context, cache *worklogCacheContext, client llm.Client, projectContext, codebaseContext string, loc *time.Location, style string, startDate, endDate time.Time) error {
+func generateMonthlySummaries(ctx context.Context, cache *worklogCacheContext, client llm.Client, projectContext, codebaseContext string, loc *time.Location, style string, startDate, endDate time.Time, nameOfUser string) error {
 	if cache == nil || cache.dbRepo == nil {
 		return nil
 	}
@@ -1472,9 +1484,9 @@ func generateMonthlySummaries(ctx context.Context, cache *worklogCacheContext, c
 		periodContext := buildMonthlyPeriodContext(ctx, cache, monthStart, monthEnd, loc)
 		var prompt string
 		if style == "technical" {
-			prompt = prompts.BuildWorklogMonthSummaryPrompt(projectContext, codebaseContext, periodContext, strings.Join(summaryTexts, "\n\n"), monthStats)
+			prompt = prompts.BuildWorklogMonthSummaryPrompt(nameOfUser, projectContext, codebaseContext, periodContext, strings.Join(summaryTexts, "\n\n"), monthStats)
 		} else {
-			prompt = prompts.BuildWorklogMonthSummaryPromptNonTechnical(projectContext, codebaseContext, periodContext, strings.Join(summaryTexts, "\n\n"), monthStats)
+			prompt = prompts.BuildWorklogMonthSummaryPromptNonTechnical(nameOfUser, projectContext, codebaseContext, periodContext, strings.Join(summaryTexts, "\n\n"), monthStats)
 		}
 
 		timeoutCtx, cancel := context.WithTimeout(ctx, 120*time.Second)

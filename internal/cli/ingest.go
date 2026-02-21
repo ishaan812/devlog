@@ -367,6 +367,7 @@ func generateWorklogAfterIngest(absPath string, cfg *config.Config) error {
 
 	projectContext := getProjectContext(codebase)
 	codebaseContext := getCodebaseContext(codebase)
+	nameOfUser := getWorklogUserName(cfg)
 
 	style := cfg.GetWorklogStyle()
 	if style == "" {
@@ -383,7 +384,7 @@ func generateWorklogAfterIngest(absPath string, cfg *config.Config) error {
 	}
 
 	groups := groupByDate(commits, loc)
-	markdown, err := generateWorklogMarkdown(groups, client, cfg, loc, projectContext, codebaseContext, cache, style)
+	markdown, err := generateWorklogMarkdown(groups, client, cfg, loc, projectContext, codebaseContext, cache, style, nameOfUser)
 	if err != nil {
 		return fmt.Errorf("failed to generate markdown: %w", err)
 	}
@@ -394,14 +395,14 @@ func generateWorklogAfterIngest(absPath string, cfg *config.Config) error {
 	if client != nil {
 		if days > 7 {
 			dimColor.Println("  Generating weekly summaries...")
-			if err := generateWeeklySummaries(ctx, cache, groups, client, projectContext, codebaseContext, loc, style); err != nil {
+			if err := generateWeeklySummaries(ctx, cache, groups, client, projectContext, codebaseContext, loc, style, nameOfUser); err != nil {
 				dimColor.Printf("  Warning: weekly summary generation failed: %v\n", err)
 				VerboseLog("Warning: failed to generate weekly summaries after ingest: %v", err)
 			}
 		}
 		if days > 28 {
 			dimColor.Println("  Generating monthly summaries...")
-			if err := generateMonthlySummaries(ctx, cache, client, projectContext, codebaseContext, loc, style, startDate, endDate); err != nil {
+			if err := generateMonthlySummaries(ctx, cache, client, projectContext, codebaseContext, loc, style, startDate, endDate, nameOfUser); err != nil {
 				dimColor.Printf("  Warning: monthly summary generation failed: %v\n", err)
 				VerboseLog("Warning: failed to generate monthly summaries after ingest: %v", err)
 			}

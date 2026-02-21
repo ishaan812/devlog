@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
@@ -173,7 +172,7 @@ func runExportObsidianStatus(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("failed to load export state: %w", err)
 		}
 
-		if state != nil && state.Signature == item.Signature {
+		if exportEntryIsCurrent(exportCtx, item, state) {
 			summary.SkippedUnchanged++
 			summary.ByTypeSkipped[item.EntryType]++
 			if state.ExportedAt.After(summary.LastExportedAtByTy[item.EntryType]) {
@@ -245,7 +244,7 @@ func resolveObsidianExportContext(requireVault bool, persistSettings bool) (*obs
 	profileName := cfg.GetActiveProfileName()
 	saved := cfg.GetObsidianVault(profileName, repoPath)
 	resolvedVault := ""
-	resolvedRoot := "DevLog"
+	resolvedRoot := "Devlog"
 	if saved != nil {
 		resolvedVault = saved.VaultPath
 		if strings.TrimSpace(saved.RootFolder) != "" {
@@ -356,7 +355,7 @@ func buildObsidianExportItems(ctx context.Context, exportCtx *obsidianExportCont
 		})
 
 		date := dayEntries[0].EntryDate.In(exportCtx.loc)
-		relPath := filepath.Join(exportCtx.rootFolder, "daily", date.Format("2006"), date.Format("01"), date.Format("2006-01-02")+".md")
+		relPath := filepath.Join(exportBasePath(exportCtx), "daily", date.Format("2006"), date.Format("01"), date.Format("2006-01-02")+".md")
 		content := renderDailyObsidianMarkdown(exportCtx, date, dayEntries)
 		sig := computeExportSignature("day_updates", date, "", dayEntries, content)
 
@@ -375,7 +374,7 @@ func buildObsidianExportItems(ctx context.Context, exportCtx *obsidianExportCont
 	})
 	for _, e := range weekly {
 		weekStart := e.EntryDate.In(exportCtx.loc)
-		relPath := filepath.Join(exportCtx.rootFolder, "weekly", weekStart.Format("2006"), weekStart.Format("2006-01-02")+".md")
+		relPath := filepath.Join(exportBasePath(exportCtx), "weekly", weekStart.Format("2006"), weekRangeNoteID(weekStart)+".md")
 		content := renderWeeklyObsidianMarkdown(exportCtx, weekStart, e)
 		sig := computeExportSignature("week_summary", weekStart, "", []db.WorklogEntry{e}, content)
 		items = append(items, obsidianExportItem{
@@ -393,7 +392,7 @@ func buildObsidianExportItems(ctx context.Context, exportCtx *obsidianExportCont
 	})
 	for _, e := range monthly {
 		monthStart := e.EntryDate.In(exportCtx.loc)
-		relPath := filepath.Join(exportCtx.rootFolder, "monthly", monthStart.Format("2006"), monthStart.Format("2006-01")+".md")
+		relPath := filepath.Join(exportBasePath(exportCtx), "monthly", monthStart.Format("2006"), monthStart.Format("2006-01")+".md")
 		content := renderMonthlyObsidianMarkdown(exportCtx, monthStart, e)
 		sig := computeExportSignature("month_summary", monthStart, "", []db.WorklogEntry{e}, content)
 		items = append(items, obsidianExportItem{
@@ -427,7 +426,7 @@ func applyObsidianExport(ctx context.Context, exportCtx *obsidianExportContext, 
 		if err != nil {
 			return nil, fmt.Errorf("failed to read export state: %w", err)
 		}
-		upToDate := existing != nil && existing.Signature == item.Signature
+		upToDate := exportEntryIsCurrent(exportCtx, item, existing)
 		if upToDate && !force {
 			summary.SkippedUnchanged++
 			summary.ByTypeSkipped[item.EntryType]++
@@ -451,10 +450,7 @@ func applyObsidianExport(ctx context.Context, exportCtx *obsidianExportContext, 
 			return nil, fmt.Errorf("failed to write exported file %s: %w", outPath, err)
 		}
 
-		stateID := uuid.New().String()
-		if existing != nil && existing.ID != "" {
-			stateID = existing.ID
-		}
+		stateID := exportStateID(exportCtx.codebase.ID, exportCtx.profileName, item.EntryType, item.EntryDate, item.BranchID)
 		state := &db.WorklogExportState{
 			ID:          stateID,
 			CodebaseID:  exportCtx.codebase.ID,
@@ -480,6 +476,7 @@ func applyObsidianExport(ctx context.Context, exportCtx *obsidianExportContext, 
 
 func renderDailyObsidianMarkdown(exportCtx *obsidianExportContext, date time.Time, entries []db.WorklogEntry) string {
 	weekStart := getWeekStart(date, exportCtx.loc)
+	weekRef := weekRangeNoteID(weekStart)
 	monthRef := date.In(exportCtx.loc).Format("2006-01")
 
 	var sb strings.Builder
@@ -495,7 +492,7 @@ func renderDailyObsidianMarkdown(exportCtx *obsidianExportContext, date time.Tim
 	sb.WriteString("  - daily\n")
 	sb.WriteString("---\n\n")
 	sb.WriteString(fmt.Sprintf("# Daily Worklog - %s\n\n", date.Format("Monday, January 2, 2006")))
-	sb.WriteString(fmt.Sprintf("Week: [[%s]]\n", weekStart.Format("2006-01-02")))
+	sb.WriteString(fmt.Sprintf("Week: [[%s]]\n", weekRef))
 	sb.WriteString(fmt.Sprintf("Month: [[%s]]\n\n", monthRef))
 	sb.WriteString("---\n\n")
 
@@ -580,6 +577,61 @@ func computeExportSignature(entryType string, entryDate time.Time, branchID stri
 func computeSHA256(content string) string {
 	sum := sha256.Sum256([]byte(content))
 	return hex.EncodeToString(sum[:])
+}
+
+func exportBasePath(exportCtx *obsidianExportContext) string {
+	profileName := sanitizePathComponent(exportCtx.profileName)
+	if profileName == "" {
+		profileName = "default"
+	}
+	repoName := sanitizePathComponent(exportCtx.repoName)
+	if repoName == "" {
+		repoName = "unknown_repo"
+	}
+	return filepath.Join(exportCtx.rootFolder, profileName, repoName)
+}
+
+func sanitizePathComponent(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	s = strings.ReplaceAll(s, " ", "_")
+	replacer := strings.NewReplacer("/", "_", "\\", "_", ":", "_")
+	return replacer.Replace(s)
+}
+
+func exportStateID(codebaseID, profileName, entryType string, entryDate time.Time, branchID string) string {
+	key := strings.Join([]string{
+		codebaseID,
+		profileName,
+		entryType,
+		entryDate.Format("2006-01-02"),
+		branchID,
+	}, "|")
+	return "wxs-" + computeSHA256(key)
+}
+
+func weekRangeNoteID(weekStart time.Time) string {
+	weekEnd := weekStart.AddDate(0, 0, 6)
+	return fmt.Sprintf("%s_to_%s", weekStart.Format("2006-01-02"), weekEnd.Format("2006-01-02"))
+}
+
+func exportEntryIsCurrent(exportCtx *obsidianExportContext, item obsidianExportItem, state *db.WorklogExportState) bool {
+	if state == nil {
+		return false
+	}
+	if state.Signature != item.Signature {
+		return false
+	}
+	if state.FilePath != item.RelativePath {
+		return false
+	}
+	targetPath := filepath.Join(exportCtx.vaultPath, item.RelativePath)
+	if _, err := os.Stat(targetPath); err != nil {
+		return false
+	}
+	return true
 }
 
 func printTypeBreakdown(summary *obsidianExportSummary) {

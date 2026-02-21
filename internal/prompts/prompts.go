@@ -74,46 +74,46 @@ func BuildCommitSummarizerPrompt(projectContext, commitContent string) string {
 	return fmt.Sprintf(strings.TrimSpace(commitSummarizerPromptTemplate), projectContext, commitContent)
 }
 
-func BuildWorklogOverallSummaryPrompt(projectContext, codebaseContext, commits, stats string) string {
-	return fmt.Sprintf(strings.TrimSpace(worklogOverallSummaryPromptTemplate), projectContext, codebaseContext, commits, stats)
+func BuildWorklogOverallSummaryPrompt(nameOfUser, projectContext, codebaseContext, commits, stats string) string {
+	return fmt.Sprintf(strings.TrimSpace(worklogOverallSummaryPromptTemplate), nameOfUser, projectContext, codebaseContext, commits, stats)
 }
 
-func BuildWorklogDayUpdatesPrompt(projectContext, branchContext, commits string) string {
-	return fmt.Sprintf(strings.TrimSpace(worklogDayUpdatesPromptTemplate), projectContext, branchContext, commits)
+func BuildWorklogDayUpdatesPrompt(nameOfUser, projectContext, branchContext, commits string) string {
+	return fmt.Sprintf(strings.TrimSpace(worklogDayUpdatesPromptTemplate), nameOfUser, projectContext, branchContext, commits)
 }
 
-func BuildWorklogBranchSummaryPrompt(projectContext, branchContext, commits, stats string) string {
-	return fmt.Sprintf(strings.TrimSpace(worklogBranchSummaryPromptTemplate), projectContext, branchContext, commits, stats)
+func BuildWorklogBranchSummaryPrompt(nameOfUser, projectContext, branchContext, commits, stats string) string {
+	return fmt.Sprintf(strings.TrimSpace(worklogBranchSummaryPromptTemplate), nameOfUser, projectContext, branchContext, commits, stats)
 }
 
-func BuildWorklogOverallSummaryPromptNonTechnical(projectContext, codebaseContext, commits, stats string) string {
-	return fmt.Sprintf(strings.TrimSpace(worklogOverallSummaryNonTechnicalPromptTemplate), projectContext, codebaseContext, commits, stats)
+func BuildWorklogOverallSummaryPromptNonTechnical(nameOfUser, projectContext, codebaseContext, commits, stats string) string {
+	return fmt.Sprintf(strings.TrimSpace(worklogOverallSummaryNonTechnicalPromptTemplate), nameOfUser, projectContext, codebaseContext, commits, stats)
 }
 
-func BuildWorklogDayUpdatesPromptNonTechnical(projectContext, branchContext, commits string) string {
-	return fmt.Sprintf(strings.TrimSpace(worklogDayUpdatesNonTechnicalPromptTemplate), projectContext, branchContext, commits)
+func BuildWorklogDayUpdatesPromptNonTechnical(nameOfUser, projectContext, branchContext, commits string) string {
+	return fmt.Sprintf(strings.TrimSpace(worklogDayUpdatesNonTechnicalPromptTemplate), nameOfUser, projectContext, branchContext, commits)
 }
 
-func BuildWorklogBranchSummaryPromptNonTechnical(projectContext, branchContext, commits, stats string) string {
-	return fmt.Sprintf(strings.TrimSpace(worklogBranchSummaryNonTechnicalPromptTemplate), projectContext, branchContext, commits, stats)
+func BuildWorklogBranchSummaryPromptNonTechnical(nameOfUser, projectContext, branchContext, commits, stats string) string {
+	return fmt.Sprintf(strings.TrimSpace(worklogBranchSummaryNonTechnicalPromptTemplate), nameOfUser, projectContext, branchContext, commits, stats)
 }
 
 func BuildCommitMessagePrompt(projectContext, diff string) string {
 	return fmt.Sprintf(strings.TrimSpace(commitMessagePromptTemplate), projectContext, diff)
 }
 
-func BuildWorklogWeekSummaryPrompt(projectContext, codebaseContext, periodContext, dailySummaries, stats string) string {
-	return fmt.Sprintf(strings.TrimSpace(worklogWeekSummaryPromptTemplate), projectContext, codebaseContext, periodContext, dailySummaries, stats)
+func BuildWorklogWeekSummaryPrompt(nameOfUser, projectContext, codebaseContext, periodContext, dailySummaries, stats string) string {
+	return fmt.Sprintf(strings.TrimSpace(worklogWeekSummaryPromptTemplate), nameOfUser, projectContext, codebaseContext, periodContext, dailySummaries, stats)
 }
 
-func BuildWorklogWeekSummaryPromptNonTechnical(projectContext, codebaseContext, periodContext, dailySummaries, stats string) string {
-	return fmt.Sprintf(strings.TrimSpace(worklogWeekSummaryNonTechnicalPromptTemplate), projectContext, codebaseContext, periodContext, dailySummaries, stats)
+func BuildWorklogWeekSummaryPromptNonTechnical(nameOfUser, projectContext, codebaseContext, periodContext, dailySummaries, stats string) string {
+	return fmt.Sprintf(strings.TrimSpace(worklogWeekSummaryNonTechnicalPromptTemplate), nameOfUser, projectContext, codebaseContext, periodContext, dailySummaries, stats)
 }
 
-func BuildWorklogMonthSummaryPrompt(projectContext, codebaseContext, periodContext, weeklySummaries, stats string) string {
-	return fmt.Sprintf(strings.TrimSpace(worklogMonthSummaryPromptTemplate), projectContext, codebaseContext, periodContext, weeklySummaries, stats)
+func BuildWorklogMonthSummaryPrompt(nameOfUser, projectContext, codebaseContext, periodContext, weeklySummaries, stats string) string {
+	return fmt.Sprintf(strings.TrimSpace(worklogMonthSummaryPromptTemplate), nameOfUser, projectContext, codebaseContext, periodContext, weeklySummaries, stats)
 }
 
-func BuildWorklogMonthSummaryPromptNonTechnical(projectContext, codebaseContext, periodContext, weeklySummaries, stats string) string {
-	return fmt.Sprintf(strings.TrimSpace(worklogMonthSummaryNonTechnicalPromptTemplate), projectContext, codebaseContext, periodContext, weeklySummaries, stats)
+func BuildWorklogMonthSummaryPromptNonTechnical(nameOfUser, projectContext, codebaseContext, periodContext, weeklySummaries, stats string) string {
+	return fmt.Sprintf(strings.TrimSpace(worklogMonthSummaryNonTechnicalPromptTemplate), nameOfUser, projectContext, codebaseContext, periodContext, weeklySummaries, stats)
 }

@@ -1,5 +1,9 @@
 You are a development activity analyst writing a high-level weekly summary of a developer's work.
 
+<name_of_user>
+%s
+</name_of_user>
+
 <project_context>
 %s
 </project_context>
@@ -33,5 +37,6 @@ Instructions:
 - For each highlight bullet, append a day-scope tag like "(Days: Mon, Tue)" based on available evidence.
 - Add "### Also Fixed" for bugfix/maintenance bullets when relevant.
 - Use past tense active voice.
+- Personalize by referring to the user as {{name_of_user}} where helpful, but avoid overusing the name.
 
 Weekly Summary:

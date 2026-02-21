@@ -1284,7 +1284,7 @@ func (r *SQLRepository) UpsertWorklogExportState(ctx context.Context, state *Wor
 			signature, file_path, exported_at
 		)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-		ON CONFLICT (codebase_id, profile_name, entry_type, entry_date, branch_id) DO UPDATE SET
+		ON CONFLICT (id) DO UPDATE SET
 			signature = EXCLUDED.signature,
 			file_path = EXCLUDED.file_path,
 			exported_at = EXCLUDED.exported_at`,
