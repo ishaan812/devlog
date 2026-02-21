@@ -1,0 +1,41 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "18a01d659c86",
+  "strategy": "manual-commit",
+  "branch": "master",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "frontend/index.html",
+    "internal/cli/export.go",
+    "internal/cli/ingest.go",
+    "internal/cli/worklog.go",
+    "internal/db/repository.go",
+    "internal/prompts/prompts.go",
+    "internal/prompts/worklog_branch_summary.md",
+    "internal/prompts/worklog_branch_summary_nontechnical.md",
+    "internal/prompts/worklog_day_updates.md",
+    "internal/prompts/worklog_day_updates_nontechnical.md",
+    "internal/prompts/worklog_month_summary.md",
+    "internal/prompts/worklog_month_summary_nontechnical.md",
+    "internal/prompts/worklog_overall_summary.md",
+    "internal/prompts/worklog_overall_summary_nontechnical.md",
+    "internal/prompts/worklog_week_summary.md",
+    "internal/prompts/worklog_week_summary_nontechnical.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/18/a01d659c86/0/metadata.json",
+      "transcript": "/18/a01d659c86/0/full.jsonl",
+      "context": "/18/a01d659c86/0/context.md",
+      "content_hash": "/18/a01d659c86/0/content_hash.txt",
+      "prompt": "/18/a01d659c86/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 207,
+    "cache_creation_tokens": 130476,
+    "cache_read_tokens": 13248087,
+    "output_tokens": 19809,
+    "api_call_count": 170
+  }
+}

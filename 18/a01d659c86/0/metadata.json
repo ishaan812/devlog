@@ -1,0 +1,46 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "18a01d659c86",
+  "session_id": "71b7ebb0-9f9c-436f-9037-b8ec1849d6a0",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-21T11:30:31.117538Z",
+  "branch": "master",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "internal/cli/worklog.go",
+    "internal/prompts/worklog_branch_summary_nontechnical.md",
+    "internal/prompts/worklog_month_summary_nontechnical.md",
+    "internal/prompts/worklog_week_summary.md",
+    "internal/cli/export.go",
+    "internal/prompts/worklog_branch_summary.md",
+    "internal/prompts/worklog_overall_summary.md",
+    "internal/db/repository.go",
+    "internal/prompts/prompts.go",
+    "internal/prompts/worklog_day_updates.md",
+    "internal/prompts/worklog_month_summary.md",
+    "frontend/index.html",
+    "internal/cli/ingest.go",
+    "internal/prompts/worklog_day_updates_nontechnical.md",
+    "internal/prompts/worklog_overall_summary_nontechnical.md",
+    "internal/prompts/worklog_week_summary_nontechnical.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "413db266526b",
+  "token_usage": {
+    "input_tokens": 207,
+    "cache_creation_tokens": 130476,
+    "cache_read_tokens": 13248087,
+    "output_tokens": 19809,
+    "api_call_count": 170
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-21T11:30:30.901561Z",
+    "agent_lines": 0,
+    "human_added": 125,
+    "human_modified": 63,
+    "human_removed": 0,
+    "total_committed": 125,
+    "agent_percentage": 0
+  },
+  "transcript_path": ".claude/projects/-Users-ishaan812-Code-projects-devlog/71b7ebb0-9f9c-436f-9037-b8ec1849d6a0.jsonl"
+}
