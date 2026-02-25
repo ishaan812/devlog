@@ -220,3 +220,53 @@ Perfect — I’ll create the release commit, tag it as `v0.1.0`, and push `mast
 [Tool result] Shell
 
 [Tool result] Shell
+
+assistant:
+[Thinking] **Committing version bump and pushing tag**
+[Tool call] Shell
+  command: git add package.json package-lock.json frontend/package.json frontend/package-lock.json frontend/src/App.jsx && git commit -m "$(cat <<'EOF'
+release: bump npm and site to v0.1.0
+
+Prepare the 0.1.0 release by updating package versions and aligning the frontend website status banner with the new project version.
+EOF
+)" && git status --short
+  working_directory: /Users/ishaan812/Code/projects/devlog
+  description: Stage release files, commit, and verify clean state
+
+[Tool result] Shell
+
+assistant:
+[Thinking] **Adding version tag and pushing**
+Commit is created; I’m now creating the `v0.1.0` tag and pushing `master` + tag to `origin` to trigger the release pipeline.
+[Tool call] Shell
+  command: if [ -n "$(git tag -l v0.1.0)" ]; then echo "Tag v0.1.0 already exists"; else git tag v0.1.0; fi && git push origin master && git push origin v0.1.0 && git status -sb
+  working_directory: /Users/ishaan812/Code/projects/devlog
+  description: Create release tag, push branch and tag
+
+[Tool result] Shell
+
+assistant:
+[Thinking] **Checking recent workflow runs**
+[Tool call] Shell
+  command: gh run list --workflow Release --limit 3
+  working_directory: /Users/ishaan812/Code/projects/devlog
+  description: Check latest release workflow runs
+
+[Tool result] Shell
+
+assistant:
+[Thinking] **Finalizing commit summary format**
+Release flow is live.
+
+- Committed release changes on `master`:
+  - Commit: `8fd2577`
+  - Message: `release: bump npm and site to v0.1.0`
+  - Files: `package.json`, `package-lock.json`, `frontend/package.json`, `frontend/package-lock.json`, `frontend/src/App.jsx`
+- Created and pushed tag: `v0.1.0`
+- Pushed `master` to `origin` successfully
+- Verified GitHub Actions run is started:
+  - Workflow: `Release`
+  - Status: `queued`
+  - Run ID: `22412544131`
+
+If you want, I can also monitor this run and report back when npm publish succeeds/fails.
