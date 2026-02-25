@@ -185,15 +185,16 @@ func (r *SQLRepository) GetCurrentUser(ctx context.Context) (*Developer, error) 
 // UpsertCodebase creates or updates a codebase.
 func (r *SQLRepository) UpsertCodebase(ctx context.Context, codebase *Codebase) error {
 	_, err := r.db.ExecContext(ctx, `
-		INSERT INTO codebases (id, path, name, summary, tech_stack, default_branch, indexed_at, project_context, longterm_context)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		INSERT INTO codebases (id, path, name, summary, tech_stack, default_branch, indexed_at, project_context, longterm_context, touch_activity)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		ON CONFLICT (path) DO UPDATE SET
 			name = EXCLUDED.name, summary = EXCLUDED.summary, tech_stack = EXCLUDED.tech_stack,
 			default_branch = EXCLUDED.default_branch, indexed_at = EXCLUDED.indexed_at,
-			project_context = EXCLUDED.project_context, longterm_context = EXCLUDED.longterm_context`,
+			project_context = EXCLUDED.project_context, longterm_context = EXCLUDED.longterm_context,
+			touch_activity = EXCLUDED.touch_activity`,
 		codebase.ID, codebase.Path, codebase.Name, NullString(codebase.Summary),
 		ToJSON(codebase.TechStack), NullString(codebase.DefaultBranch), NullTime(codebase.IndexedAt),
-		NullString(codebase.ProjectContext), NullString(codebase.LongtermContext))
+		NullString(codebase.ProjectContext), NullString(codebase.LongtermContext), ToJSON(codebase.TouchActivity))
 	if err != nil {
 		return fmt.Errorf("upsert codebase: %w", err)
 	}
@@ -202,22 +203,22 @@ func (r *SQLRepository) UpsertCodebase(ctx context.Context, codebase *Codebase) 
 
 // GetCodebaseByPath retrieves a codebase by path.
 func (r *SQLRepository) GetCodebaseByPath(ctx context.Context, path string) (*Codebase, error) {
-	row := r.db.QueryRowContext(ctx, `SELECT id, path, name, summary, tech_stack, default_branch, indexed_at, project_context, longterm_context FROM codebases WHERE path = $1`, path)
+	row := r.db.QueryRowContext(ctx, `SELECT id, path, name, summary, tech_stack, default_branch, indexed_at, project_context, longterm_context, touch_activity FROM codebases WHERE path = $1`, path)
 	return r.scanCodebase(row)
 }
 
 // GetCodebaseByID retrieves a codebase by ID.
 func (r *SQLRepository) GetCodebaseByID(ctx context.Context, id string) (*Codebase, error) {
-	row := r.db.QueryRowContext(ctx, `SELECT id, path, name, summary, tech_stack, default_branch, indexed_at, project_context, longterm_context FROM codebases WHERE id = $1`, id)
+	row := r.db.QueryRowContext(ctx, `SELECT id, path, name, summary, tech_stack, default_branch, indexed_at, project_context, longterm_context, touch_activity FROM codebases WHERE id = $1`, id)
 	return r.scanCodebase(row)
 }
 
 func (r *SQLRepository) scanCodebase(row *sql.Row) (*Codebase, error) {
 	c := &Codebase{}
 	var summary, defaultBranch, projectContext, longtermContext sql.NullString
-	var techStack any
+	var techStack, touchActivity any
 	var indexedAt sql.NullTime
-	err := row.Scan(&c.ID, &c.Path, &c.Name, &summary, &techStack, &defaultBranch, &indexedAt, &projectContext, &longtermContext)
+	err := row.Scan(&c.ID, &c.Path, &c.Name, &summary, &techStack, &defaultBranch, &indexedAt, &projectContext, &longtermContext, &touchActivity)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -232,12 +233,13 @@ func (r *SQLRepository) scanCodebase(row *sql.Row) (*Codebase, error) {
 	c.TechStack = convertToIntMap(techStack)
 	c.ProjectContext = projectContext.String
 	c.LongtermContext = longtermContext.String
+	c.TouchActivity = convertToMap(touchActivity)
 	return c, nil
 }
 
 // GetAllCodebases retrieves all codebases.
 func (r *SQLRepository) GetAllCodebases(ctx context.Context) ([]Codebase, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT id, path, name, summary, tech_stack, default_branch, indexed_at, project_context, longterm_context FROM codebases ORDER BY name`)
+	rows, err := r.db.QueryContext(ctx, `SELECT id, path, name, summary, tech_stack, default_branch, indexed_at, project_context, longterm_context, touch_activity FROM codebases ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("query codebases: %w", err)
 	}
@@ -246,9 +248,9 @@ func (r *SQLRepository) GetAllCodebases(ctx context.Context) ([]Codebase, error)
 	for rows.Next() {
 		c := Codebase{}
 		var summary, defaultBranch, projectContext, longtermContext sql.NullString
-		var techStack any
+		var techStack, touchActivity any
 		var indexedAt sql.NullTime
-		if err := rows.Scan(&c.ID, &c.Path, &c.Name, &summary, &techStack, &defaultBranch, &indexedAt, &projectContext, &longtermContext); err != nil {
+		if err := rows.Scan(&c.ID, &c.Path, &c.Name, &summary, &techStack, &defaultBranch, &indexedAt, &projectContext, &longtermContext, &touchActivity); err != nil {
 			return nil, fmt.Errorf("scan codebase row: %w", err)
 		}
 		c.Summary = summary.String
@@ -259,6 +261,7 @@ func (r *SQLRepository) GetAllCodebases(ctx context.Context) ([]Codebase, error)
 		c.TechStack = convertToIntMap(techStack)
 		c.ProjectContext = projectContext.String
 		c.LongtermContext = longtermContext.String
+		c.TouchActivity = convertToMap(touchActivity)
 		codebases = append(codebases, c)
 	}
 	if err := rows.Err(); err != nil {

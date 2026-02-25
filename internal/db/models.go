@@ -23,8 +23,9 @@ type Codebase struct {
 	TechStack       map[string]int
 	DefaultBranch   string
 	IndexedAt       time.Time
-	ProjectContext  string // Higher-level summary of features being worked on across branches
-	LongtermContext string // Long-term goals and ongoing initiatives
+	ProjectContext  string         // Higher-level summary of features being worked on across branches
+	LongtermContext string         // Long-term goals and ongoing initiatives
+	TouchActivity   map[string]any // Incremental folder touch-map cache keyed by folder path
 }
 
 // Branch represents a git branch

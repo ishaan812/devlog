@@ -3,9 +3,11 @@ package cli
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -67,6 +69,13 @@ const (
 	indexHardLimit = 1000
 )
 
+const (
+	summaryModeAuto     = "auto"
+	summaryModeFull     = "full"
+	summaryModeTargeted = "targeted"
+	summaryModeOff      = "off"
+)
+
 var (
 	ingestDays              int
 	ingestAll               bool
@@ -75,6 +84,12 @@ var (
 	ingestAllBranches       bool
 	ingestReselectBranch    bool
 	ingestSkipSummaries     bool
+	ingestSummaryMode       string
+	ingestTargetedLookback  int
+	ingestTargetedFolders   int
+	ingestTargetedChildren  int
+	ingestTargetedMinFiles  int
+	ingestTargetedHighChurn int
 	ingestMaxFiles          int
 	ingestAllFiles          bool
 	ingestGitOnly           bool
@@ -114,6 +129,7 @@ Examples:
   devlog ingest --all                 # Full git history
   devlog ingest --git-only            # Only git history, skip indexing
   devlog ingest --index-only          # Only indexing, skip git history
+  devlog ingest --summary-mode auto   # Auto summary mode (full/targeted/off)
   devlog ingest --all-files           # Index all files (bypass 500/1000 limits)
   devlog ingest --reselect-folders    # Re-prompt for which folders to index`,
 	Args: cobra.MaximumNArgs(1),
@@ -130,6 +146,12 @@ func init() {
 	ingestCmd.Flags().BoolVar(&ingestAllBranches, "all-branches", false, "Ingest all branches without prompting")
 	ingestCmd.Flags().BoolVar(&ingestReselectBranch, "reselect-branches", false, "Re-select branches (ignore saved selection)")
 	ingestCmd.Flags().BoolVar(&ingestSkipSummaries, "skip-summaries", false, "Skip LLM-generated summaries")
+	ingestCmd.Flags().StringVar(&ingestSummaryMode, "summary-mode", summaryModeAuto, "Summary strategy: auto|full|targeted|off")
+	ingestCmd.Flags().IntVar(&ingestTargetedLookback, "targeted-lookback-days", 120, "How many days of user commits to use for targeted path activity")
+	ingestCmd.Flags().IntVar(&ingestTargetedFolders, "targeted-max-folders", 40, "Maximum active folders to summarize in targeted mode")
+	ingestCmd.Flags().IntVar(&ingestTargetedChildren, "targeted-max-children", 12, "Maximum direct files/subfolders to include in folder summary context")
+	ingestCmd.Flags().IntVar(&ingestTargetedMinFiles, "targeted-min-files", 2, "Minimum distinct touched files needed to directly mark folder active")
+	ingestCmd.Flags().IntVar(&ingestTargetedHighChurn, "targeted-high-churn", 500, "Minimum folder churn required for incremental re-summarization in targeted mode")
 	ingestCmd.Flags().IntVar(&ingestMaxFiles, "max-files", 0, "Maximum files to index (overrides limits, 0 = use defaults)")
 	ingestCmd.Flags().BoolVar(&ingestAllFiles, "all-files", false, "Index all files (bypass soft/hard limits)")
 	ingestCmd.Flags().BoolVar(&ingestGitOnly, "git-only", false, "Only ingest git history")
@@ -517,14 +539,13 @@ func ingestGitHistory(absPath string, cfg *config.Config) error {
 		dbRepo.UpsertCodebase(ctx, codebase)
 	}
 
-	var sinceDate time.Time
+	sinceDate, err := resolveIngestSinceDate()
+	if err != nil {
+		return fmt.Errorf("invalid date format (use YYYY-MM-DD): %w", err)
+	}
 	if ingestAll {
 		dimColor.Println("  Ingesting full history...")
 	} else if ingestSince != "" {
-		sinceDate, err = time.Parse("2006-01-02", ingestSince)
-		if err != nil {
-			return fmt.Errorf("invalid date format (use YYYY-MM-DD): %w", err)
-		}
 		// Load timezone for display
 		loc := time.UTC
 		if tzName := cfg.GetTimezone(); tzName != "" {
@@ -534,7 +555,6 @@ func ingestGitHistory(absPath string, cfg *config.Config) error {
 		}
 		dimColor.Printf("  Since %s...\n", sinceDate.In(loc).Format("Jan 2, 2006"))
 	} else {
-		sinceDate = time.Now().AddDate(0, 0, -ingestDays)
 		dimColor.Printf("  Last %d days...\n", ingestDays)
 	}
 
@@ -1037,6 +1057,9 @@ func ingestBranch(ctx context.Context, dbRepo *db.SQLRepository, repo *git.Repos
 			}
 			fileCount++
 		}
+		if isUserCommit && len(fileChanges) > 0 {
+			updateCodebaseTouchActivity(codebase, author.When, fileChanges)
+		}
 
 		commitCount++
 	}
@@ -1060,9 +1083,53 @@ func ingestBranch(ctx context.Context, dbRepo *db.SQLRepository, repo *git.Repos
 				return 0, 0, fmt.Errorf("failed to update branch cursor for %s: %w", branchInfo.Name, err)
 			}
 		}
+		if commitCount > 0 {
+			if err := dbRepo.UpsertCodebase(ctx, codebase); err != nil {
+				VerboseLog("Warning: failed to persist incremental codebase touch activity: %v", err)
+			}
+		}
 	}
 
 	return commitCount, fileCount, nil
+}
+
+func updateCodebaseTouchActivity(codebase *db.Codebase, committedAt time.Time, fileChanges []*db.FileChange) {
+	if codebase == nil {
+		return
+	}
+	if codebase.TouchActivity == nil {
+		codebase.TouchActivity = map[string]any{}
+	}
+
+	type folderDelta struct {
+		touches int
+		churn   int
+	}
+	deltas := make(map[string]folderDelta)
+	for _, fc := range fileChanges {
+		if fc == nil || fc.FilePath == "" {
+			continue
+		}
+		folderPath := normalizeFolderPath(filepath.Dir(fc.FilePath))
+		delta := deltas[folderPath]
+		delta.touches++
+		delta.churn += fc.Additions + fc.Deletions
+		deltas[folderPath] = delta
+	}
+
+	for folderPath, delta := range deltas {
+		raw := parseTouchEntry(codebase.TouchActivity[folderPath])
+		raw["touch_count"] = intMax(toInt(raw["touch_count"])+delta.touches, 0)
+		raw["churn"] = intMax(toInt(raw["churn"])+delta.churn, 0)
+
+		lastTouched := committedAt
+		if existingTime, ok := parseTimeAny(raw["last_touched_at"]); ok && existingTime.After(lastTouched) {
+			lastTouched = existingTime
+		}
+		raw["last_touched_at"] = lastTouched.Format(time.RFC3339)
+		raw["updated_at"] = time.Now().Format(time.RFC3339)
+		codebase.TouchActivity[folderPath] = raw
+	}
 }
 
 func getCommitStats(repo *git.Repository, commit *git.Commit) (db.JSON, []*db.FileChange, error) {
@@ -1244,6 +1311,10 @@ func indexCodebase(absPath string, cfg *config.Config) error {
 
 	successColor.Printf("  Found %d files in %d folders (%d internal folders)\n", len(scanResult.Files), totalFolders, internalFolders)
 
+	summaryMode, modeReason := resolveSummaryMode(len(scanResult.Files))
+	dimColor.Printf("  Summary mode: %s (%s)\n", summaryMode, modeReason)
+	enableSummaries := summaryMode != summaryModeOff
+
 	techStack := indexer.DetectTechStack(scanResult.Files)
 	if len(techStack) > 0 {
 		var techs []string
@@ -1271,13 +1342,14 @@ func indexCodebase(absPath string, cfg *config.Config) error {
 	var llmClient llm.Client
 	var summarizer *indexer.Summarizer
 
-	if !ingestSkipSummaries {
+	if enableSummaries {
 		if llmClient, err = createLLMClient(cfg); err != nil {
-			return fmt.Errorf("failed to initialize LLM client: %w\n\nTo skip file/folder summaries, use: --skip-summaries", err)
+			return fmt.Errorf("failed to initialize LLM client: %w\n\nTo skip file/folder summaries, use: --summary-mode off", err)
 		}
 		summarizer = indexer.NewSummarizer(llmClient, IsVerbose())
 	}
-	if !ingestSkipSummaries && summarizer != nil {
+	shouldSummarizeCodebase := enableSummaries && summarizer != nil && (isFirstIndex || ingestForceReindex || strings.TrimSpace(codebase.Summary) == "")
+	if shouldSummarizeCodebase {
 		readmeContent := ""
 		for _, readmeName := range []string{"README.md", "readme.md", "Readme.md"} {
 			readmePath := filepath.Join(absPath, readmeName)
@@ -1292,11 +1364,36 @@ func indexCodebase(absPath string, cfg *config.Config) error {
 		summary, err := summarizer.SummarizeCodebase(ctx, scanResult, readmeContent)
 		s.Stop()
 		if err != nil {
-			return fmt.Errorf("failed to generate codebase summary: %w\n\nTo skip summaries, use: --skip-summaries", err)
+			return fmt.Errorf("failed to generate codebase summary: %w\n\nTo skip summaries, use: --summary-mode off", err)
 		}
 		codebase.Summary = summary
 		if codebase.Summary != "" {
 			infoColor.Printf("  Summary: %s\n", truncate(codebase.Summary, 80))
+		}
+	}
+
+	targetedPlan := targetedSummaryPlan{}
+	if summaryMode == summaryModeTargeted {
+		targetedSinceDate, dateErr := resolveIngestSinceDate()
+		if dateErr != nil {
+			return fmt.Errorf("invalid ingest window for targeted summaries: %w", dateErr)
+		}
+		targetedPlan, err = buildTargetedSummaryPlan(ctx, dbRepo, codebase, scanResult, targetedSinceDate, targetedSummaryOptions{
+			LookbackDays:       ingestTargetedLookback,
+			MaxActiveFolders:   ingestTargetedFolders,
+			MinDistinctFiles:   ingestTargetedMinFiles,
+			MaxChildItems:      ingestTargetedChildren,
+			HighChurnThreshold: ingestTargetedHighChurn,
+			FallbackTopFolders: 6,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to compute targeted summary plan: %w", err)
+		}
+		if targetedPlan.Digest != "" {
+			codebase.ProjectContext = mergeProjectContext(codebase.ProjectContext, targetedPlan.Digest)
+		}
+		if targetedPlan.Reason != "" {
+			dimColor.Printf("  Targeted paths: %s\n", targetedPlan.Reason)
 		}
 	}
 	if err := dbRepo.UpsertCodebase(ctx, codebase); err != nil {
@@ -1311,6 +1408,14 @@ func indexCodebase(absPath string, cfg *config.Config) error {
 	existingFolders, err := dbRepo.GetExistingFolderPaths(ctx, codebase.ID)
 	if err != nil {
 		return fmt.Errorf("failed to fetch existing folders: %w", err)
+	}
+	existingFolderList, err := dbRepo.GetFoldersByCodebase(ctx, codebase.ID)
+	if err != nil {
+		return fmt.Errorf("failed to fetch existing folder metadata: %w", err)
+	}
+	existingFolderMeta := make(map[string]db.Folder, len(existingFolderList))
+	for _, folder := range existingFolderList {
+		existingFolderMeta[folder.Path] = folder
 	}
 
 	currentFilePaths := make(map[string]bool)
@@ -1388,15 +1493,26 @@ func indexCodebase(absPath string, cfg *config.Config) error {
 			FileCount:  len(folderInfo.Files),
 			IndexedAt:  time.Now(),
 		}
+		if existing, ok := existingFolderMeta[folderPath]; ok {
+			folder.Summary = existing.Summary
+			folder.Purpose = existing.Purpose
+		}
 
 		isNewFolder := existingFolders[folderPath] == ""
-		if !ingestSkipSummaries && summarizer != nil && folderInfo.Depth <= 2 && len(folderInfo.Files) > 0 {
-			if isNewFolder || ingestForceReindex {
-				summary, err := summarizer.SummarizeFolder(ctx, folderInfo)
+		if enableSummaries && summarizer != nil && len(folderInfo.Files) > 0 {
+			shouldSummarizeFolder := false
+			switch summaryMode {
+			case summaryModeFull:
+				shouldSummarizeFolder = folderInfo.Depth <= 2 && (isNewFolder || ingestForceReindex)
+			case summaryModeTargeted:
+				shouldSummarizeFolder = isFirstIndex || ingestForceReindex || (targetedPlan.ActiveFolders[folderPath] && targetedPlan.HighChurnFolders[folderPath])
+			}
+			if shouldSummarizeFolder {
+				summary, err := summarizer.SummarizeFolder(ctx, folderInfo, targetedPlan.TouchedFilesByFolder[folderPath], ingestTargetedChildren)
 				if err != nil {
-					return fmt.Errorf("failed to generate folder summary for %s: %w\n\nTo skip summaries, use: --skip-summaries", folderPath, err)
+					return fmt.Errorf("failed to generate folder summary for %s: %w\n\nTo skip summaries, use: --summary-mode off", folderPath, err)
 				}
-				folder.Summary = summary.Summary
+				folder.Summary = composeFolderSummary(summary)
 				folder.Purpose = summary.Purpose
 			}
 		}
@@ -1440,13 +1556,17 @@ func indexCodebase(absPath string, cfg *config.Config) error {
 			SizeBytes:   fileInfo.Size,
 			LineCount:   indexer.CountLines(fileInfo.Content),
 			ContentHash: fileInfo.Hash,
+			Summary:     existingInfo.Summary,
 			IndexedAt:   time.Now(),
 		}
 
-		if !ingestSkipSummaries && summarizer != nil && shouldSummarizeFile(fileInfo) {
+		shouldSummarizeTargetedFile := summaryMode == summaryModeTargeted &&
+			(targetedPlan.HighChurnFolders[folderPath] || isFirstIndex || ingestForceReindex)
+		if enableSummaries && summarizer != nil && shouldSummarizeFile(fileInfo) &&
+			((summaryMode == summaryModeFull) || shouldSummarizeTargetedFile) {
 			summary, err := summarizer.SummarizeFile(ctx, fileInfo)
 			if err != nil {
-				return fmt.Errorf("failed to generate file summary for %s: %w\n\nTo skip summaries, use: --skip-summaries", fileInfo.Path, err)
+				return fmt.Errorf("failed to generate file summary for %s: %w\n\nTo skip summaries, use: --summary-mode off", fileInfo.Path, err)
 			}
 			file.Summary = summary.Summary
 			file.Purpose = summary.Purpose
@@ -1520,6 +1640,608 @@ func indexCodebase(absPath string, cfg *config.Config) error {
 	}
 
 	return nil
+}
+
+type targetedSummaryOptions struct {
+	LookbackDays       int
+	MaxActiveFolders   int
+	MinDistinctFiles   int
+	MaxChildItems      int
+	HighChurnThreshold int
+	FallbackTopFolders int
+}
+
+type folderTouchEvidence struct {
+	FilePath    string
+	FolderPath  string
+	TouchCount  int
+	CommittedAt time.Time
+	Additions   int
+	Deletions   int
+}
+
+type targetedSummaryPlan struct {
+	ActiveFolders        map[string]bool
+	HighChurnFolders     map[string]bool
+	RankedFolders        []string
+	TouchedFilesByFolder map[string][]string
+	Digest               string
+	Reason               string
+}
+
+type folderActivity struct {
+	distinctTouched map[string]bool
+	touchCount      int
+	churn           int
+	lastTouched     time.Time
+}
+
+func resolveSummaryMode(totalFiles int) (string, string) {
+	if ingestSkipSummaries {
+		return summaryModeOff, "--skip-summaries alias"
+	}
+
+	mode := strings.ToLower(strings.TrimSpace(ingestSummaryMode))
+	switch mode {
+	case "", summaryModeAuto:
+		if totalFiles > indexSoftLimit {
+			return summaryModeTargeted, fmt.Sprintf("auto-selected for %d files", totalFiles)
+		}
+		return summaryModeFull, fmt.Sprintf("auto-selected for %d files", totalFiles)
+	case summaryModeFull:
+		return summaryModeFull, "explicit"
+	case summaryModeTargeted:
+		return summaryModeTargeted, "explicit"
+	case summaryModeOff:
+		return summaryModeOff, "explicit"
+	default:
+		if totalFiles > indexSoftLimit {
+			return summaryModeTargeted, fmt.Sprintf("unknown mode '%s', fell back to auto-targeted", mode)
+		}
+		return summaryModeFull, fmt.Sprintf("unknown mode '%s', fell back to auto-full", mode)
+	}
+}
+
+func resolveIngestSinceDate() (time.Time, error) {
+	if ingestAll {
+		return time.Time{}, nil
+	}
+	if ingestSince != "" {
+		sinceDate, err := time.Parse("2006-01-02", ingestSince)
+		if err != nil {
+			return time.Time{}, err
+		}
+		return sinceDate, nil
+	}
+	days := ingestDays
+	if days <= 0 {
+		days = 30
+	}
+	return time.Now().AddDate(0, 0, -days), nil
+}
+
+func buildTargetedSummaryPlan(
+	ctx context.Context,
+	dbRepo *db.SQLRepository,
+	codebase *db.Codebase,
+	scanResult *indexer.ScanResult,
+	sinceDate time.Time,
+	opts targetedSummaryOptions,
+) (targetedSummaryPlan, error) {
+	evidence, err := loadFolderTouchEvidence(ctx, dbRepo, codebase, sinceDate, opts.LookbackDays)
+	if err != nil {
+		return targetedSummaryPlan{}, err
+	}
+	return computeTargetedSummaryPlan(scanResult, evidence, sinceDate, opts), nil
+}
+
+func loadFolderTouchEvidence(ctx context.Context, dbRepo *db.SQLRepository, codebase *db.Codebase, sinceDate time.Time, lookbackDays int) ([]folderTouchEvidence, error) {
+	if sinceDate.IsZero() && lookbackDays > 0 {
+		sinceDate = time.Now().AddDate(0, 0, -lookbackDays)
+	}
+	result := make([]folderTouchEvidence, 0)
+	if codebase != nil && len(codebase.TouchActivity) > 0 {
+		result = make([]folderTouchEvidence, 0, len(codebase.TouchActivity))
+		for folderPath, raw := range codebase.TouchActivity {
+			entry := parseTouchEntry(raw)
+			lastTouched, ok := parseTimeAny(entry["last_touched_at"])
+			if !ok {
+				continue
+			}
+			if !sinceDate.IsZero() && lastTouched.Before(sinceDate) {
+				continue
+			}
+			result = append(result, folderTouchEvidence{
+				FolderPath:  normalizeFolderPath(folderPath),
+				TouchCount:  toInt(entry["touch_count"]),
+				CommittedAt: lastTouched,
+				Additions:   toInt(entry["churn"]),
+			})
+		}
+		if len(result) > 0 {
+			return result, nil
+		}
+	}
+
+	// Backward-compatible fallback for existing databases: rebuild from ingested commits.
+	if codebase == nil {
+		return nil, nil
+	}
+	query := `
+		SELECT fc.file_path, c.committed_at, fc.additions, fc.deletions
+		FROM file_changes fc
+		INNER JOIN commits c ON c.id = fc.commit_id
+		WHERE c.codebase_id = $1
+		  AND c.is_user_commit = TRUE
+	`
+	args := []any{codebase.ID}
+	if !sinceDate.IsZero() {
+		query += " AND c.committed_at >= $2"
+		args = append(args, sinceDate)
+	}
+	query += " ORDER BY c.committed_at DESC"
+
+	rows, err := dbRepo.ExecuteQueryWithArgs(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	result = make([]folderTouchEvidence, 0, len(rows))
+	for _, row := range rows {
+		filePath := normalizeFolderPath(parseRowString(row["file_path"]))
+		if filePath == "" || filePath == "." {
+			continue
+		}
+		folderPath := normalizeFolderPath(filepath.Dir(filePath))
+		result = append(result, folderTouchEvidence{
+			FilePath:    filePath,
+			FolderPath:  folderPath,
+			TouchCount:  1,
+			CommittedAt: parseRowTime(row["committed_at"]),
+			Additions:   parseRowInt(row["additions"]),
+			Deletions:   parseRowInt(row["deletions"]),
+		})
+	}
+	return result, nil
+}
+
+func computeTargetedSummaryPlan(scanResult *indexer.ScanResult, evidence []folderTouchEvidence, sinceDate time.Time, opts targetedSummaryOptions) targetedSummaryPlan {
+	plan := targetedSummaryPlan{
+		ActiveFolders:        map[string]bool{".": true},
+		HighChurnFolders:     map[string]bool{},
+		TouchedFilesByFolder: map[string][]string{},
+	}
+	if opts.MaxActiveFolders <= 0 {
+		opts.MaxActiveFolders = 40
+	}
+	if opts.MinDistinctFiles <= 0 {
+		opts.MinDistinctFiles = 2
+	}
+	if opts.FallbackTopFolders <= 0 {
+		opts.FallbackTopFolders = 6
+	}
+	if opts.HighChurnThreshold <= 0 {
+		opts.HighChurnThreshold = 500
+	}
+
+	scannedFolders := make(map[string]bool, len(scanResult.Folders))
+	for path := range scanResult.Folders {
+		scannedFolders[normalizeFolderPath(path)] = true
+	}
+
+	activity := make(map[string]*folderActivity)
+	for _, item := range evidence {
+		folderPath := normalizeFolderPath(item.FolderPath)
+		if !scannedFolders[folderPath] {
+			continue
+		}
+		entry := activity[folderPath]
+		if entry == nil {
+			entry = &folderActivity{distinctTouched: map[string]bool{}}
+			activity[folderPath] = entry
+		}
+		if item.FilePath != "" {
+			entry.distinctTouched[item.FilePath] = true
+		}
+		increment := item.TouchCount
+		if increment <= 0 {
+			increment = 1
+		}
+		entry.touchCount += increment
+		entry.churn += item.Additions + item.Deletions
+		if item.CommittedAt.After(entry.lastTouched) {
+			entry.lastTouched = item.CommittedAt
+		}
+	}
+
+	if len(activity) == 0 {
+		plan.RankedFolders = bootstrapTopFolders(scanResult, opts.FallbackTopFolders)
+		for _, path := range plan.RankedFolders {
+			plan.ActiveFolders[path] = true
+			plan.TouchedFilesByFolder[path] = []string{"bootstrap structural context"}
+		}
+		plan.Digest = buildTargetedDigest(plan.RankedFolders, sinceDate, true)
+		plan.Reason = "no user commit history, used structural bootstrap"
+		return plan
+	}
+
+	directlyActive := make(map[string]bool)
+	scoreByFolder := map[string]float64{".": 1}
+	for folderPath, item := range activity {
+		distinctCount := len(item.distinctTouched)
+		score := computeFolderActivityScore(item)
+		scoreByFolder[folderPath] += score
+		if intMax(distinctCount, item.touchCount) >= opts.MinDistinctFiles {
+			directlyActive[folderPath] = true
+		}
+		if item.churn >= opts.HighChurnThreshold {
+			plan.HighChurnFolders[folderPath] = true
+		}
+	}
+
+	if len(directlyActive) == 0 {
+		topFolder := ""
+		topScore := -1.0
+		for folderPath, item := range activity {
+			score := computeFolderActivityScore(item)
+			if score > topScore {
+				topFolder = folderPath
+				topScore = score
+			}
+		}
+		if topFolder != "" {
+			directlyActive[topFolder] = true
+		}
+	}
+
+	for folderPath := range directlyActive {
+		ancestors := folderAndAncestors(folderPath)
+		propagation := 0.9
+		for _, ancestor := range ancestors {
+			if !scannedFolders[ancestor] {
+				continue
+			}
+			plan.ActiveFolders[ancestor] = true
+			scoreByFolder[ancestor] += scoreByFolder[folderPath] * propagation
+			propagation *= 0.7
+		}
+	}
+
+	activeList := make([]string, 0, len(plan.ActiveFolders))
+	for folderPath := range plan.ActiveFolders {
+		if scannedFolders[folderPath] {
+			activeList = append(activeList, folderPath)
+		}
+	}
+	sort.Slice(activeList, func(i, j int) bool {
+		left := scoreByFolder[activeList[i]]
+		right := scoreByFolder[activeList[j]]
+		if left == right {
+			leftDepth := strings.Count(activeList[i], "/")
+			rightDepth := strings.Count(activeList[j], "/")
+			if leftDepth == rightDepth {
+				return activeList[i] < activeList[j]
+			}
+			return leftDepth < rightDepth
+		}
+		return left > right
+	})
+
+	selected := activeList
+	if len(selected) > opts.MaxActiveFolders {
+		selected = selected[:opts.MaxActiveFolders]
+	}
+
+	selectedSet := map[string]bool{".": true}
+	for _, path := range selected {
+		for _, ancestor := range folderAndAncestors(path) {
+			if scannedFolders[ancestor] {
+				selectedSet[ancestor] = true
+			}
+		}
+	}
+	plan.ActiveFolders = selectedSet
+
+	ranked := make([]string, 0, len(selectedSet))
+	for path := range selectedSet {
+		ranked = append(ranked, path)
+	}
+	sort.Slice(ranked, func(i, j int) bool {
+		left := scoreByFolder[ranked[i]]
+		right := scoreByFolder[ranked[j]]
+		if left == right {
+			return ranked[i] < ranked[j]
+		}
+		return left > right
+	})
+	plan.RankedFolders = ranked
+
+	for folderPath, item := range activity {
+		if !selectedSet[folderPath] {
+			continue
+		}
+		files := make([]string, 0, len(item.distinctTouched))
+		for filePath := range item.distinctTouched {
+			files = append(files, filePath)
+		}
+		sort.Strings(files)
+		if len(files) > opts.MaxChildItems && opts.MaxChildItems > 0 {
+			files = files[:opts.MaxChildItems]
+		}
+		plan.TouchedFilesByFolder[folderPath] = files
+	}
+	for folderPath := range selectedSet {
+		if len(plan.TouchedFilesByFolder[folderPath]) > 0 {
+			continue
+		}
+		var inherited []string
+		prefix := folderPath + "/"
+		if folderPath == "." {
+			prefix = ""
+		}
+		for _, item := range evidence {
+			if prefix == "" || strings.HasPrefix(item.FilePath, prefix) {
+				inherited = append(inherited, item.FilePath)
+			}
+		}
+		sort.Strings(inherited)
+		inherited = uniqueStrings(inherited)
+		if len(inherited) > opts.MaxChildItems && opts.MaxChildItems > 0 {
+			inherited = inherited[:opts.MaxChildItems]
+		}
+		if len(inherited) > 0 {
+			plan.TouchedFilesByFolder[folderPath] = inherited
+		}
+	}
+
+	plan.Digest = buildTargetedDigest(topNNonRoot(plan.RankedFolders, 8), sinceDate, false)
+	plan.Reason = fmt.Sprintf("computed from %d touched folders, selected %d active paths", len(activity), len(selectedSet))
+	return plan
+}
+
+func computeFolderActivityScore(item *folderActivity) float64 {
+	if item == nil {
+		return 0
+	}
+	distinctWeight := float64(len(item.distinctTouched) * 4)
+	touchWeight := float64(item.touchCount)
+	churnWeight := float64(item.churn) / 30.0
+	recencyWeight := 0.0
+	if !item.lastTouched.IsZero() {
+		daysAgo := time.Since(item.lastTouched).Hours() / 24
+		recencyWeight = math.Max(0, 45-daysAgo)
+	}
+	return distinctWeight + touchWeight + churnWeight + recencyWeight
+}
+
+func folderAndAncestors(path string) []string {
+	path = normalizeFolderPath(path)
+	ancestors := []string{path}
+	for path != "." {
+		path = normalizeFolderPath(filepath.Dir(path))
+		if path == "" {
+			path = "."
+		}
+		ancestors = append(ancestors, path)
+		if path == "." {
+			break
+		}
+	}
+	return ancestors
+}
+
+func bootstrapTopFolders(scanResult *indexer.ScanResult, max int) []string {
+	type topFolder struct {
+		path      string
+		fileCount int
+	}
+	var folders []topFolder
+	for path, info := range scanResult.Folders {
+		if info.Depth == 1 {
+			folders = append(folders, topFolder{path: path, fileCount: len(info.Files)})
+		}
+	}
+	sort.Slice(folders, func(i, j int) bool {
+		if folders[i].fileCount == folders[j].fileCount {
+			return folders[i].path < folders[j].path
+		}
+		return folders[i].fileCount > folders[j].fileCount
+	})
+	if max <= 0 || len(folders) <= max {
+		result := []string{"."}
+		for _, folder := range folders {
+			result = append(result, folder.path)
+		}
+		return result
+	}
+	result := []string{"."}
+	for _, folder := range folders[:max] {
+		result = append(result, folder.path)
+	}
+	return result
+}
+
+func topNNonRoot(paths []string, max int) []string {
+	var result []string
+	for _, path := range paths {
+		if path == "." {
+			continue
+		}
+		result = append(result, path)
+		if max > 0 && len(result) >= max {
+			break
+		}
+	}
+	return result
+}
+
+func buildTargetedDigest(paths []string, sinceDate time.Time, fallback bool) string {
+	var sb strings.Builder
+	sb.WriteString("[Targeted ingest context]\n")
+	if fallback {
+		sb.WriteString("No user commit history was available; generated bootstrap folder context.\n")
+	} else {
+		if sinceDate.IsZero() {
+			sb.WriteString("Active paths derived from user commits across full ingest history.\n")
+		} else {
+			sb.WriteString(fmt.Sprintf("Active paths derived from user commits since %s.\n", sinceDate.Format("2006-01-02")))
+		}
+	}
+	if len(paths) == 0 {
+		sb.WriteString("- No active paths detected")
+		return sb.String()
+	}
+	sb.WriteString("Top active paths:\n")
+	for _, path := range paths {
+		sb.WriteString("- ")
+		sb.WriteString(path)
+		sb.WriteString("\n")
+	}
+	return strings.TrimSpace(sb.String())
+}
+
+func mergeProjectContext(existing, digest string) string {
+	if digest == "" {
+		return existing
+	}
+	parts := strings.Split(existing, "\n\n[Targeted ingest context]")
+	base := strings.TrimSpace(parts[0])
+	if base == "" {
+		return digest
+	}
+	return base + "\n\n" + digest
+}
+
+func composeFolderSummary(summary *indexer.FolderSummary) string {
+	if summary == nil {
+		return ""
+	}
+	var lines []string
+	if summary.Summary != "" {
+		lines = append(lines, summary.Summary)
+	}
+	if summary.Themes != "" {
+		lines = append(lines, "Themes: "+summary.Themes)
+	}
+	if len(summary.FileDescriptions) > 0 {
+		lines = append(lines, "Files:")
+		for _, item := range summary.FileDescriptions {
+			lines = append(lines, "- "+item)
+		}
+	}
+	if len(summary.SubfolderDescriptions) > 0 {
+		lines = append(lines, "Subfolders:")
+		for _, item := range summary.SubfolderDescriptions {
+			lines = append(lines, "- "+item)
+		}
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+func normalizeFolderPath(path string) string {
+	clean := strings.Trim(strings.TrimSpace(filepath.Clean(path)), string(os.PathSeparator))
+	if clean == "" || clean == "." {
+		return "."
+	}
+	return clean
+}
+
+func parseRowString(v any) string {
+	switch t := v.(type) {
+	case string:
+		return t
+	case []byte:
+		return string(t)
+	default:
+		return ""
+	}
+}
+
+func parseRowInt(v any) int {
+	switch t := v.(type) {
+	case int:
+		return t
+	case int32:
+		return int(t)
+	case int64:
+		return int(t)
+	case float32:
+		return int(t)
+	case float64:
+		return int(t)
+	default:
+		return 0
+	}
+}
+
+func parseRowTime(v any) time.Time {
+	switch t := v.(type) {
+	case time.Time:
+		return t
+	default:
+		return time.Time{}
+	}
+}
+
+func uniqueStrings(items []string) []string {
+	if len(items) == 0 {
+		return items
+	}
+	result := []string{items[0]}
+	for i := 1; i < len(items); i++ {
+		if items[i] != items[i-1] {
+			result = append(result, items[i])
+		}
+	}
+	return result
+}
+
+func intMax(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func parseTouchEntry(raw any) map[string]any {
+	switch t := raw.(type) {
+	case map[string]any:
+		return t
+	default:
+		return map[string]any{}
+	}
+}
+
+func toInt(v any) int {
+	switch t := v.(type) {
+	case int:
+		return t
+	case int32:
+		return int(t)
+	case int64:
+		return int(t)
+	case float32:
+		return int(t)
+	case float64:
+		return int(t)
+	case string:
+		if parsed, err := strconv.Atoi(t); err == nil {
+			return parsed
+		}
+	}
+	return 0
+}
+
+func parseTimeAny(v any) (time.Time, bool) {
+	switch t := v.(type) {
+	case time.Time:
+		return t, true
+	case string:
+		parsed, err := time.Parse(time.RFC3339, t)
+		if err == nil {
+			return parsed, true
+		}
+	}
+	return time.Time{}, false
 }
 
 func createLLMClient(cfg *config.Config) (llm.Client, error) {

@@ -58,8 +58,8 @@ func BuildFileSummaryPrompt(filePath, language, content string) string {
 	return fmt.Sprintf(strings.TrimSpace(fileSummaryPromptTemplate), filePath, language, content)
 }
 
-func BuildFolderSummaryPrompt(folderPath, files, subfolders string) string {
-	return fmt.Sprintf(strings.TrimSpace(folderSummaryPromptTemplate), folderPath, files, subfolders)
+func BuildFolderSummaryPrompt(folderPath, files, subfolders, touchedFiles string) string {
+	return fmt.Sprintf(strings.TrimSpace(folderSummaryPromptTemplate), folderPath, files, subfolders, touchedFiles)
 }
 
 func BuildCodebaseSummaryPrompt(name, mainFolders string, totalFiles int, readmeContent string) string {

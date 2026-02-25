@@ -1,13 +1,22 @@
-Analyze this folder structure and provide a brief summary.
+Analyze this folder and provide a layered summary focused on what it does in the project.
 
 Folder: %s
-Files: %s
-Subfolders: %s
+Files (direct): %s
+Subfolders (direct): %s
+Recently touched files in this folder path: %s
 
-Respond with exactly 2 lines:
-1. SUMMARY: A one-sentence summary of what this folder contains
-2. PURPOSE: The main purpose (e.g., "API routes", "Database models", "UI components", "Utilities")
+Respond with the following sections in this exact order:
+1. SUMMARY: One sentence about what this folder contains and why it matters.
+2. PURPOSE: The main role (for example: API handlers, data models, UI components, build tooling).
+3. THEMES: One sentence describing recent change themes in this area.
+4. FILES:
+   - <file name>: <one-line description>
+   - <file name>: <one-line description>
+5. SUBFOLDERS:
+   - <folder name>: <one-line description>
+   - <folder name>: <one-line description>
 
-Example:
-SUMMARY: Contains REST API endpoint handlers for user management
-PURPOSE: API handlers
+Rules:
+- Keep each description to one short line.
+- Prefer direct children only.
+- If there are no files or subfolders, write "None".

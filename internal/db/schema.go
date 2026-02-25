@@ -6,6 +6,7 @@ var Migrations = []string{
 	`ALTER TABLE branches ADD COLUMN context_summary VARCHAR DEFAULT ''`,
 	`ALTER TABLE codebases ADD COLUMN project_context VARCHAR DEFAULT ''`,
 	`ALTER TABLE codebases ADD COLUMN longterm_context VARCHAR DEFAULT ''`,
+	`ALTER TABLE codebases ADD COLUMN touch_activity JSON`,
 	`ALTER TABLE commits ADD COLUMN parent_count INTEGER DEFAULT 1`,
 	`ALTER TABLE commits ADD COLUMN is_merge_sync BOOLEAN DEFAULT FALSE`,
 }
@@ -30,7 +31,8 @@ CREATE TABLE IF NOT EXISTS codebases (
     default_branch VARCHAR,
     indexed_at TIMESTAMP,
     project_context VARCHAR DEFAULT '',
-    longterm_context VARCHAR DEFAULT ''
+    longterm_context VARCHAR DEFAULT '',
+    touch_activity JSON
 );
 
 -- Branches table

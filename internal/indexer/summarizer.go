@@ -29,8 +29,11 @@ type FileSummary struct {
 
 // FolderSummary holds the generated summary for a folder
 type FolderSummary struct {
-	Summary string `json:"summary"`
-	Purpose string `json:"purpose"`
+	Summary               string   `json:"summary"`
+	Purpose               string   `json:"purpose"`
+	Themes                string   `json:"themes"`
+	FileDescriptions      []string `json:"file_descriptions"`
+	SubfolderDescriptions []string `json:"subfolder_descriptions"`
 }
 
 // SummarizeFile generates a summary for a file
@@ -54,13 +57,16 @@ func (s *Summarizer) SummarizeFile(ctx context.Context, file FileInfo) (*FileSum
 }
 
 // SummarizeFolder generates a summary for a folder
-func (s *Summarizer) SummarizeFolder(ctx context.Context, folder *FolderInfo) (*FolderSummary, error) {
+func (s *Summarizer) SummarizeFolder(ctx context.Context, folder *FolderInfo, touchedFiles []string, maxChildren int) (*FolderSummary, error) {
 	var fileNames []string
 	for _, f := range folder.Files {
 		fileNames = append(fileNames, f.Name)
 	}
-	if len(fileNames) > 20 {
-		fileNames = fileNames[:20]
+	if maxChildren <= 0 {
+		maxChildren = 12
+	}
+	if len(fileNames) > maxChildren {
+		fileNames = fileNames[:maxChildren]
 	}
 
 	var subfolderNames []string
@@ -68,11 +74,31 @@ func (s *Summarizer) SummarizeFolder(ctx context.Context, folder *FolderInfo) (*
 		parts := strings.Split(sf, "/")
 		subfolderNames = append(subfolderNames, parts[len(parts)-1])
 	}
+	if len(subfolderNames) > maxChildren {
+		subfolderNames = subfolderNames[:maxChildren]
+	}
+	if len(touchedFiles) > maxChildren {
+		touchedFiles = touchedFiles[:maxChildren]
+	}
+
+	files := strings.Join(fileNames, ", ")
+	if files == "" {
+		files = "None"
+	}
+	subfolders := strings.Join(subfolderNames, ", ")
+	if subfolders == "" {
+		subfolders = "None"
+	}
+	touched := strings.Join(touchedFiles, ", ")
+	if touched == "" {
+		touched = "None"
+	}
 
 	prompt := prompts.BuildFolderSummaryPrompt(
 		folder.Path,
-		strings.Join(fileNames, ", "),
-		strings.Join(subfolderNames, ", "))
+		files,
+		subfolders,
+		touched)
 
 	ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
@@ -144,13 +170,33 @@ func parseFileSummary(response string) *FileSummary {
 func parseFolderSummary(response string) *FolderSummary {
 	summary := &FolderSummary{}
 	lines := strings.Split(response, "\n")
+	section := ""
 
 	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "SUMMARY:") {
-			summary.Summary = strings.TrimSpace(strings.TrimPrefix(line, "SUMMARY:"))
-		} else if strings.HasPrefix(line, "PURPOSE:") {
-			summary.Purpose = strings.TrimSpace(strings.TrimPrefix(line, "PURPOSE:"))
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "SUMMARY:") {
+			summary.Summary = strings.TrimSpace(strings.TrimPrefix(trimmed, "SUMMARY:"))
+			section = ""
+		} else if strings.HasPrefix(trimmed, "PURPOSE:") {
+			summary.Purpose = strings.TrimSpace(strings.TrimPrefix(trimmed, "PURPOSE:"))
+			section = ""
+		} else if strings.HasPrefix(trimmed, "THEMES:") {
+			summary.Themes = strings.TrimSpace(strings.TrimPrefix(trimmed, "THEMES:"))
+			section = ""
+		} else if strings.HasPrefix(trimmed, "FILES:") {
+			section = "files"
+		} else if strings.HasPrefix(trimmed, "SUBFOLDERS:") {
+			section = "subfolders"
+		} else if strings.HasPrefix(trimmed, "- ") {
+			item := strings.TrimSpace(strings.TrimPrefix(trimmed, "- "))
+			if item == "" || item == "None" {
+				continue
+			}
+			if section == "files" {
+				summary.FileDescriptions = append(summary.FileDescriptions, item)
+			} else if section == "subfolders" {
+				summary.SubfolderDescriptions = append(summary.SubfolderDescriptions, item)
+			}
 		}
 	}
 
