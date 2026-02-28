@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "6c6b8a6e7027",
+  "session_id": "unknown",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-28T19:35:07.774961Z",
+  "branch": "master",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "frontend/src/docsContent.js",
+    "internal/cli/cron.go"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "35bb4b19706f",
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-28T19:35:07.752925Z",
+    "agent_lines": 202,
+    "human_added": 218,
+    "human_modified": 15,
+    "human_removed": 0,
+    "total_committed": 435,
+    "agent_percentage": 46.43678160919541
+  },
+  "transcript_path": ".cursor/projects/Users-ishaan812-Code-projects-devlog/agent-transcripts/1b32a09c-bbc7-4244-8521-37eb2dae3fa3.txt"
+}

@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "6c6b8a6e7027",
+  "strategy": "manual-commit",
+  "branch": "master",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "frontend/src/docsContent.js",
+    "internal/cli/cron.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/6c/6b8a6e7027/0/metadata.json",
+      "transcript": "/6c/6b8a6e7027/0/full.jsonl",
+      "context": "",
+      "content_hash": "/6c/6b8a6e7027/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  }
+}
