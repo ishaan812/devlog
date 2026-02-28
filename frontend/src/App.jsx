@@ -109,7 +109,7 @@ function Hero() {
       </div>
       <div className="inline-flex items-center gap-2 py-1.5 px-4 bg-[rgba(0,255,65,0.08)] border border-border-green rounded-[20px] text-[10px] tracking-[2px] uppercase text-green mb-10">
         <span className="w-1.5 h-1.5 rounded-full bg-green animate-pulse-dot" aria-hidden="true" />
-        <span>System Status: Optimal // v0.1.0</span>
+        <span>System Status: Optimal // v0.1.1</span>
       </div>
       <h1 id="hero-title" className="font-display text-[32px] md:text-[52px] font-bold leading-[1.1] tracking-[-1.5px] mb-6">
         <span className="text-text-primary">Stop Forgetting</span>

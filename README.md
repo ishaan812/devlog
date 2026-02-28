@@ -34,6 +34,7 @@ You ship code across 5 repos, 12 branches, and 3 teams. Monday morning standup h
 npm install -g @ishaan812/devlog  # Install
 devlog onboard              # Set up (works with free local Ollama)
 devlog ingest               # Point it at your repos
+devlog cron                # Schedule daily ingest + worklog generation
 devlog commit               # Generate smart commit messages
 devlog worklog --days 7     # Get your week's work, organized by branch
 devlog export obsidian      # Sync daily/weekly/monthly logs to Obsidian

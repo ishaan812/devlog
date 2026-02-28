@@ -1,6 +1,6 @@
 {
   "name": "@ishaan812/devlog",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "AI-powered development activity tracker and code intelligence tool. Local-first work logging for developers who juggle too many repos.",
   "bin": {
     "devlog": "./bin/devlog-wrapper.js"
