@@ -98,6 +98,7 @@ var (
 	ingestFillSummaries     bool
 	ingestForceReindex      bool
 	ingestSkipWorklog       bool
+	ingestAutoWorklog       bool
 	ingestReselectFolders   bool
 	ingestPreparedSelection *BranchSelection
 )
@@ -160,6 +161,7 @@ func init() {
 	ingestCmd.Flags().BoolVar(&ingestFillSummaries, "fill-summaries", false, "Generate summaries for existing commits that are missing them")
 	ingestCmd.Flags().BoolVar(&ingestForceReindex, "force-reindex", false, "Force re-indexing all files, ignoring content hashes")
 	ingestCmd.Flags().BoolVar(&ingestSkipWorklog, "skip-worklog", false, "Skip worklog generation prompt after ingestion")
+	ingestCmd.Flags().BoolVar(&ingestAutoWorklog, "auto-worklog", false, "Automatically generate worklog after ingestion (non-interactive)")
 	ingestCmd.Flags().BoolVar(&ingestReselectFolders, "reselect-folders", false, "Re-prompt for index folder selection")
 }
 
@@ -275,25 +277,33 @@ func runIngest(cmd *cobra.Command, args []string) error {
 	fmt.Println()
 	successColor.Printf("  Ingestion Complete!\n\n")
 
-	// Prompt for worklog generation if git history was ingested
-	if gitHistoryIngested && !ingestSkipWorklog {
-		promptColor.Printf("  Generate worklog from ingested commits? [Y/n]: ")
-		var input string
-		fmt.Scanln(&input)
-		input = strings.ToLower(strings.TrimSpace(input))
-
-		if input == "" || input == "y" || input == "yes" {
+	// Handle worklog generation if git history was ingested.
+	if gitHistoryIngested {
+		if ingestSkipWorklog {
+			dimColor.Println("  Use 'devlog worklog' to view your development activity")
+		} else if ingestAutoWorklog {
 			fmt.Println()
 			if err := generateWorklogAfterIngest(absPath, cfg); err != nil {
 				dimColor.Printf("  Warning: Failed to generate worklog: %v\n", err)
 				dimColor.Println("  You can manually generate it with 'devlog worklog'")
 			}
 		} else {
-			dimColor.Println("  Skipped worklog generation")
-			dimColor.Println("  Use 'devlog worklog' to generate it later")
+			promptColor.Printf("  Generate worklog from ingested commits? [Y/n]: ")
+			var input string
+			fmt.Scanln(&input)
+			input = strings.ToLower(strings.TrimSpace(input))
+
+			if input == "" || input == "y" || input == "yes" {
+				fmt.Println()
+				if err := generateWorklogAfterIngest(absPath, cfg); err != nil {
+					dimColor.Printf("  Warning: Failed to generate worklog: %v\n", err)
+					dimColor.Println("  You can manually generate it with 'devlog worklog'")
+				}
+			} else {
+				dimColor.Println("  Skipped worklog generation")
+				dimColor.Println("  Use 'devlog worklog' to generate it later")
+			}
 		}
-	} else if gitHistoryIngested {
-		dimColor.Println("  Use 'devlog worklog' to view your development activity")
 	}
 	fmt.Println()
 

@@ -220,7 +220,29 @@ devlog ingest --all                # Full git history
 devlog ingest --reselect-branches  # Re-select branches
 devlog ingest --all-branches       # Ingest all branches
 devlog ingest --fill-summaries     # Generate missing commit summaries
+devlog ingest --auto-worklog       # Generate worklog automatically (no prompt)
 ```
+
+### `devlog cron`
+
+Set up a daily cron job that runs ingest and auto-generates a worklog.
+By default, DevLog asks for confirmation before installing anything.
+
+```bash
+devlog cron                                    # Daily at 09:00 for current repo
+devlog cron --hour 7 --minute 30               # Run daily at 07:30
+devlog cron ~/projects/myapp --days 1          # Schedule a specific repo
+devlog cron --yes                              # Skip confirmation prompt
+devlog cron --dry-run                          # Print cron entry only
+devlog cron remove                             # Remove current repo/profile cron job
+devlog cron remove --all                       # Remove all DevLog cron jobs
+```
+
+Common flow:
+- Run `devlog cron`
+- Confirm when prompted: `Proceed? [y/N]`
+- If you want a different time, rerun with `--hour` and `--minute`
+- Remove schedules anytime with `devlog cron remove`
 
 ### `devlog worklog`
 

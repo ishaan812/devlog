@@ -123,6 +123,7 @@ devlog --profile personal ask "What did I do last weekend?"
 |---------|-------------|
 | `devlog onboard` | Interactive setup wizard |
 | `devlog ingest [path]` | Ingest git history and index codebase |
+| `devlog cron [path]` | Set up daily ingest + worklog cron job |
 | `devlog ask "question"` | Query your git history |
 | `devlog search "query"` | Search indexed codebase |
 | `devlog worklog` | Generate work summary |
