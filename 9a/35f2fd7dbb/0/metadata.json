@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "9a35f2fd7dbb",
+  "session_id": "unknown",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-28T19:36:50.19407Z",
+  "branch": "master",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "frontend/package-lock.json",
+    "frontend/package.json",
+    "frontend/public/sitemap.xml",
+    "frontend/src/App.jsx",
+    "package-lock.json",
+    "package.json",
+    "README.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "d6b414280247",
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-28T19:36:50.167952Z",
+    "agent_lines": 0,
+    "human_added": 1,
+    "human_modified": 8,
+    "human_removed": 0,
+    "total_committed": 1,
+    "agent_percentage": 0
+  },
+  "transcript_path": ".cursor/projects/Users-ishaan812-Code-projects-devlog/agent-transcripts/1b32a09c-bbc7-4244-8521-37eb2dae3fa3.txt"
+}

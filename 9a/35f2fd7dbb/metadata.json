@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "9a35f2fd7dbb",
+  "strategy": "manual-commit",
+  "branch": "master",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "README.md",
+    "frontend/package-lock.json",
+    "frontend/package.json",
+    "frontend/public/sitemap.xml",
+    "frontend/src/App.jsx",
+    "package-lock.json",
+    "package.json"
+  ],
+  "sessions": [
+    {
+      "metadata": "/9a/35f2fd7dbb/0/metadata.json",
+      "transcript": "/9a/35f2fd7dbb/0/full.jsonl",
+      "context": "",
+      "content_hash": "/9a/35f2fd7dbb/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  }
+}
