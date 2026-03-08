@@ -3,14 +3,14 @@
   "version": "0.1.1",
   "description": "AI-powered development activity tracker and code intelligence tool. Local-first work logging for developers who juggle too many repos.",
   "bin": {
-    "devlog": "./bin/devlog-wrapper.js"
+    "devlog": "bin/devlog-wrapper.js"
   },
   "scripts": {
     "postinstall": "node install.js"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/ishaan812/devlog.git"
+    "url": "git+https://github.com/ishaan812/devlog.git"
   },
   "homepage": "https://github.com/ishaan812/devlog#readme",
   "bugs": {
